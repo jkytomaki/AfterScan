@@ -24,6 +24,9 @@
 03/10/2022: 1.12: JRE
     - Redirect encoding output from ffmpeg to console in real time
     - Replace H264 warning popup by video generation warning popup (progress in console only)
+    - Bug fixed: Start/Stop button was disabled durign frame gneration
+    - New feature: Extended stabilization checkbox, for films badly synchronized
+    - Added column index for widgets in postprodution area
 """
 
 __version__ = '1.1'
@@ -100,6 +103,7 @@ CropTopLeft = (0, 0)
 CropBottomRight = (0, 0)
 VideoFps = 18
 FfmpegBinName = "ffmpeg"
+ExtendedStabilization = False
 
 global win
 global ffmpeg_installed
@@ -566,7 +570,11 @@ def perform_stabilization_selection():
     global perform_stabilization, PerformStabilization
     PerformStabilization = perform_stabilization.get()
 
-
+def extended_stabilization_selection():
+    global extended_stabilization, ExtendedStabilization
+    ExtendedStabilization = extended_stabilization.get()
+    init_display()
+    
 def perform_cropping_selection():
     global perform_cropping, PerformCropping
     global generate_video_checkbox
@@ -692,7 +700,7 @@ def start_convert():
         Go_btn.config(text="Stop", bg='red', fg='white', relief=SUNKEN)
         #Exit_btn.config(state=DISABLED)
         # Disable all buttons in main window 
-        button_status_change_except(0, True)
+        button_status_change_except(Go_btn, True)
         win.update()
 
         # Prepare video generation if selected
@@ -839,7 +847,7 @@ def convert_loop():
         ConvertLoopRunning = False
         Go_btn.config(text="Start", bg=save_bg, fg=save_fg, relief=RAISED)
         # Enable all buttons in main window 
-        button_status_change_except(0, False)
+        button_status_change_except(Go_btn, False)
         win.update()
         # Revert to normal
         #Go_btn.config(state=NORMAL)
@@ -919,6 +927,8 @@ def init_display():
     if SourceDir == "":
         tk.messagebox.showerror("Error!", "Please specify source and target folders.")
         return
+    else:
+        extended_stabilization_checkbox.config(state=NORMAL)
 
     os.chdir(SourceDir)
 
@@ -935,8 +945,12 @@ def init_display():
     # Default values are needed before the stabilization search area has been defined,
     # therefore we initialized them here
     if StabilizeTopLeft == (0, 0) and StabilizeBottomRight == (0, 0):
-        StabilizeTopLeft = (0, round(height * 0.30))
-        StabilizeBottomRight = (round(width * 0.2), round(height * 0.70))
+        if (ExtendedStabilization):
+            StabilizeTopLeft = (0, 0)
+            StabilizeBottomRight = (round(width * 0.25), height)
+        else:
+            StabilizeTopLeft = (0, round(height * 0.30))
+            StabilizeBottomRight = (round(width * 0.2), round(height * 0.70))
 
 def select_previous_frame():
     global SourceDir
@@ -1113,7 +1127,8 @@ def build_ui():
     global pattern_canvas
     global ExpertMode
     global generate_video_checkbox
-
+    global extended_stabilization, extended_stabilization_checkbox
+    
     # Frame for standard widgets
     regular_frame = Frame(win, width=320, height=450)
     regular_frame.grid(row=0, column=1, rowspan=2, padx=10, pady=10, sticky=N)
@@ -1174,60 +1189,76 @@ def build_ui():
     # Define post-processing area
     postprocessing_frame = LabelFrame(regular_frame, text='Frame post-processing', width=50, height=8)
     postprocessing_frame.place(x=0, y=190)
+    postprocessing_row = 0
 
     # Check box to select start from current frame
     from_current_frame = tk.BooleanVar(value=StartFromCurrentFrame)
     from_current_frame_checkbox = tk.Checkbutton(postprocessing_frame, text='Start from current frame',
                                                  variable=from_current_frame, onvalue=True, offvalue=False,
                                                  command=from_current_frame_selection, width=20)
-    from_current_frame_checkbox.grid(row=0, column=0, columnspan=2, sticky=W)
+    from_current_frame_checkbox.grid(row=postprocessing_row, column=0, columnspan=2, sticky=W)
+    postprocessing_row += 1
     
     # Spinbox to select number of frames to process
     frames_to_encode_label=tk.Label(postprocessing_frame, text='Number of frames to encode:', width=25)
-    frames_to_encode_label.grid(row=1, column=0, columnspan=2, sticky=W)
+    frames_to_encode_label.grid(row=postprocessing_row, column=0, columnspan=2, sticky=W)
     frames_to_encode = tk.StringVar(value=str(FramesToEncode))
     frames_to_encode_selection_aux=postprocessing_frame.register(frames_to_encode_selection)
     frames_to_encode_spinbox = tk.Spinbox(postprocessing_frame,
                                           command=(frames_to_encode_selection_aux, '%d'), width=8,
                                           textvariable=frames_to_encode,
                                           from_=0, to=50000)
-    frames_to_encode_spinbox.grid(row=1, column=2, sticky=W)
+    frames_to_encode_spinbox.grid(row=postprocessing_row, column=2, sticky=W)
     frames_to_encode_selection('down')
-
+    postprocessing_row += 1
+    
+    # Check box to select extended hole search area (for films with bad synchro)
+    extended_stabilization = tk.BooleanVar(value=ExtendedStabilization)
+    extended_stabilization_checkbox = tk.Checkbutton(postprocessing_frame, text='Extended stabilization (bad sync films)',
+                                                 variable=extended_stabilization, onvalue=True, offvalue=False,
+                                                 command=extended_stabilization_selection, width=32)
+    extended_stabilization_checkbox.grid(row=postprocessing_row, column=0, columnspan=3, sticky=W)
+    extended_stabilization_checkbox.config(state=DISABLED)
+    postprocessing_row += 1
+    
     # Check box to do cropping or not
     perform_cropping = tk.BooleanVar(value=PerformCropping)
     perform_cropping_checkbox = tk.Checkbutton(postprocessing_frame, text='Crop',
                                                  variable=perform_cropping, onvalue=True, offvalue=False,
                                                  command=perform_cropping_selection, width=4)
-    perform_cropping_checkbox.grid(row=2, column=0, sticky=W)
+    perform_cropping_checkbox.grid(row=postprocessing_row, column=0, sticky=W)
     perform_cropping_checkbox.config(state=DISABLED)
     cropping_btn = Button(postprocessing_frame, text='Image crop area', width=24, height=1, command=select_cropping_area,
                                  activebackground='green', activeforeground='white', wraplength=120, font=("Arial", 8))
-    cropping_btn.grid(row=2, column=1, columnspan=2, sticky=W)
-
+    cropping_btn.grid(row=postprocessing_row, column=1, columnspan=2, sticky=W)
+    postprocessing_row += 1
+    
     # Check box to generate video or not
     generate_video = tk.BooleanVar(value=GenerateVideo)
     generate_video_checkbox = tk.Checkbutton(postprocessing_frame, text='Video',
                                                  variable=generate_video, onvalue=True, offvalue=False,
                                                  command=generate_video_selection, width=5)
-    generate_video_checkbox.grid(row=3, column=0, sticky=W)
+    generate_video_checkbox.grid(row=postprocessing_row, column=0, sticky=W)
     generate_video_checkbox.config(state=NORMAL if ffmpeg_installed and PerformCropping else DISABLED)
     # Check box to skip frame regeneration
     skip_frame_regeneration = tk.BooleanVar(value=False)
     skip_frame_regeneration_cb = tk.Checkbutton(postprocessing_frame, text='Skip Frame regeneration',
                                                  variable=skip_frame_regeneration, onvalue=True, offvalue=False,
                                                  width=20)
-    skip_frame_regeneration_cb.grid(row=3, column=1, columnspan=2, sticky=W)
+    skip_frame_regeneration_cb.grid(row=postprocessing_row, column=1, columnspan=2, sticky=W)
     skip_frame_regeneration_cb.config(state=NORMAL if ffmpeg_installed else DISABLED)
-
+    postprocessing_row += 1
+    
     # Video filename
     video_filename_label = Label(postprocessing_frame, text='Filename:', font=("Arial", 8))
-    video_filename_label.grid(row=4, column=0, sticky=W)
+    video_filename_label.grid(row=postprocessing_row, column=0, sticky=W)
     video_filename_name = Entry(postprocessing_frame, width=36, borderwidth=1, font=("Arial", 8))
-    video_filename_name.grid(row=4, column=1, columnspan=2, sticky=W)
+    video_filename_name.grid(row=postprocessing_row, column=1, columnspan=2, sticky=W)
     video_filename_name.delete(0, 'end')
     video_filename_name.insert('end', TargetVideoFilename)
     video_filename_name.config(state=DISABLED)
+    postprocessing_row += 1
+    
     # Drop down to select FPS
     # Dropdown menu options
     fps_list = [
@@ -1248,7 +1279,7 @@ def build_ui():
 
     # Create FPS Dropdown menu
     video_fps_frame = Frame(postprocessing_frame)
-    video_fps_frame.grid(row=6, column=0, sticky=W)
+    video_fps_frame.grid(row=postprocessing_row, column=0, sticky=W)
     video_fps_label = Label(video_fps_frame, text='FPS:')
     video_fps_label.pack(side=LEFT, anchor=W)
     video_fps_label.config(state=DISABLED)
@@ -1256,7 +1287,7 @@ def build_ui():
     video_fps_dropdown.pack(side=LEFT, anchor=E)
     video_fps_dropdown.config(state=DISABLED)
     ffmpeg_preset_frame = Frame(postprocessing_frame)
-    ffmpeg_preset_frame.grid(row=6, column=1, columnspan=2, sticky=W)
+    ffmpeg_preset_frame.grid(row=postprocessing_row, column=1, columnspan=2, sticky=W)
     ffmpeg_preset = StringVar()
     ffmpeg_preset_rb1 = Radiobutton(ffmpeg_preset_frame, text="Best quality (slow)", variable=ffmpeg_preset, value='veryslow')
     ffmpeg_preset_rb1.pack(side=TOP, anchor=W)
@@ -1268,9 +1299,10 @@ def build_ui():
     ffmpeg_preset_rb3.pack(side=TOP, anchor=W)
     ffmpeg_preset_rb3.config(state=DISABLED)
     ffmpeg_preset.set('medium')
-
+    postprocessing_row += 1
+    
     postprocessing_bottom_frame = Frame(postprocessing_frame, width=30)
-    postprocessing_bottom_frame.grid(row=7, column=0)
+    postprocessing_bottom_frame.grid(row=postprocessing_row, column=0)
 
     if ExpertMode:
         # Frame for expert widgets
