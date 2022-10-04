@@ -197,7 +197,7 @@ def select_rectangle_area():
             cv2.rectangle(copy, (ix, iy), (x_, y_), (0, 255, 0), 1)
             cv2.imshow(RectangleWindowTitle, copy)
         k = cv2.waitKey(1) & 0xFF
-        if k == 13:  # Enter: Confirm rectangle selection
+        if k == 13 and not rectangle_drawing:  # Enter: Confirm rectangle selection
             retvalue = True
             break
         elif k == 27:  # Escape: Remove selection
@@ -266,7 +266,7 @@ def select_cropping_area():
                        min(RectangleTopLeft[1], RectangleBottomRight[1]))
         CropBottomRight = (max(RectangleTopLeft[0], RectangleBottomRight[0]),
                            max(RectangleTopLeft[1], RectangleBottomRight[1]))
-        logging.debug("Hole search area: (%i,%i) - (%i, %i)", CropTopLeft[0], CropTopLeft[1],
+        logging.debug("Crop area: (%i,%i) - (%i, %i)", CropTopLeft[0], CropTopLeft[1],
                       CropBottomRight[0], CropBottomRight[1])
     else:
         CropAreaDefined = False
