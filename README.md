@@ -10,11 +10,11 @@ Actions performed by this tool on the captured frames are:
 - Video generation
 
 This tool relies in the following open source projects to achieve its objectives:
-Python (https://www.python.org/)
-OpenCV (https://opencv.org/)
-NumPy (https://numpy.org/)
-FFmpeg (https://ffmpeg.org/)
-Pillow (https://python-pillow.org/)
+* [Python](https://www.python.org/)
+* [OpenCV](https://opencv.org/)
+* [NumPy](https://numpy.org/)
+* [FFmpeg](https://ffmpeg.org/)
+* [Pillow](https://python-pillow.org/)
 
 
 Instructions:
