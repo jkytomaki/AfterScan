@@ -921,6 +921,7 @@ def select_scale_frame(selected_frame):
     global FirstAbsoluteFrame
     global FrameScaleRefreshDone, FrameScaleRefreshPending
 
+    frame_slider.focus()
     CurrentFrame = int(selected_frame) - FirstAbsoluteFrame
     if not ConvertLoopRunning:  # Do not refresh during conversion loop
         if FrameScaleRefreshDone:
@@ -1099,6 +1100,8 @@ def build_ui():
     FrameSelected = IntVar()
     frame_slider = Scale(picture_frame, orient=HORIZONTAL, from_=1, to=20, variable=FrameSelected, command=select_scale_frame, font=("Arial", 16))
     frame_slider.pack(side=BOTTOM)
+    #frame_slider.bind("<Left>")
+    #frame_slider.bind("<Right>")
     
     # Application start button
     Go_btn = Button(regular_top_section_frame, text="Start", width=8, height=3, command=start_convert, activebackground='green',
@@ -1265,6 +1268,32 @@ def build_ui():
     
     postprocessing_bottom_frame = Frame(postprocessing_frame, width=30)
     postprocessing_bottom_frame.grid(row=postprocessing_row, column=0)
+
+    #Set focus tab order
+    AfterScan_widgets = [frame_slider,
+                         Go_btn,
+                         Exit_btn,
+                         folder_frame_source_dir,
+                         source_folder_btn,
+                         folder_frame_target_dir,
+                         target_folder_btn,
+                         frame_filename_pattern_name,
+                         frame_filename_pattern_btn,
+                         from_current_frame_checkbox,
+                         frames_to_encode_spinbox,
+                         extended_stabilization_checkbox,
+                         perform_cropping_checkbox,
+                         cropping_btn,
+                         generate_video_checkbox,
+                         skip_frame_regeneration_cb,
+                         video_filename_name,
+                         video_fps_dropdown,
+                         ffmpeg_preset_rb1,
+                         ffmpeg_preset_rb2,
+                         ffmpeg_preset_rb3]
+    for aw in AfterScan_widgets:
+        aw.lift()
+    frame_slider.focus()
 
     if ExpertMode:
         # Frame for expert widgets
