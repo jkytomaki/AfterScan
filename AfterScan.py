@@ -70,6 +70,10 @@ PerformStabilization = True
 PerformCropping = False
 GenerateVideo = False
 StartFromCurrentFrame = False
+FirstAbsoluteFrame = 0
+LastAbsoluteFrame = 0
+FrameScaleRefreshDone = True
+FrameScaleRefreshPending = False
 FramesToEncode = 0
 FrameCountdown = FramesToEncode
 # Directory where python scrips run, to store the json file with configuration data
@@ -80,6 +84,8 @@ PatternFilename = os.path.join(ScriptDir, "Pattern.S8.jpg")
 TargetVideoFilename = ""
 SourceDir = ""
 TargetDir = ""
+FrameFilenameInputPattern = "picture-*.jpg"
+FrameFilenameOutputPattern = "picture-%05d.jpg"
 SourceDirFileList = []
 CurrentFrame = 0
 ConvertLoopExitRequested = False
@@ -286,7 +292,6 @@ def select_cropping_area():
 
 def button_status_change_except(except_button, active):
     global source_folder_btn, target_folder_btn
-    global next_frame_btn, previous_frame_btn
     global perform_stabilization_checkbox
     global perform_cropping_checkbox, Crop_btn
     global Go_btn
@@ -296,10 +301,6 @@ def button_status_change_except(except_button, active):
         source_folder_btn.config(state=DISABLED if active else NORMAL)
     if except_button != target_folder_btn:
         target_folder_btn.config(state=DISABLED if active else NORMAL)
-    if except_button != next_frame_btn:
-        next_frame_btn.config(state=DISABLED if active else NORMAL)
-    if except_button != previous_frame_btn:
-        previous_frame_btn.config(state=DISABLED if active else NORMAL)
     if except_button != perform_cropping_checkbox:
         perform_cropping_checkbox.config(state=DISABLED if active else NORMAL)
     #if except_button != Crop_btn:
@@ -536,7 +537,8 @@ def display_pattern(PatternFilename):
 
 
 def set_source_folder():
-    global SourceDir, CurrentFrame, current_frame_value
+    global SourceDir, CurrentFrame, frame_slider
+    global FirstAbsoluteFrame
 
     SourceDir = tk.filedialog.askdirectory(initialdir=SourceDir, title="Select folder with captured images to process")
 
@@ -553,7 +555,7 @@ def set_source_folder():
     # Load matching file list from newly selected dir
     get_current_dir_file_list()
     CurrentFrame=0
-    current_frame_value.config(text=str(CurrentFrame))
+    frame_slider.set(CurrentFrame + FirstAbsoluteFrame)
     init_display()
 
 
@@ -575,14 +577,24 @@ def set_target_folder():
 
     ConfigData["TargetDir"] = TargetDir
 
+
+def set_frame_pattern_filename_folder():
+    global FrameFilenameInputPattern, frame_filename_input_pattern_name
+
+    FrameFilenameInputPattern = frame_filename_input_pattern_name.get()
+    ConfigData["FrameFilenameInputPattern"] = FrameFilenameInputPattern
+
+
 def perform_stabilization_selection():
     global perform_stabilization, PerformStabilization
     PerformStabilization = perform_stabilization.get()
+
 
 def extended_stabilization_selection():
     global extended_stabilization, ExtendedStabilization
     ExtendedStabilization = extended_stabilization.get()
     init_display()
+
     
 def perform_cropping_selection():
     global perform_cropping, PerformCropping
@@ -590,9 +602,11 @@ def perform_cropping_selection():
     PerformCropping = perform_cropping.get()
     generate_video_checkbox.config(state=NORMAL if ffmpeg_installed and PerformCropping else DISABLED)
 
+
 def from_current_frame_selection():
     global from_current_frame, StartFromCurrentFrame
     StartFromCurrentFrame = from_current_frame.get()
+
 
 def frames_to_encode_selection(updown):
     global FramesToEncode, frames_to_encode_spinbox, frames_to_encode
@@ -701,51 +715,20 @@ def start_convert():
                 error_msg =  TargetVideoFilename + " already exist in target folder. Overwrite?"
                 if not tk.messagebox.askyesno("Error!", error_msg):
                     return
+        if VideoEncodingWarnAgain:
+            tk.messagebox.showwarning("Video encoding warning",
+                                   "\r\nVideo encoding progress is NOT displayed in the user interface, only at the end of the encoding (which can take hours for long films). \r\n"
+                                   "Please check in the console if required, progress reported by FFmpeg is displayed there. ")
         ConvertLoopRunning = True
         if not StartFromCurrentFrame:
             CurrentFrame = 0
         if FramesToEncode > 0:
             FrameCountdown = FramesToEncode
         Go_btn.config(text="Stop", bg='red', fg='white', relief=SUNKEN)
-        #Exit_btn.config(state=DISABLED)
         # Disable all buttons in main window 
         button_status_change_except(Go_btn, True)
         win.update()
 
-        # Prepare video generation if selected
-        """ OpenCV VideoWriter_fourcc - Does not work (in Linux at least) due to licensing issues
-        # ffmpeg will be called separately at the end 
-        if GenerateVideo:
-            target_file = os.path.join(TargetDir, TargetVideoFilename)
-            fourcc = cv2.VideoWriter_fourcc(*'h264')
-            video_writer = cv2.VideoWriter(target_file, fourcc, VideoFps, (112, 112))
-        <<< OpenCV VideoWriter_fourcc  - ends here """
-        """ ### Alternative solution using pipe to ffmpeg
-        # we need the image dimensions (of the image sent to ffmpeg!!) up front
-        if PerformCropping:
-            dimensions = str(CropBottomRight[0]-CropTopLeft[0]) + "x" + str(CropBottomRight[1]-CropTopLeft[1])
-        else:
-            file = SourceDirFileList[0]
-            img = cv2.imread(file, cv2.IMREAD_UNCHANGED)
-            width = img.shape[1]
-            height = img.shape[0]
-            dimensions = str(width) + "x" + str(height)
-        cmd_ffmpeg = [FfmpegBinName,
-                    '-y',
-                    '-f', 'rawvideo',
-                    '-vcodec', 'rawvideo',
-                    '-s', dimensions,
-                    '-framerate', '18',
-                    '-i', '-',  # Indicated input comes from pipe
-                    '-an',  # no audio
-                    '-vcodec', 'libx264',
-                    '-preset', 'veryslow',
-                    '-crf', '18',
-                    '-pix_fmt', 'yuv420p',  # could be rgb24, yuv420p as well?
-                    os.path.join(TargetDir, TargetVideoFilename)]
-        logging.debug("Generated ffmpeg command: %s", cmd_ffmpeg)
-        pipe_ffmpeg = sp.Popen(cmd_ffmpeg, stdin=sp.PIPE)
-        """
         win.after(1, convert_loop)
 
 
@@ -765,31 +748,17 @@ def convert_loop():
     global IsWindows
     global ffmpeg_preset
     global TargetVideoFilename
-    global CurrentFrame, FrameCountdown, current_frame_value
+    global CurrentFrame, FrameCountdown
     global ffmpeg_out, ffmpeg_process
     global stop_event, stop_event_lock
+    global FrameFilenameInputPattern, FrameFilenameOutputPattern
+    global FirstAbsoluteFrame
 
     if ConvertLoopExitRequested:
         if ConvertLoopAllFramesDone:
             if GenerateVideo:
                 Go_btn.config(state=DISABLED)  # Do not interrupt while generating video
-                """ ### OpenCV VideoWriter_fourcc  - Does not work (in Linux at least) due to licensing issues
-                # ffmpeg will be called instead 
-                video_writer.release()
-                <<< OpenCV VideoWriter_fourcc  - ends here 
-                """
-                ### >>> System call to ffmpeg -  Easy alternative to OpenCV lack of H264 encoding - Call ffmpeg at the end
-
-                first_frame = int(''.join(list(filter(str.isdigit, os.path.basename(SourceDirFileList[0])))))
-                logging.debug("First filename in list: %s, extracted number: %s", os.path.basename(SourceDirFileList[0]), first_frame)
-                """
-                cmd_ffmpeg = FfmpegBinName + " -f image2 -framerate 18 "\
-                             "-start_number " + str(first_frame) + " -i " +\
-                             os.path.join(TargetDir, "picture-%05d.jpg") +\
-                             " -c:v libx264 -preset veryslow -crf 18 "\
-                             "-pix_fmt yuv420p " +\
-                             os.path.join(TargetDir, TargetVideoFilename)
-                """
+                logging.debug("First filename in list: %s, extracted number: %s", os.path.basename(SourceDirFileList[0]), FirstAbsoluteFrame)
                 stop_event = threading.Event()
                 stop_event_lock = threading.Lock()
 
@@ -799,7 +768,7 @@ def convert_loop():
                 win.update()
 
                 if IsWindows:   # Cannot call popen with a list in windows. Seems it was a bug already in 2018: https://bugs.python.org/issue32764
-                    cmd_ffmpeg = FfmpegBinName + " -y -f image2 -start_number " + str(first_frame) + " -framerate " + str(VideoFps) + " -i \"" + os.path.join(TargetDir, "picture-%05d.jpg") + "\" -an -vcodec libx264 -preset veryslow -crf 18 -aspect 4:3 -pix_fmt yuv420p \"" + os.path.join(TargetDir, TargetVideoFilename) + "\""
+                    cmd_ffmpeg = FfmpegBinName + " -y -f image2 -start_number " + str(FirstAbsoluteFrame) + " -framerate " + str(VideoFps) + " -i \"" + os.path.join(TargetDir, FrameFilenameOutputPattern) + "\" -an -vcodec libx264 -preset veryslow -crf 18 -aspect 4:3 -pix_fmt yuv420p \"" + os.path.join(TargetDir, TargetVideoFilename) + "\""
                     logging.debug("Generated ffmpeg command: %s", cmd_ffmpeg)
                     ffmpeg_generation_succeeded = sp.call(cmd_ffmpeg) == 0
                 else:
@@ -809,9 +778,9 @@ def convert_loop():
                               '-stats',
                               '-flush_packets','1',
                               '-f', 'image2',
-                              '-start_number', str(first_frame),
+                              '-start_number', str(FirstAbsoluteFrame),
                               '-framerate', str(VideoFps),
-                              '-i', os.path.join(TargetDir, "picture-%05d.jpg"),
+                              '-i', os.path.join(TargetDir, FrameFilenameOutputPattern),
                               '-an',  # no audio
                               '-vcodec', 'libx264',
                               '-preset', ffmpeg_preset.get(),
@@ -820,9 +789,7 @@ def convert_loop():
                               os.path.join(TargetDir, TargetVideoFilename)]
 
                     logging.debug("Generated ffmpeg command: %s", cmd_ffmpeg)
-                    #ffmpeg_process = sp.Popen(cmd_ffmpeg)
                     ffmpeg_process = sp.Popen(cmd_ffmpeg, stderr=sp.STDOUT, stdout=sp.PIPE, universal_newlines=True)
-                    #ffmpeg_err, ffmpeg_out = ffmpeg_process.communicate()
                     ffmpeg_generation_succeeded = ffmpeg_process.wait() == 0
 
                 stop_event.set()
@@ -839,32 +806,13 @@ def convert_loop():
                     tk.messagebox.showinfo("FFMPEG encoding failed",
                                            "\r\nVideo generation by FFMPEG has failed\r\n"
                                            "Please check the logs to determine what the problem was.")
-                    #if ExpertMode:
-                    #    display_ffmpeg_result(str(ffmpeg_out))
-
-                ### <<< System call to ffmpeg - ends here
-                """ ### >>> Pipe frames to ffmpeg - More elaborated solution piping data to external ffmpeg
-                pipe_ffmpeg.stdin.close()
-                pipe_ffmpeg.wait()
-                # Make sure all went well
-                if pipe_ffmpeg.returncode != 0:
-                    raise sp.CalledProcessError(pipe_ffmpeg.returncode, cmd_ffmpeg)
-                ### <<< Pipe frames to ffmpeg - ends here
-                """
         ConvertLoopExitRequested = False  # Reset flag
         ConvertLoopAllFramesDone = False
         ConvertLoopRunning = False
         Go_btn.config(text="Start", bg=save_bg, fg=save_fg, relief=RAISED)
         # Enable all buttons in main window 
-        button_status_change_except(Go_btn, False)
+        button_status_change_except(0, False)
         win.update()
-        # Revert to normal
-        #Go_btn.config(state=NORMAL)
-        #Exit_btn.config(state=NORMAL)
-        # Better not to reset at the end of the encoding
-        # If someone is usign 'start from current frame' it could break their workflow
-        # CurrentFrame = 0
-        # current_frame_value.config(text=str(CurrentFrame))
         return
 
     # Get current file
@@ -886,21 +834,7 @@ def convert_loop():
             target_file = os.path.join(TargetDir,os.path.basename(file))
             cv2.imwrite(target_file, img)
 
-        # Generate Video if selected
-        """ ### >>> OpenCV VideoWriter_fourcc  - Does not work (in Linux at least) due to licensing issues
-        # ffmpeg will be called separately at the end 
-        if GenerateVideo:
-            video_writer.write(img)
-        ### <<< OpenCV VideoWriter_fourcc  - ends here 
-        """
-        """"### >>> More elaborated solution piping data to external ffmpeg
-        if GenerateVideo:
-            #img.save(pipe_ffmpeg.stdin, 'bmp')
-            pipe_ffmpeg.stdin.write(img.tostring())
-        ### <<< More elaborated solution ends here
-        """
-
-        current_frame_value.config(text=str(CurrentFrame))
+        frame_slider.set(CurrentFrame + FirstAbsoluteFrame)
 
         CurrentFrame += 1
         FrameCountdown -= 1
@@ -921,10 +855,16 @@ def convert_loop():
 def get_current_dir_file_list():
     global SourceDir
     global SourceDirFileList
+    global FrameFilenameInputPattern
+    global FirstAbsoluteFrame
+    global frame_slider
 
-    SourceDirFileList = sorted(list(glob(os.path.join(SourceDir, "picture-*.jpg"))))
+    SourceDirFileList = sorted(list(glob(os.path.join(SourceDir, FrameFilenameInputPattern))))
+    FirstAbsoluteFrame = int(''.join(list(filter(str.isdigit, os.path.basename(SourceDirFileList[0])))))
+    LastAbsoluteFrame = FirstAbsoluteFrame + len(SourceDirFileList)-1
+    frame_slider.config(from_=FirstAbsoluteFrame, to=LastAbsoluteFrame)
 
-
+    
 def init_display():
     global SourceDir
     global CurrentFrame
@@ -940,7 +880,6 @@ def init_display():
         extended_stabilization_checkbox.config(state=NORMAL)
 
     os.chdir(SourceDir)
-
     file = SourceDirFileList[CurrentFrame]
 
     img = cv2.imread(file, cv2.IMREAD_UNCHANGED)
@@ -961,37 +900,35 @@ def init_display():
             StabilizeTopLeft = (0, round(height * 0.30))
             StabilizeBottomRight = (round(width * 0.2), round(height * 0.70))
 
-def select_previous_frame():
+
+def scale_display_update():
+    global win
+    global FrameScaleRefreshDone,FrameScaleRefreshPending
+
+    file = SourceDirFileList[CurrentFrame]
+    img = cv2.imread(file, cv2.IMREAD_UNCHANGED)
+    display_image(img)
+    FrameScaleRefreshDone = True
+    if FrameScaleRefreshPending:
+        FrameScaleRefreshPending = False
+        win.after(100, scale_display_update)
+    
+def select_scale_frame(selected_frame):
+    global win
     global SourceDir
     global CurrentFrame
     global SourceDirFileList
-    global current_frame_value
+    global FirstAbsoluteFrame
+    global FrameScaleRefreshDone, FrameScaleRefreshPending
 
-    if (CurrentFrame > 0):
-        CurrentFrame -= 1
-    file = SourceDirFileList[CurrentFrame]
-
-    img = cv2.imread(file, cv2.IMREAD_UNCHANGED)
-
-    display_image(img)
-
-    current_frame_value.config(text=str(CurrentFrame))
-
-def select_next_frame():
-    global SourceDir
-    global CurrentFrame
-    global SourceDirFileList
-    global current_frame_value
-
-    if (CurrentFrame < len(SourceDirFileList)-1):
-        CurrentFrame += 1
-    file = SourceDirFileList[CurrentFrame]
-
-    img = cv2.imread(file, cv2.IMREAD_UNCHANGED)
-
-    display_image(img)
-
-    current_frame_value.config(text=str(CurrentFrame))
+    CurrentFrame = int(selected_frame) - FirstAbsoluteFrame
+    if not ConvertLoopRunning:  # Do not refresh during conversion loop
+        if FrameScaleRefreshDone:
+            FrameScaleRefreshDone = False
+            FrameScaleRefreshPending = False
+            win.after(5, scale_display_update)
+        else:
+            FrameScaleRefreshPending = True
 
 def load_config_data():
     global ConfigData
@@ -1001,6 +938,8 @@ def load_config_data():
     global folder_frame_source_dir, folder_frame_target_dir
     global VideoFps, video_fps_dropdown_selected
     global PatternFilename, pattern_filename
+    global frame_filename_pattern_name
+    global FrameFilenameInputPattern
 
     # Check if persisted data file exist: If it does, load it
     if os.path.isfile(ConfigDataFilename):
@@ -1031,6 +970,11 @@ def load_config_data():
     if 'VideoFps' in ConfigData:
         VideoFps = ConfigData["VideoFps"]
         video_fps_dropdown_selected.set(VideoFps)
+    if 'FrameFilenameInputPattern' in ConfigData:
+        FrameFilenameInputPattern = ConfigData["FrameFilenameInputPattern"]
+        frame_filename_input_pattern_name
+        frame_filename_input_pattern_name.delete(0, 'end')
+        frame_filename_input_pattern_name.insert('end', FrameFilenameInputPattern)
     if ExpertMode:
         if 'PatternFilename' in ConfigData:
             PatternFilename = ConfigData["PatternFilename"]
@@ -1081,7 +1025,7 @@ def afterscan_postprod_init():
         PreviewWidth = 560
         PreviewHeight = 420
     app_width = PreviewWidth + 320 + 30
-    app_height = 540 if ExpertMode else 440
+    app_height = 520 if ExpertMode else 460
 
     win.title('8mm AfterScan')  # setting title of the window
     win.geometry('1080x700')  # setting the size of the window, not really needed
@@ -1119,10 +1063,8 @@ def build_ui():
     global GenerateVideo, generate_video
     global from_current_frame, StartFromCurrentFrame
     global frames_to_encode_spinbox, frames_to_encode, FramesToEncode
-    global current_frame_value
     global save_bg, save_fg
     global source_folder_btn, target_folder_btn
-    global next_frame_btn, previous_frame_btn
     global perform_stabilization_checkbox
     global perform_cropping_checkbox, Crop_btn
     global Go_btn
@@ -1137,45 +1079,44 @@ def build_ui():
     global ExpertMode
     global generate_video_checkbox
     global extended_stabilization, extended_stabilization_checkbox
+    global frame_filename_pattern_name
+    global FrameFilenameInputPattern
+    global FrameSelected
+    global frame_slider
     
     # Frame for standard widgets
     regular_frame = Frame(win, width=320, height=450)
     regular_frame.grid(row=0, column=1, rowspan=2, padx=10, pady=10, sticky=N)
-    
+
+    # Frame for top section of standard widgets
+    regular_top_section_frame = Frame(regular_frame, width=50, height=50)
+    regular_top_section_frame.pack(side=TOP, padx=2, pady=2, anchor=W)
+
     # Create frame to display current frame and selection buttons
-    picture_frame = LabelFrame(regular_frame, text='Current frame', width=26, height=8)
-    picture_frame.place(x=0, y=0)
+    picture_frame = LabelFrame(regular_top_section_frame, text='Current frame', width=26, height=8)
+    picture_frame.pack(side=LEFT, padx=2, pady=2)
 
-    current_frame_value = Label(picture_frame, text=str(CurrentFrame), width=13, height=1, font=("Arial", 16))
-    current_frame_value.pack(side=TOP)
-
-    previous_frame_btn = Button(picture_frame, text='<<', width=7, height=1, command=select_previous_frame,
-                                 activebackground='green', activeforeground='white', wraplength=80, font=("Arial", 10))
-    previous_frame_btn.pack(side=LEFT)
-    next_frame_btn = Button(picture_frame, text='>>', width=7, height=1, command=select_next_frame,
-                                 activebackground='green', activeforeground='white', wraplength=80, font=("Arial", 10))
-    next_frame_btn.pack(side=RIGHT)
-    picture_bottom_frame = Frame(picture_frame)
-    picture_bottom_frame.pack(side=BOTTOM, ipady=20)
-
-    # Application start button
-    Go_btn = Button(regular_frame, text="Start", width=11, height=2, command=start_convert, activebackground='green',
-                      activeforeground='white', wraplength=80)
-    Go_btn.place(x=170, y=10)
+    FrameSelected = IntVar()
+    frame_slider = Scale(picture_frame, orient=HORIZONTAL, from_=1, to=20, variable=FrameSelected, command=select_scale_frame, font=("Arial", 16))
+    frame_slider.pack(side=BOTTOM)
     
-    # Application Exit button
-    Exit_btn = Button(regular_frame, text="Exit", width=11, height=1, command=exit_app, activebackground='red',
+    # Application start button
+    Go_btn = Button(regular_top_section_frame, text="Start", width=8, height=3, command=start_convert, activebackground='green',
                       activeforeground='white', wraplength=80)
-    Exit_btn.place(x=170, y=60)
+    Go_btn.pack(side=LEFT, padx=2, pady=2)
+
+    # Application Exit button
+    Exit_btn = Button(regular_top_section_frame, text="Exit", width=6, height=3, command=exit_app, activebackground='red',
+                      activeforeground='white', wraplength=80)
+    Exit_btn.pack(side=LEFT, padx=2, pady=2)
 
     # Create frame to select source and target folders
-    folder_frame = LabelFrame(regular_frame, text='Folder selection', width=26, height=8)
-    folder_frame.pack()
-    folder_frame.place(x=0, y=100)
+    folder_frame = LabelFrame(regular_frame, text='Folder selection', width=50, height=8)
+    folder_frame.pack(side=TOP, padx=2, pady=2, anchor=W)
 
     source_folder_frame = Frame(folder_frame)
     source_folder_frame.pack(side=TOP)
-    folder_frame_source_dir = Entry(source_folder_frame, width=38, borderwidth=1, font=("Arial", 8))
+    folder_frame_source_dir = Entry(source_folder_frame, width=36, borderwidth=1, font=("Arial", 8))
     folder_frame_source_dir.pack(side=LEFT)
     source_folder_btn = Button(source_folder_frame, text='Source', width=6, height=1, command=set_source_folder,
                                  activebackground='green', activeforeground='white', wraplength=80, font=("Arial", 8))
@@ -1183,7 +1124,7 @@ def build_ui():
 
     target_folder_frame = Frame(folder_frame)
     target_folder_frame.pack(side=TOP)
-    folder_frame_target_dir = Entry(target_folder_frame, width=38, borderwidth=1, font=("Arial", 8))
+    folder_frame_target_dir = Entry(target_folder_frame, width=36, borderwidth=1, font=("Arial", 8))
     folder_frame_target_dir.pack(side=LEFT)
     target_folder_btn = Button(target_folder_frame, text='Target', width=6, height=1, command=set_target_folder,
                                  activebackground='green', activeforeground='white', wraplength=80, font=("Arial", 8))
@@ -1195,9 +1136,21 @@ def build_ui():
     folder_bottom_frame = Frame(folder_frame)
     folder_bottom_frame.pack(side=BOTTOM, ipady=2)
 
+    frame_filename_pattern_frame = Frame(folder_frame)
+    frame_filename_pattern_frame.pack(side=TOP)
+    frame_filename_pattern_label = Label(frame_filename_pattern_frame, text='Frame input filename pattern:', font=("Arial", 8))
+    frame_filename_pattern_label.pack(side=LEFT, anchor=W)
+    frame_filename_pattern_name = Entry(frame_filename_pattern_frame, width=16, borderwidth=1, font=("Arial", 8))
+    frame_filename_pattern_name.pack(side=LEFT, anchor=W)
+    frame_filename_pattern_name.delete(0, 'end')
+    frame_filename_pattern_name.insert('end', FrameFilenameInputPattern)
+    frame_filename_pattern_btn = Button(frame_filename_pattern_frame, text='Set', width=2, height=1, command=set_frame_pattern_filename_folder,
+                                 activebackground='green', activeforeground='white', wraplength=80, font=("Arial", 8))
+    frame_filename_pattern_btn.pack(side=LEFT)
+
     # Define post-processing area
     postprocessing_frame = LabelFrame(regular_frame, text='Frame post-processing', width=50, height=8)
-    postprocessing_frame.place(x=0, y=190)
+    postprocessing_frame.pack(side=TOP, padx=2, pady=2, anchor=W)
     postprocessing_row = 0
 
     # Check box to select start from current frame
@@ -1259,9 +1212,9 @@ def build_ui():
     postprocessing_row += 1
     
     # Video filename
-    video_filename_label = Label(postprocessing_frame, text='Filename:', font=("Arial", 8))
+    video_filename_label = Label(postprocessing_frame, text='Video filename:', font=("Arial", 8))
     video_filename_label.grid(row=postprocessing_row, column=0, sticky=W)
-    video_filename_name = Entry(postprocessing_frame, width=36, borderwidth=1, font=("Arial", 8))
+    video_filename_name = Entry(postprocessing_frame, width=32, borderwidth=1, font=("Arial", 8))
     video_filename_name.grid(row=postprocessing_row, column=1, columnspan=2, sticky=W)
     video_filename_name.delete(0, 'end')
     video_filename_name.insert('end', TargetVideoFilename)
@@ -1404,7 +1357,7 @@ def main(argv):
 
     load_config_data()
 
-    if VideoEncodingWarnAgain:  # schedule hiding preview in 4 seconds to make warning visible
+    if VideoEncodingWarnAgain: 
         display_video_encoding_warning()
 
 
