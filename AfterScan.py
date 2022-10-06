@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-8mm AfterScan - Basic post-processing for scanned R8/S8 films
+AfterScan - Basic post-processing for scanned R8/S8 films
 
 24/09/2022: 1.0: JRE
     - First attempt at having a stabilization app
@@ -79,7 +79,7 @@ FrameCountdown = FramesToEncode
 # Directory where python scrips run, to store the json file with configuration data
 ScriptDir = os.path.realpath(sys.argv[0])
 ScriptDir = os.path.dirname(ScriptDir)
-ConfigDataFilename = os.path.join(ScriptDir, "8mm-AfterScan.json")
+ConfigDataFilename = os.path.join(ScriptDir, "AfterScan.json")
 PatternFilename = os.path.join(ScriptDir, "Pattern.S8.jpg")
 TargetVideoFilename = ""
 SourceDir = ""
@@ -704,7 +704,7 @@ def start_convert():
             TargetVideoFilename = video_filename_name.get()
             name, ext = os.path.splitext(TargetVideoFilename)
             if TargetVideoFilename == "":   # if filename not defined assign a default one
-                TargetVideoFilename = "8mm-AfterScan-" + datetime.now().strftime("%Y_%m_%d-%H-%M-%S") + ".mp4"
+                TargetVideoFilename = "AfterScan-" + datetime.now().strftime("%Y_%m_%d-%H-%M-%S") + ".mp4"
                 video_filename_name.delete(0, 'end')
                 video_filename_name.insert('end', TargetVideoFilename)
             elif ext == "":
@@ -999,7 +999,7 @@ def afterscan_postprod_init():
     log_path = os.path.dirname(__file__)
     if log_path == "":
         log_path = os.getcwd()
-    log_file_fullpath = log_path + "/8mm-AfterScan.debug.log"
+    log_file_fullpath = log_path + "/AfterScan.debug.log"
     logging.basicConfig(
         level=LogLevel,
         format="%(asctime)s [%(levelname)s] %(message)s",
@@ -1028,7 +1028,7 @@ def afterscan_postprod_init():
     app_width = PreviewWidth + 320 + 30
     app_height = 520 if ExpertMode else 460
 
-    win.title('8mm AfterScan')  # setting title of the window
+    win.title('AfterScan')  # setting title of the window
     win.geometry('1080x700')  # setting the size of the window, not really needed
     win.geometry('+50+50')  # setting the position of the window
     # Prevent window resize
@@ -1053,7 +1053,7 @@ def afterscan_postprod_init():
     # Also a label to draw images
     draw_capture_label = tk.Label(preview_border_frame)
 
-    logging.debug("8mm AfterScan initialized")
+    logging.debug("AfterScan initialized")
 
 def build_ui():
     global win
@@ -1350,7 +1350,7 @@ def main(argv):
         elif opt == '-e':
                 ExpertMode = True
         elif opt == '-h':
-            print("8mm AfterScan")
+            print("AfterScan")
             print("  -l <log mode>  Set log level (standard Python values (DEBUG, INFO, WARNING, ERROR)")
             print("  -e             Enable expert mode")
             exit()
