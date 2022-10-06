@@ -71,6 +71,7 @@ FrameFilenameInputPattern = "picture-*.jpg"
 FrameFilenameOutputPattern = "picture-%05d.jpg"
 SourceDirFileList = []
 CurrentFrame = 0
+StartFrame = 0
 ConvertLoopExitRequested = False
 ConvertLoopAllFramesDone = False
 ConvertLoopRunning = False
@@ -724,7 +725,7 @@ def start_convert():
     global cmd_ffmpeg
     global SourceDirFileList
     global TargetVideoFilename
-    global CurrentFrame
+    global CurrentFrame, StartFrame
     global StartFromCurrentFrame, FrameCountdown
 
     if ConvertLoopRunning:
@@ -761,6 +762,7 @@ def start_convert():
             CurrentFrame = 0
         if FramesToEncode > 0:
             FrameCountdown = FramesToEncode - 1
+        StartFrame = CurrentFrame
         Go_btn.config(text="Stop", bg='red', fg='white', relief=SUNKEN)
         # Disable all buttons in main window
         button_status_change_except(Go_btn, True)
@@ -786,7 +788,7 @@ def convert_loop():
     global IsWindows
     global ffmpeg_preset
     global TargetVideoFilename
-    global CurrentFrame, FrameCountdown
+    global CurrentFrame, FrameCountdown, StartFrame
     global ffmpeg_out, ffmpeg_process
     global stop_event, stop_event_lock
     global FrameFilenameInputPattern, FrameFilenameOutputPattern
@@ -795,6 +797,8 @@ def convert_loop():
     if ConvertLoopExitRequested:
         if ConvertLoopAllFramesDone:
             if GenerateVideo:
+                # Reset start Frame
+                CurrentFrame = StartFrame
                 # Cannot interrupt while generating video (FFmpeg running)
                 Go_btn.config(state=DISABLED)
                 logging.debug(
@@ -815,7 +819,7 @@ def convert_loop():
                     cmd_ffmpeg = (FfmpegBinName +
                                   " -y " +
                                   "-f image2 " +
-                                  "-start_number " + str(FirstAbsoluteFrame) +
+                                  "-start_number " + str(CurrentFrame + FirstAbsoluteFrame) +
                                   " -framerate " + str(VideoFps) +
                                    " -i \"" + os.path.join(
                                        TargetDir,
@@ -840,7 +844,7 @@ def convert_loop():
                                   '-stats',
                                   '-flush_packets', '1',
                                   '-f', 'image2',
-                                  '-start_number', str(FirstAbsoluteFrame),
+                                  '-start_number', str(CurrentFrame + FirstAbsoluteFrame),
                                   '-framerate', str(VideoFps),
                                    '-i', os.path.join(
                                        TargetDir,
