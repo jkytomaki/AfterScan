@@ -18,8 +18,8 @@ More info in README.md file
 __author__ = 'Juan Remirez de Esparza'
 __copyright__ = "Copyright 2022, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
-__license__ = "GPL"
-__version__ = "1.1"
+__license__ = "MIT"
+__version__ = "0.9beta"
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
 __status__ = "Development"
