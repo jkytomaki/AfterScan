@@ -752,7 +752,7 @@ def start_convert():
                              "folder. Overwrite?")
                 if not tk.messagebox.askyesno("Error!", error_msg):
                     return
-        if not VideoEncodingDoNotWarnAgain:
+        if GenerateVideo and not VideoEncodingDoNotWarnAgain:
             tk.messagebox.showwarning(
                 "Video encoding warning",
                 "\r\nVideo encoding progress is NOT displayed in the user "
@@ -763,8 +763,9 @@ def start_convert():
         ConvertLoopRunning = True
         if not StartFromCurrentFrame:
             CurrentFrame = 0
+        FramesToEncode = int(frames_to_encode_spinbox.get())
         if FramesToEncode > 0:
-            FrameCountdown = FramesToEncode - 1
+            FrameCountdown = FramesToEncode
         StartFrame = CurrentFrame
         Go_btn.config(text="Stop", bg='red', fg='white', relief=SUNKEN)
         # Disable all buttons in main window
@@ -800,8 +801,6 @@ def convert_loop():
     if ConvertLoopExitRequested:
         if ConvertLoopAllFramesDone:
             if GenerateVideo:
-                # Reset start Frame
-                CurrentFrame = StartFrame
                 # Cannot interrupt while generating video (FFmpeg running)
                 Go_btn.config(state=DISABLED)
                 logging.debug(
@@ -822,7 +821,7 @@ def convert_loop():
                     cmd_ffmpeg = (FfmpegBinName +
                                   " -y " +
                                   "-f image2 " +
-                                  "-start_number " + str(CurrentFrame +
+                                  "-start_number " + str(StartFrame +
                                                          FirstAbsoluteFrame) +
                                   " -framerate " + str(VideoFps) +
                                   " -i \""
@@ -849,7 +848,7 @@ def convert_loop():
                                   '-stats',
                                   '-flush_packets', '1',
                                   '-f', 'image2',
-                                  '-start_number', str(CurrentFrame +
+                                  '-start_number', str(StartFrame +
                                                        FirstAbsoluteFrame),
                                   '-framerate', str(VideoFps),
                                   '-i',
