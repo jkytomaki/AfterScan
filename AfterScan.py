@@ -814,20 +814,22 @@ def convert_loop():
                     cmd_ffmpeg = (FfmpegBinName +
                                   " -y " +
                                   "-f image2 " +
-                                  "-start_number " + str(FirstAbsoluteFrame) +
-                                  " -framerate " + str(VideoFps) +
-                                  " -i \"" + os.path.join(
-                                      TargetDir,
-                                      FrameFilenameOutputPattern) + "\"" +
-                                  " -an " +
-                                  "-vcodec libx264 " +
-                                  "-preset veryslow " +
-                                  "-crf 18 " +
-                                  "-aspect 4:3 " +
-                                  "-pix_fmt yuv420p " +
-                                  "\"" + os.path.join(
-                                      TargetDir,
-                                      TargetVideoFilename) + "\"")
+                                  "-start_number " + str(FirstAbsoluteFrame))
+                    if FramesToEncode > 0:
+                        cmd_ffmpeg += ("-frames:v" + str(FramesToEncode))
+                    cmd_ffmpeg += (" -framerate " + str(VideoFps) +
+                                   " -i \"" + os.path.join(
+                                       TargetDir,
+                                       FrameFilenameOutputPattern) + "\"" +
+                                   " -an " +
+                                   "-vcodec libx264 " +
+                                   "-preset veryslow " +
+                                   "-crf 18 " +
+                                   "-aspect 4:3 " +
+                                   "-pix_fmt yuv420p " +
+                                   "\"" + os.path.join(
+                                       TargetDir,
+                                       TargetVideoFilename) + "\"")
                     logging.debug("Generated ffmpeg command: %s", cmd_ffmpeg)
                     ffmpeg_generation_succeeded = sp.call(cmd_ffmpeg) == 0
                 else:
@@ -837,17 +839,19 @@ def convert_loop():
                                   '-stats',
                                   '-flush_packets', '1',
                                   '-f', 'image2',
-                                  '-start_number', str(FirstAbsoluteFrame),
-                                  '-framerate', str(VideoFps),
-                                  '-i', os.path.join(
-                                      TargetDir,
-                                      FrameFilenameOutputPattern),
-                                  '-an',  # no audio
-                                  '-vcodec', 'libx264',
-                                  '-preset', ffmpeg_preset.get(),
-                                  '-crf', '18',
-                                  '-pix_fmt', 'yuv420p',
-                                  os.path.join(TargetDir, TargetVideoFilename)]
+                                  '-start_number', str(FirstAbsoluteFrame)]
+                    if FramesToEncode > 0:
+                        cmd_ffmpeg += ['-frames:v', FramesToEncode]
+                    cmd_ffmpeg += ['-framerate', str(VideoFps),
+                                   '-i', os.path.join(
+                                       TargetDir,
+                                       FrameFilenameOutputPattern),
+                                   '-an',  # no audio
+                                   '-vcodec', 'libx264',
+                                   '-preset', ffmpeg_preset.get(),
+                                   '-crf', '18',
+                                   '-pix_fmt', 'yuv420p',
+                                   os.path.join(TargetDir, TargetVideoFilename)]
 
                     logging.debug("Generated ffmpeg command: %s", cmd_ffmpeg)
                     ffmpeg_process = sp.Popen(cmd_ffmpeg, stderr=sp.STDOUT,
