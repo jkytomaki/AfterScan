@@ -884,13 +884,12 @@ def convert_loop():
         button_status_change_except(0, False)
         win.update()
         return
-
-    # Get current file
-    file = SourceDirFileList[CurrentFrame]
-
-    if not skip_frame_regeneration.get():
+    elif not skip_frame_regeneration.get():
+        # Get current file
+        file = SourceDirFileList[CurrentFrame]
         # read image
         img = cv2.imread(file, cv2.IMREAD_UNCHANGED)
+
         if PerformStabilization:
             img = stabilize_image(img, StabilizeTopLeft, StabilizeBottomRight)
         if PerformCropping:
@@ -898,8 +897,9 @@ def convert_loop():
 
         display_image(img)
 
-        logging.debug("Display image: %s, target size: (%i, %i)", file,
-                      img.shape[1], img.shape[0])
+        logging.debug("Display image: %s, target size: (%i, %i), "
+                      "CurrentFrame %i", file,
+                      img.shape[1], img.shape[0], CurrentFrame)
 
         if os.path.isdir(TargetDir):
             target_file = os.path.join(TargetDir, os.path.basename(file))
@@ -981,6 +981,7 @@ def init_display():
 def scale_display_update():
     global win
     global FrameScaleRefreshDone, FrameScaleRefreshPending
+    global CurrentFrame
 
     file = SourceDirFileList[CurrentFrame]
     img = cv2.imread(file, cv2.IMREAD_UNCHANGED)
@@ -999,9 +1000,9 @@ def select_scale_frame(selected_frame):
     global FirstAbsoluteFrame
     global FrameScaleRefreshDone, FrameScaleRefreshPending
 
-    frame_slider.focus()
-    CurrentFrame = int(selected_frame) - FirstAbsoluteFrame
     if not ConvertLoopRunning:  # Do not refresh during conversion loop
+        frame_slider.focus()
+        CurrentFrame = int(selected_frame) - FirstAbsoluteFrame
         if FrameScaleRefreshDone:
             FrameScaleRefreshDone = False
             FrameScaleRefreshPending = False
