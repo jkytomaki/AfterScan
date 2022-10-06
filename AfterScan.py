@@ -760,7 +760,7 @@ def start_convert():
         if not StartFromCurrentFrame:
             CurrentFrame = 0
         if FramesToEncode > 0:
-            FrameCountdown = FramesToEncode
+            FrameCountdown = FramesToEncode - 1
         Go_btn.config(text="Stop", bg='red', fg='white', relief=SUNKEN)
         # Disable all buttons in main window
         button_status_change_except(Go_btn, True)
@@ -815,14 +815,14 @@ def convert_loop():
                     cmd_ffmpeg = (FfmpegBinName +
                                   " -y " +
                                   "-f image2 " +
-                                  "-start_number " + str(FirstAbsoluteFrame))
-                    if FramesToEncode > 0:
-                        cmd_ffmpeg += ("-frames:v" + str(FramesToEncode))
-                    cmd_ffmpeg += (" -framerate " + str(VideoFps) +
+                                  "-start_number " + str(FirstAbsoluteFrame) +
+                                  " -framerate " + str(VideoFps) +
                                    " -i \"" + os.path.join(
                                        TargetDir,
-                                       FrameFilenameOutputPattern) + "\"" +
-                                   " -an " +
+                                       FrameFilenameOutputPattern) + "\"")
+                    if FramesToEncode > 0:
+                        cmd_ffmpeg += ("-frames:v" + str(FramesToEncode))
+                    cmd_ffmpeg += (" -an " +
                                    "-vcodec libx264 " +
                                    "-preset veryslow " +
                                    "-crf 18 " +
@@ -840,14 +840,14 @@ def convert_loop():
                                   '-stats',
                                   '-flush_packets', '1',
                                   '-f', 'image2',
-                                  '-start_number', str(FirstAbsoluteFrame)]
-                    if FramesToEncode > 0:
-                        cmd_ffmpeg += ['-frames:v', FramesToEncode]
-                    cmd_ffmpeg += ['-framerate', str(VideoFps),
+                                  '-start_number', str(FirstAbsoluteFrame),
+                                  '-framerate', str(VideoFps),
                                    '-i', os.path.join(
                                        TargetDir,
-                                       FrameFilenameOutputPattern),
-                                   '-an',  # no audio
+                                       FrameFilenameOutputPattern)]
+                    if FramesToEncode > 0:
+                        cmd_ffmpeg += ['-frames:v', str(FramesToEncode)]
+                    cmd_ffmpeg += ['-an',  # no audio
                                    '-vcodec', 'libx264',
                                    '-preset', ffmpeg_preset.get(),
                                    '-crf', '18',
