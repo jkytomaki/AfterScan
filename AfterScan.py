@@ -2,41 +2,17 @@
 """
 AfterScan - Basic post-processing for scanned R8/S8 films
 
-24/09/2022: 1.0: JRE
-    - First attempt at having a stabilization app
-27/09/2022: 1.1: JRE
-    - Version functional. Features so far:
-        - Stabilization (with sprocket  hole search area defined by user)
-        - Frame crop (with area defined by user)
-        - Video generation via external ffmpeg, OpanCV internal video engine
-          not H264 compatible
-            - Ffmpeg '-preset' option defined by user (3 levels only)
-            - FPS defined by user
-27/09/2022: 1.11: JRE
-    - Correct some warnings highlighted by PyCharm (unused imports, coding
-      convention, etc)
-    - Optimize stabilize algorithm (I do not know how it was working before)
-    - Change Text widgets by Entry (still learning Python)
-28/09/2022: 1.12: JRE
-    - Rearranged widget positions
-    - Add widget to display pattern image, and Edit box to allow pattern file
-      selection
-30/09/2022: 1.12: JRE
-    - Split out of expert mode widgets
-    - Specific app/preview sizes for smaller screens
-    - Fixed bug in stabilize_image. Now extends image size when there is a
-      positive shift
-02/10/2022: 1.12: JRE
-    - Fix bug: Do not enable Video checkbox is Crop checkbox is unselected
-      (need uniform frames to generate video)
-03/10/2022: 1.12: JRE
-    - Redirect encoding output from ffmpeg to console in real time
-    - Replace H264 warning popup by video generation warning popup (progress
-      in console only)
-    - Bug fixed: Start/Stop button was disabled durign frame gneration
-    - New feature: Extended stabilization checkbox, for films badly
-      synchronized
-    - Added column index for widgets in postprodution area
+This utility is intended to handle the basic post-processing after film
+scanning is completed.
+
+Actions performed by this tool include:
+- Stabilization
+- Cropping
+- Video generation
+
+Licensed under a MIT LICENSE.
+
+More info in README.md file
 """
 
 __author__ = 'Juan Remirez de Esparza'
