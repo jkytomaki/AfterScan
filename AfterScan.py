@@ -112,11 +112,6 @@ global work_image
 global img_original
 
 ConfigData = {
-    "CurrentDate": str(datetime.now()),
-    "SourceDir": SourceDir,
-    "TargetDir": TargetDir,
-    "CurrentFrame": CurrentFrame,
-    "VideoFps": VideoFps
 }
 
 # Code below to draw a rectangle to select area to crop or find hole, taken
@@ -334,7 +329,8 @@ def video_encoding_do_not_warn_again_selection():
     global warn_again_from_toplevel
 
     VideoEncodingDoNotWarnAgain = video_encoding_do_not_warn_again.get()
-    ConfigData["VideoEncodingDoNotWarnAgain"] = str(VideoEncodingDoNotWarnAgain)
+    ConfigData["VideoEncodingDoNotWarnAgain"] = str(
+        VideoEncodingDoNotWarnAgain)
 
 
 def close_video_encoding_warning():
@@ -532,8 +528,11 @@ def get_pattern_file():
 def display_pattern(PatternFilename):
     global pattern_canvas
 
-    # Get canvas size
+    # If file does not exists, return
+    if not os.path.isfile(PatternFilename):
+        return
 
+    # Get canvas size
     canvas_width = pattern_canvas.winfo_reqwidth()
     canvas_height = pattern_canvas.winfo_reqheight()
     # Load hole pattern image
@@ -558,7 +557,7 @@ def display_pattern(PatternFilename):
 
 
 def set_source_folder():
-    global SourceDir, CurrentFrame, frame_slider
+    global SourceDir, CurrentFrame, frame_slider, Go_btn, cropping_btn
     global FirstAbsoluteFrame
 
     SourceDir = tk.filedialog.askdirectory(
@@ -580,6 +579,10 @@ def set_source_folder():
     # Load matching file list from newly selected dir
     get_current_dir_file_list()
     CurrentFrame = 0
+    # Enable Start and Crop buttons, plus slider, once we have files to handle
+    cropping_btn.config(state=NORMAL)
+    frame_slider.config(state=NORMAL)
+    Go_btn.config(state=NORMAL)
     frame_slider.set(CurrentFrame + FirstAbsoluteFrame)
     init_display()
 
@@ -819,11 +822,13 @@ def convert_loop():
                     cmd_ffmpeg = (FfmpegBinName +
                                   " -y " +
                                   "-f image2 " +
-                                  "-start_number " + str(CurrentFrame + FirstAbsoluteFrame) +
+                                  "-start_number " + str(CurrentFrame +
+                                                         FirstAbsoluteFrame) +
                                   " -framerate " + str(VideoFps) +
-                                   " -i \"" + os.path.join(
-                                       TargetDir,
-                                       FrameFilenameOutputPattern) + "\"")
+                                  " -i \""
+                                  + os.path.join(TargetDir,
+                                                 FrameFilenameOutputPattern)
+                                  + "\"")
                     if FramesToEncode > 0:
                         cmd_ffmpeg += ("-frames:v" + str(FramesToEncode))
                     cmd_ffmpeg += (" -an " +
@@ -844,11 +849,12 @@ def convert_loop():
                                   '-stats',
                                   '-flush_packets', '1',
                                   '-f', 'image2',
-                                  '-start_number', str(CurrentFrame + FirstAbsoluteFrame),
+                                  '-start_number', str(CurrentFrame +
+                                                       FirstAbsoluteFrame),
                                   '-framerate', str(VideoFps),
-                                   '-i', os.path.join(
-                                       TargetDir,
-                                       FrameFilenameOutputPattern)]
+                                  '-i',
+                                  os.path.join(TargetDir,
+                                               FrameFilenameOutputPattern)]
                     if FramesToEncode > 0:
                         cmd_ffmpeg += ['-frames:v', str(FramesToEncode)]
                     cmd_ffmpeg += ['-an',  # no audio
@@ -856,7 +862,8 @@ def convert_loop():
                                    '-preset', ffmpeg_preset.get(),
                                    '-crf', '18',
                                    '-pix_fmt', 'yuv420p',
-                                   os.path.join(TargetDir, TargetVideoFilename)]
+                                   os.path.join(TargetDir,
+                                                TargetVideoFilename)]
 
                     logging.debug("Generated ffmpeg command: %s", cmd_ffmpeg)
                     ffmpeg_process = sp.Popen(cmd_ffmpeg, stderr=sp.STDOUT,
@@ -1154,7 +1161,7 @@ def build_ui():
     global SourceDir, TargetDir
     global folder_frame_source_dir, folder_frame_target_dir
     global PerformStabilization, perform_stabilization
-    global PerformCropping, perform_cropping
+    global PerformCropping, perform_cropping, cropping_btn
     global GenerateVideo, generate_video
     global from_current_frame, StartFromCurrentFrame
     global frames_to_encode_spinbox, frames_to_encode, FramesToEncode
@@ -1193,7 +1200,7 @@ def build_ui():
     picture_frame.pack(side=LEFT, padx=2, pady=2)
 
     FrameSelected = IntVar()
-    frame_slider = Scale(picture_frame, orient=HORIZONTAL, from_=1, to=20,
+    frame_slider = Scale(picture_frame, orient=HORIZONTAL, from_=0, to=0,
                          variable=FrameSelected, command=select_scale_frame,
                          font=("Arial", 16))
     frame_slider.pack(side=BOTTOM)
@@ -1453,6 +1460,10 @@ def build_ui():
         stabilize_frame.pack(side=LEFT, anchor=N)
         pattern_filename = Entry(stabilize_frame, width=38, borderwidth=1,
                                  font=("Arial", 7))
+        # Only if file does exists, add it to edit box
+        if os.path.isfile(PatternFilename):
+            pattern_filename.delete(0, 'end')
+            pattern_filename.insert('end', PatternFilename)
         pattern_filename.grid(row=0, column=0, columnspan=2, sticky=W)
         pattern_filename_btn = Button(stabilize_frame, text='Pattern', width=6,
                                       height=1, command=get_pattern_file,
@@ -1485,6 +1496,7 @@ def build_ui():
         pattern_canvas = Canvas(stabilize_frame, width=22, height=22,
                                 bg='black')
         pattern_canvas.grid(row=0, column=3, sticky=N, padx=5)
+        display_pattern(PatternFilename)
 
 
 def main(argv):
@@ -1548,8 +1560,14 @@ def main(argv):
 
     load_config_data()
 
+    # Display video encoding warnign if not previously declined
     if not VideoEncodingDoNotWarnAgain:
         video_encoding_warning()
+    # Disable a few items that shoul dbe not operational withous source folder
+    if len(SourceDir) == 0:
+        Go_btn.config(state=DISABLED)
+        cropping_btn.config(state=DISABLED)
+        frame_slider.config(state=DISABLED)
 
     init_display()
 
