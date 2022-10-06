@@ -77,7 +77,7 @@ ConvertLoopRunning = False
 # preview dimensions (4/3 format)
 PreviewWidth = 700
 PreviewHeight = 525
-VideoEncodingWarnAgain = True
+VideoEncodingDoNotWarnAgain = False
 ExpertMode = False
 IsWindows = False
 IsLinux = False
@@ -328,12 +328,12 @@ def match_template(template, img, thres):
 
 
 def video_encoding_do_not_warn_again_selection():
-    global video_encoding_warn_again
-    global VideoEncodingWarnAgain
+    global video_encoding_do_not_warn_again
+    global VideoEncodingDoNotWarnAgain
     global warn_again_from_toplevel
 
-    VideoEncodingWarnAgain = video_encoding_warn_again.get()
-    ConfigData["VideoEncodingWarnAgain"] = str(VideoEncodingWarnAgain)
+    VideoEncodingDoNotWarnAgain = video_encoding_do_not_warn_again.get()
+    ConfigData["VideoEncodingDoNotWarnAgain"] = str(VideoEncodingDoNotWarnAgain)
 
 
 def close_video_encoding_warning():
@@ -343,14 +343,14 @@ def close_video_encoding_warning():
     video_encoding_warning.quit()
 
 
-def display_video_encoding_warning():
+def video_encoding_warning():
     global win
     global video_encoding_warning
-    global video_encoding_warn_again
-    global VideoEncodingWarnAgain
+    global video_encoding_do_not_warn_again
+    global VideoEncodingDoNotWarnAgain
     global warn_again_from_toplevel
 
-    if not VideoEncodingWarnAgain:
+    if VideoEncodingDoNotWarnAgain:
         return
 
     warn_again_from_toplevel = tk.BooleanVar()
@@ -368,13 +368,14 @@ def display_video_encoding_warning():
         'output from FFmpeg is redirected to the console, in order to provide '
         'feedback on the encoding process, that in most cases will be quite '
         'long.', wraplength=450, justify=LEFT)
-    video_encoding_warn_again = tk.BooleanVar(value=VideoEncodingWarnAgain)
+    video_encoding_do_not_warn_again = tk.BooleanVar(
+        value=VideoEncodingDoNotWarnAgain)
     video_encoding_btn = Button(video_encoding_warning, text="OK", width=2,
                                 height=1, command=close_video_encoding_warning)
     video_encoding_checkbox = tk.Checkbutton(
         video_encoding_warning, text='Do not show this warning again',
-        height=1, variable=video_encoding_warn_again, onvalue=False,
-        offvalue=True, command=video_encoding_do_not_warn_again_selection)
+        height=1, variable=video_encoding_do_not_warn_again, onvalue=True,
+        offvalue=False, command=video_encoding_do_not_warn_again_selection)
 
     video_encoding_label.pack(side=TOP)
     video_encoding_btn.pack(side=TOP, pady=10)
@@ -747,7 +748,7 @@ def start_convert():
                              "folder. Overwrite?")
                 if not tk.messagebox.askyesno("Error!", error_msg):
                     return
-        if VideoEncodingWarnAgain:
+        if not VideoEncodingDoNotWarnAgain:
             tk.messagebox.showwarning(
                 "Video encoding warning",
                 "\r\nVideo encoding progress is NOT displayed in the user "
@@ -1019,6 +1020,7 @@ def load_config_data():
     global PatternFilename, pattern_filename
     global frame_filename_pattern_name
     global FrameFilenameInputPattern
+    global VideoEncodingDoNotWarnAgain
 
     # Check if persisted data file exist: If it does, load it
     if os.path.isfile(ConfigDataFilename):
@@ -1055,6 +1057,9 @@ def load_config_data():
         frame_filename_input_pattern_name.delete(0, 'end')
         frame_filename_input_pattern_name.insert('end',
                                                  FrameFilenameInputPattern)
+    if 'VideoEncodingDoNotWarnAgain' in ConfigData:
+        VideoEncodingDoNotWarnAgain = ConfigData["VideoEncodingDoNotWarnAgain"]
+
     if ExpertMode:
         if 'PatternFilename' in ConfigData:
             PatternFilename = ConfigData["PatternFilename"]
@@ -1108,7 +1113,6 @@ def afterscan_postprod_init():
     app_width = PreviewWidth + 320 + 30
     app_height = PreviewHeight + 25
     if ExpertMode:
-        print("expert")
         app_height += 75
 
     win.title('AfterScan')  # setting title of the window
@@ -1481,7 +1485,7 @@ def build_ui():
 def main(argv):
     global LogLevel, LoggingMode
     global s8_template
-    global VideoEncodingWarnAgain
+    global VideoEncodingDoNotWarnAgain
     global ExpertMode
     global FfmpegBinName
     global IsWindows, IsLinux
@@ -1539,8 +1543,8 @@ def main(argv):
 
     load_config_data()
 
-    if VideoEncodingWarnAgain:
-        display_video_encoding_warning()
+    if not VideoEncodingDoNotWarnAgain:
+        video_encoding_warning()
 
     init_display()
 
