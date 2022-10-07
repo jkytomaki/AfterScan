@@ -58,7 +58,6 @@ LastAbsoluteFrame = 0
 FrameScaleRefreshDone = True
 FrameScaleRefreshPending = False
 FramesToEncode = 0
-FrameCountdown = FramesToEncode
 # Python scrips folder, to store the json file with configuration data
 ScriptDir = os.path.realpath(sys.argv[0])
 ScriptDir = os.path.dirname(ScriptDir)
@@ -73,7 +72,6 @@ SourceDirFileList = []
 CurrentFrame = 0
 StartFrame = 0
 ConvertLoopExitRequested = False
-ConvertLoopAllFramesDone = False
 ConvertLoopRunning = False
 # preview dimensions (4/3 format)
 PreviewWidth = 700
@@ -641,20 +639,13 @@ def from_current_frame_selection():
 
 
 def frames_to_encode_selection(updown):
-    global FramesToEncode, frames_to_encode_spinbox, frames_to_encode
-    if frames_to_encode_spinbox.get() == '0':
-        if FramesToEncode != -1:
-            frames_to_encode.set('All')
-            FramesToEncode = -1
+    global frames_to_encode_spinbox, frames_to_encode
+    spinbox_content = frames_to_encode_spinbox.get()
+    if spinbox_content == '0':
+        if updown == 'up':
+            frames_to_encode.set('1')
         else:
-            if updown == 'up':
-                FramesToEncode = 1
-                frames_to_encode.set('1')
-            else:
-                frames_to_encode.set('All')
-    else:
-        FramesToEncode = int(frames_to_encode_spinbox.get())
-        frames_to_encode.set(str(FramesToEncode))
+            frames_to_encode.set('All')
 
 
 def generate_video_selection():
@@ -729,11 +720,29 @@ def start_convert():
     global SourceDirFileList
     global TargetVideoFilename
     global CurrentFrame, StartFrame
-    global StartFromCurrentFrame, FrameCountdown
+    global StartFromCurrentFrame
+    global FramesToEncode
 
     if ConvertLoopRunning:
         ConvertLoopExitRequested = True
     else:
+        if not StartFromCurrentFrame:
+            CurrentFrame = 0
+        StartFrame = CurrentFrame
+        # Centralize 'FramesToEncode' update here
+        if frames_to_encode_spinbox.get() == 'All':
+            FramesToEncode = len(SourceDirFileList) - StartFrame
+        else:
+            FramesToEncode = int(frames_to_encode_spinbox.get())
+            if StartFrame + FramesToEncode >= len(SourceDirFileList):
+                FramesToEncode = len(SourceDirFileList) - StartFrame
+        if FramesToEncode == 0:
+            return
+        Go_btn.config(text="Stop", bg='red', fg='white', relief=SUNKEN)
+        # Disable all buttons in main window
+        button_status_change_except(Go_btn, True)
+        win.update()
+
         if GenerateVideo:
             TargetVideoFilename = video_filename_name.get()
             name, ext = os.path.splitext(TargetVideoFilename)
@@ -760,27 +769,34 @@ def start_convert():
                 "hours for long films). \r\n"
                 "Please check in the console if required, progress reported "
                 "by FFmpeg is displayed there. ")
+
         ConvertLoopRunning = True
-        if not StartFromCurrentFrame:
-            CurrentFrame = 0
-        FramesToEncode = int(frames_to_encode_spinbox.get())
-        if FramesToEncode > 0:
-            FrameCountdown = FramesToEncode
-        StartFrame = CurrentFrame
-        Go_btn.config(text="Stop", bg='red', fg='white', relief=SUNKEN)
-        # Disable all buttons in main window
-        button_status_change_except(Go_btn, True)
-        win.update()
 
-        win.after(1, convert_loop)
+        if not skip_frame_regeneration.get():
+            win.after(1, frame_generation_loop)
+        else:
+            win.after(1, video_generation_phase)
 
 
-def convert_loop():
+def generation_exit():
+    global win
+    global ConvertLoopExitRequested
+    global ConvertLoopRunning
+    global Go_btn, save_bg, save_fg
+
+    ConvertLoopExitRequested = False  # Reset flags
+    ConvertLoopRunning = False
+    Go_btn.config(text="Start", bg=save_bg, fg=save_fg, relief=RAISED)
+    # Enable all buttons in main window
+    button_status_change_except(0, False)
+    win.update()
+
+
+def frame_generation_loop():
     global s8_template
     global draw_capture_label
     global PerformStabilization
-    global ConvertLoopExitRequested, ConvertLoopRunning
-    global ConvertLoopAllFramesDone
+    global ConvertLoopExitRequested
     global save_bg, save_fg
     global Go_btn
     global Exit_btn
@@ -792,145 +808,160 @@ def convert_loop():
     global IsWindows
     global ffmpeg_preset
     global TargetVideoFilename
-    global CurrentFrame, FrameCountdown, StartFrame
+    global CurrentFrame, StartFrame
     global ffmpeg_out, ffmpeg_process
     global stop_event, stop_event_lock
     global FrameFilenameInputPattern, FrameFilenameOutputPattern
-    global FirstAbsoluteFrame
+    global FirstAbsoluteFrame, FramesToEncode
 
-    if ConvertLoopExitRequested:
-        if ConvertLoopAllFramesDone:
-            if GenerateVideo:
-                # Cannot interrupt while generating video (FFmpeg running)
-                Go_btn.config(state=DISABLED)
-                logging.debug(
-                    "First filename in list: %s, extracted number: %s",
-                    os.path.basename(SourceDirFileList[0]), FirstAbsoluteFrame)
-                stop_event = threading.Event()
-                stop_event_lock = threading.Lock()
-
-                ffmpeg_progress_thread = threading.Thread(
-                    target=display_ffmpeg_progress)
-                ffmpeg_progress_thread.daemon = True
-                ffmpeg_progress_thread.start()
-                win.update()
-
-                # Cannot call popen with a list in windows. Seems it was a bug
-                # already in 2018: https://bugs.python.org/issue32764
-                if IsWindows:
-                    cmd_ffmpeg = (FfmpegBinName +
-                                  " -y " +
-                                  "-f image2 " +
-                                  "-start_number " + str(StartFrame +
-                                                         FirstAbsoluteFrame) +
-                                  " -framerate " + str(VideoFps) +
-                                  " -i \""
-                                  + os.path.join(TargetDir,
-                                                 FrameFilenameOutputPattern)
-                                  + "\"")
-                    if FramesToEncode > 0:
-                        cmd_ffmpeg += ("-frames:v" + str(FramesToEncode))
-                    cmd_ffmpeg += (" -an " +
-                                   "-vcodec libx264 " +
-                                   "-preset veryslow " +
-                                   "-crf 18 " +
-                                   "-aspect 4:3 " +
-                                   "-pix_fmt yuv420p " +
-                                   "\"" + os.path.join(
-                                       TargetDir,
-                                       TargetVideoFilename) + "\"")
-                    logging.debug("Generated ffmpeg command: %s", cmd_ffmpeg)
-                    ffmpeg_generation_succeeded = sp.call(cmd_ffmpeg) == 0
-                else:
-                    cmd_ffmpeg = [FfmpegBinName,
-                                  '-y',
-                                  '-loglevel', 'error',
-                                  '-stats',
-                                  '-flush_packets', '1',
-                                  '-f', 'image2',
-                                  '-start_number', str(StartFrame +
-                                                       FirstAbsoluteFrame),
-                                  '-framerate', str(VideoFps),
-                                  '-i',
-                                  os.path.join(TargetDir,
-                                               FrameFilenameOutputPattern)]
-                    if FramesToEncode > 0:
-                        cmd_ffmpeg += ['-frames:v', str(FramesToEncode)]
-                    cmd_ffmpeg += ['-an',  # no audio
-                                   '-vcodec', 'libx264',
-                                   '-preset', ffmpeg_preset.get(),
-                                   '-crf', '18',
-                                   '-pix_fmt', 'yuv420p',
-                                   os.path.join(TargetDir,
-                                                TargetVideoFilename)]
-
-                    logging.debug("Generated ffmpeg command: %s", cmd_ffmpeg)
-                    ffmpeg_process = sp.Popen(cmd_ffmpeg, stderr=sp.STDOUT,
-                                              stdout=sp.PIPE,
-                                              universal_newlines=True)
-                    ffmpeg_generation_succeeded = ffmpeg_process.wait() == 0
-
-                stop_event.set()
-                ffmpeg_progress_thread.join()
-
-                # And display results
-                if ffmpeg_generation_succeeded:
-                    tk.messagebox.showinfo(
-                        "Video generation by ffmpeg has ended",
-                        "\r\nVideo encoding has finalized successfully. "
-                        "You can find your video in the target folder, "
-                        "as stated below\r\n" +
-                        os.path.join(TargetDir, TargetVideoFilename))
-                else:
-                    tk.messagebox.showinfo(
-                        "FFMPEG encoding failed",
-                        "\r\nVideo generation by FFMPEG has failed\r\nPlease "
-                        "check the logs to determine what the problem was.")
-        ConvertLoopExitRequested = False  # Reset flag
-        ConvertLoopAllFramesDone = False
-        ConvertLoopRunning = False
-        Go_btn.config(text="Start", bg=save_bg, fg=save_fg, relief=RAISED)
-        # Enable all buttons in main window
-        button_status_change_except(0, False)
-        win.update()
+    if CurrentFrame >= StartFrame + FramesToEncode:
+        if GenerateVideo:
+            win.after(1, video_generation_phase)
+        else:
+            generation_exit()
         return
-    elif not skip_frame_regeneration.get():
-        # Get current file
-        file = SourceDirFileList[CurrentFrame]
-        # read image
-        img = cv2.imread(file, cv2.IMREAD_UNCHANGED)
 
-        if PerformStabilization:
-            img = stabilize_image(img, StabilizeTopLeft, StabilizeBottomRight)
-        if PerformCropping:
-            img = crop_image(img, CropTopLeft, CropBottomRight)
+    if ConvertLoopExitRequested:  # Stop button pressed
+        generation_exit()
+        return
 
-        display_image(img)
+    # Get current file
+    file = SourceDirFileList[CurrentFrame]
+    # read image
+    img = cv2.imread(file, cv2.IMREAD_UNCHANGED)
 
-        logging.debug("Display image: %s, target size: (%i, %i), "
-                      "CurrentFrame %i", file,
-                      img.shape[1], img.shape[0], CurrentFrame)
+    if PerformStabilization:
+        img = stabilize_image(img, StabilizeTopLeft, StabilizeBottomRight)
+    if PerformCropping:
+        img = crop_image(img, CropTopLeft, CropBottomRight)
 
-        if os.path.isdir(TargetDir):
-            target_file = os.path.join(TargetDir, os.path.basename(file))
-            cv2.imwrite(target_file, img)
+    display_image(img)
 
-        frame_slider.set(CurrentFrame + FirstAbsoluteFrame)
+    logging.debug("Display image: %s, target size: (%i, %i), "
+                  "CurrentFrame %i", file,
+                  img.shape[1], img.shape[0], CurrentFrame)
 
-        CurrentFrame += 1
-        FrameCountdown -= 1
-        if FrameCountdown == 0:
-            ConvertLoopAllFramesDone = True
-            ConvertLoopExitRequested = True
-    else:
-        CurrentFrame = len(SourceDirFileList)
+    if os.path.isdir(TargetDir):
+        target_file = os.path.join(TargetDir, os.path.basename(file))
+        cv2.imwrite(target_file, img)
 
-    if CurrentFrame >= len(SourceDirFileList):
-        ConvertLoopAllFramesDone = True
-        ConvertLoopExitRequested = True
-        CurrentFrame -= 1  # Minus one to avoid having the index out of range
+    frame_slider.set(CurrentFrame + FirstAbsoluteFrame)
 
-    win.after(1, convert_loop)
+    CurrentFrame += 1
+
+    win.after(1, frame_generation_loop)
+
+
+def video_generation_phase():
+    global s8_template
+    global draw_capture_label
+    global PerformStabilization
+    global ConvertLoopExitRequested
+    global save_bg, save_fg
+    global Go_btn
+    global Exit_btn
+    global CropTopLeft, CropBottomRight
+    global TargetDir
+    global video_writer
+    global pipe_ffmpeg
+    global cmd_ffmpeg
+    global IsWindows
+    global ffmpeg_preset
+    global TargetVideoFilename
+    global CurrentFrame, StartFrame
+    global ffmpeg_out, ffmpeg_process
+    global stop_event, stop_event_lock
+    global FrameFilenameInputPattern, FrameFilenameOutputPattern
+    global FirstAbsoluteFrame, FramesToEncode
+
+    if FramesToEncode != 0:  # Check for special case
+        # Cannot interrupt while generating video (FFmpeg running)
+        Go_btn.config(state=DISABLED)
+        logging.debug(
+            "First filename in list: %s, extracted number: %s",
+            os.path.basename(SourceDirFileList[0]), FirstAbsoluteFrame)
+        stop_event = threading.Event()
+        stop_event_lock = threading.Lock()
+
+        ffmpeg_progress_thread = threading.Thread(
+            target=display_ffmpeg_progress)
+        ffmpeg_progress_thread.daemon = True
+        ffmpeg_progress_thread.start()
+        win.update()
+
+        # Cannot call popen with a list in windows. Seems it was a bug
+        # already in 2018: https://bugs.python.org/issue32764
+        if IsWindows:
+            cmd_ffmpeg = (FfmpegBinName +
+                          " -y " +
+                          "-f image2 " +
+                          "-start_number " + str(StartFrame +
+                                                 FirstAbsoluteFrame) +
+                          " -framerate " + str(VideoFps) +
+                          " -i \""
+                          + os.path.join(TargetDir,
+                                         FrameFilenameOutputPattern)
+                          + "\"")
+            if FramesToEncode > 0:
+                cmd_ffmpeg += ("-frames:v" + str(FramesToEncode))
+            cmd_ffmpeg += (" -an " +
+                           "-vcodec libx264 " +
+                           "-preset veryslow " +
+                           "-crf 18 " +
+                           "-aspect 4:3 " +
+                           "-pix_fmt yuv420p " +
+                           "\"" + os.path.join(
+                               TargetDir,
+                               TargetVideoFilename) + "\"")
+            logging.debug("Generated ffmpeg command: %s", cmd_ffmpeg)
+            ffmpeg_generation_succeeded = sp.call(cmd_ffmpeg) == 0
+        else:
+            cmd_ffmpeg = [FfmpegBinName,
+                          '-y',
+                          '-loglevel', 'error',
+                          '-stats',
+                          '-flush_packets', '1',
+                          '-f', 'image2',
+                          '-start_number', str(StartFrame +
+                                               FirstAbsoluteFrame),
+                          '-framerate', str(VideoFps),
+                          '-i',
+                          os.path.join(TargetDir,
+                                       FrameFilenameOutputPattern)]
+            if FramesToEncode > 0:
+                cmd_ffmpeg += ['-frames:v', str(FramesToEncode)]
+            cmd_ffmpeg += ['-an',  # no audio
+                           '-vcodec', 'libx264',
+                           '-preset', ffmpeg_preset.get(),
+                           '-crf', '18',
+                           '-pix_fmt', 'yuv420p',
+                           os.path.join(TargetDir,
+                                        TargetVideoFilename)]
+
+            logging.debug("Generated ffmpeg command: %s", cmd_ffmpeg)
+            ffmpeg_process = sp.Popen(cmd_ffmpeg, stderr=sp.STDOUT,
+                                      stdout=sp.PIPE,
+                                      universal_newlines=True)
+            ffmpeg_generation_succeeded = ffmpeg_process.wait() == 0
+
+        stop_event.set()
+        ffmpeg_progress_thread.join()
+
+        # And display results
+        if ffmpeg_generation_succeeded:
+            tk.messagebox.showinfo(
+                "Video generation by ffmpeg has ended",
+                "\r\nVideo encoding has finalized successfully. "
+                "You can find your video in the target folder, "
+                "as stated below\r\n" +
+                os.path.join(TargetDir, TargetVideoFilename))
+        else:
+            tk.messagebox.showinfo(
+                "FFMPEG encoding failed",
+                "\r\nVideo generation by FFMPEG has failed\r\nPlease "
+                "check the logs to determine what the problem was.")
+
+    generation_exit()  # Restore all setigns to normal
 
 
 def get_current_dir_file_list():
