@@ -933,30 +933,38 @@ def video_generation_phase():
         # Cannot call popen with a list in windows. Seems it was a bug
         # already in 2018: https://bugs.python.org/issue32764
         if IsWindows:
-            cmd_ffmpeg = (FfmpegBinName +
-                          " -y " +
-                          "-f image2 " +
-                          "-start_number " + str(StartFrame +
-                                                 FirstAbsoluteFrame) +
-                          " -framerate " + str(VideoFps) +
-                          " -i \""
-                          + os.path.join(TargetDir,
-                                         FrameFilenameOutputPattern)
-                          + "\"")
+            extra_input_options = ""
+            extra_output_options = ""
             if FramesToEncode > 0:
-                cmd_ffmpeg += ("-frames:v" + str(FramesToEncode))
-            cmd_ffmpeg += (" -an " +
-                           "-vcodec libx264 " +
-                           "-preset veryslow " +
-                           "-crf 18 " +
-                           "-aspect 4:3 " +
-                           "-pix_fmt yuv420p " +
-                           "\"" + os.path.join(
-                               TargetDir,
-                               TargetVideoFilename) + "\"")
+                extra_output_options += (" -frames:v" + str(FramesToEncode))
+            cmd_ffmpeg = (FfmpegBinName
+                          + " -y "
+                          + "-f image2 "
+                          + "-start_number " + str(StartFrame +
+                                                 FirstAbsoluteFrame)
+                          + " -framerate " + str(VideoFps)
+                          + extra_input_options
+                          + " -i \""
+                          + os.path.join(TargetDir,
+                                       FrameFilenameOutputPattern)
+                          + "\""
+                          + extra_output_options
+                          + " -an "
+                          + "-vcodec libx264 "
+                          + "-preset veryslow "
+                          + "-crf 18 "
+                          + "-aspect 4:3 "
+                          + "-pix_fmt yuv420p "
+                          + "\"" + os.path.join(
+                              TargetDir,
+                              TargetVideoFilename) + "\"")
             logging.debug("Generated ffmpeg command: %s", cmd_ffmpeg)
             ffmpeg_generation_succeeded = sp.call(cmd_ffmpeg) == 0
         else:
+            extra_input_options = []
+            extra_output_options = []
+            if FramesToEncode > 0:
+                extra_output_options += ['-frames:v', str(FramesToEncode)]
             cmd_ffmpeg = [FfmpegBinName,
                           '-y',
                           '-loglevel', 'error',
@@ -969,15 +977,15 @@ def video_generation_phase():
                           '-i',
                           os.path.join(TargetDir,
                                        FrameFilenameOutputPattern)]
-            if FramesToEncode > 0:
-                cmd_ffmpeg += ['-frames:v', str(FramesToEncode)]
-            cmd_ffmpeg += ['-an',  # no audio
-                           '-vcodec', 'libx264',
-                           '-preset', ffmpeg_preset.get(),
-                           '-crf', '18',
-                           '-pix_fmt', 'yuv420p',
-                           os.path.join(TargetDir,
-                                        TargetVideoFilename)]
+            cmd_ffmpeg.extend(extra_output_options)
+            cmd_ffmpeg.extend(
+                ['-an',  # no audio
+               '-vcodec', 'libx264',
+               '-preset', ffmpeg_preset.get(),
+               '-crf', '18',
+               '-pix_fmt', 'yuv420p',
+               os.path.join(TargetDir,
+                            TargetVideoFilename)])
 
             logging.debug("Generated ffmpeg command: %s", cmd_ffmpeg)
             ffmpeg_process = sp.Popen(cmd_ffmpeg, stderr=sp.STDOUT,
