@@ -66,8 +66,9 @@ PatternFilename = os.path.join(ScriptDir, "Pattern.S8.jpg")
 TargetVideoFilename = ""
 SourceDir = ""
 TargetDir = ""
-FrameFilenameInputPattern = "picture-*.jpg"
 FrameFilenameOutputPattern = "picture-%05d.jpg"
+FrameCheckFilenameOutputPattern = "picture-*.jpg" # We need this because ...
+FrameFilenameInputPattern = "picture-*.jpg" # ...this one can be customized 
 SourceDirFileList = []
 CurrentFrame = 0
 StartFrame = 0
@@ -710,6 +711,25 @@ def is_ffmpeg_installed():
     return ffmpeg_installed
 
 
+def valid_generated_frame_range():
+    global StartFrame, FramesToEncode, FirstAbsoluteFrame
+
+    file_count = 0
+    generated_frame_list = list(glob(os.path.join(TargetDir,
+                                      FrameCheckFilenameOutputPattern)))
+    for i in range(FirstAbsoluteFrame + StartFrame,
+                   FirstAbsoluteFrame + StartFrame + FramesToEncode):
+        file_to_check = os.path.join(TargetDir,
+                                      FrameFilenameOutputPattern % i)
+        if file_to_check in generated_frame_list:
+            file_count += 1
+    logging.debug("Checking frame range %i-%i: %i files found",
+                  FirstAbsoluteFrame + StartFrame,
+                  FirstAbsoluteFrame + StartFrame + FramesToEncode, file_count)
+
+    return file_count == FramesToEncode
+        
+
 def start_convert():
     global ConvertLoopExitRequested, ConvertLoopRunning
     global GenerateVideo
@@ -737,6 +757,12 @@ def start_convert():
             if StartFrame + FramesToEncode >= len(SourceDirFileList):
                 FramesToEncode = len(SourceDirFileList) - StartFrame
         if FramesToEncode == 0:
+            tk.messagebox.showwarning(
+                "No frames match range",
+                "No frames to encode.\r\n"
+                "The range specified (current frame - number of frames to "
+                "encode) does not match any frame.\r\n"
+                "Please review your settings and try again.")
             return
         Go_btn.config(text="Stop", bg='red', fg='white', relief=SUNKEN)
         # Disable all buttons in main window
@@ -811,7 +837,7 @@ def frame_generation_loop():
     global CurrentFrame, StartFrame
     global ffmpeg_out, ffmpeg_process
     global stop_event, stop_event_lock
-    global FrameFilenameInputPattern, FrameFilenameOutputPattern
+    global FrameFilenameOutputPattern
     global FirstAbsoluteFrame, FramesToEncode
 
     if CurrentFrame >= StartFrame + FramesToEncode:
@@ -871,10 +897,25 @@ def video_generation_phase():
     global CurrentFrame, StartFrame
     global ffmpeg_out, ffmpeg_process
     global stop_event, stop_event_lock
-    global FrameFilenameInputPattern, FrameFilenameOutputPattern
+    global FrameFilenameOutputPattern
     global FirstAbsoluteFrame, FramesToEncode
 
-    if FramesToEncode != 0:  # Check for special case
+    # Check for special cases first
+    if FramesToEncode == 0:
+        tk.messagebox.showwarning(
+            "No frames match range to generate video",
+            "Video cannot be generated.\r\n"
+            "No frames in target folder match the specified range.\r\n"
+            "Please review your settings and try again.")
+    elif not valid_generated_frame_range():
+        tk.messagebox.showwarning(
+            "Frames missing",
+            "Video cannot be generated.\r\n"
+            "Not all frames in specified range exist in target folder to "
+            "allow video generation.\r\n"
+            "Please regenerate frames making sure option "
+            "\'Skip Frame regeneration\' is not selected, and try again.")
+    else:
         # Cannot interrupt while generating video (FFmpeg running)
         Go_btn.config(state=DISABLED)
         logging.debug(
