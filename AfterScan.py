@@ -941,12 +941,12 @@ def video_generation_phase():
                           + " -y "
                           + "-f image2 "
                           + "-start_number " + str(StartFrame +
-                                                 FirstAbsoluteFrame)
+                                                   FirstAbsoluteFrame)
                           + " -framerate " + str(VideoFps)
                           + extra_input_options
                           + " -i \""
                           + os.path.join(TargetDir,
-                                       FrameFilenameOutputPattern)
+                                         FrameFilenameOutputPattern)
                           + "\""
                           + extra_output_options
                           + " -an "
@@ -980,12 +980,12 @@ def video_generation_phase():
             cmd_ffmpeg.extend(extra_output_options)
             cmd_ffmpeg.extend(
                 ['-an',  # no audio
-               '-vcodec', 'libx264',
-               '-preset', ffmpeg_preset.get(),
-               '-crf', '18',
-               '-pix_fmt', 'yuv420p',
-               os.path.join(TargetDir,
-                            TargetVideoFilename)])
+                 '-vcodec', 'libx264',
+                 '-preset', ffmpeg_preset.get(),
+                 '-crf', '18',
+                 '-pix_fmt', 'yuv420p',
+                 os.path.join(TargetDir,
+                              TargetVideoFilename)])
 
             logging.debug("Generated ffmpeg command: %s", cmd_ffmpeg)
             ffmpeg_process = sp.Popen(cmd_ffmpeg, stderr=sp.STDOUT,
