@@ -67,8 +67,8 @@ TargetVideoFilename = ""
 SourceDir = ""
 TargetDir = ""
 FrameFilenameOutputPattern = "picture-%05d.jpg"
-FrameCheckFilenameOutputPattern = "picture-*.jpg" # We need this because ...
-FrameFilenameInputPattern = "picture-*.jpg" # ...this one can be customized 
+FrameCheckFilenameOutputPattern = "picture-*.jpg"  # We need this because ...
+FrameFilenameInputPattern = "picture-*.jpg"  # ...this one can be customized
 SourceDirFileList = []
 CurrentFrame = 0
 StartFrame = 0
@@ -715,12 +715,12 @@ def valid_generated_frame_range():
     global StartFrame, FramesToEncode, FirstAbsoluteFrame
 
     file_count = 0
-    generated_frame_list = list(glob(os.path.join(TargetDir,
-                                      FrameCheckFilenameOutputPattern)))
+    generated_frame_list = list(glob(os.path.join(
+        TargetDir, FrameCheckFilenameOutputPattern)))
     for i in range(FirstAbsoluteFrame + StartFrame,
                    FirstAbsoluteFrame + StartFrame + FramesToEncode):
         file_to_check = os.path.join(TargetDir,
-                                      FrameFilenameOutputPattern % i)
+                                     FrameFilenameOutputPattern % i)
         if file_to_check in generated_frame_list:
             file_count += 1
     logging.debug("Checking frame range %i-%i: %i files found",
@@ -728,7 +728,7 @@ def valid_generated_frame_range():
                   FirstAbsoluteFrame + StartFrame + FramesToEncode, file_count)
 
     return file_count == FramesToEncode
-        
+
 
 def start_convert():
     global ConvertLoopExitRequested, ConvertLoopRunning
