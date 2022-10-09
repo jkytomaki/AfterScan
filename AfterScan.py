@@ -49,22 +49,18 @@ import platform
 import threading
 import re
 
-PerformStabilization = True
-PerformCropping = False
-GenerateVideo = False
-StartFromCurrentFrame = False
-FirstAbsoluteFrame = 0
-LastAbsoluteFrame = 0
-FrameScaleRefreshDone = True
-FrameScaleRefreshPending = False
-FramesToEncode = 0
+first_absolute_frame = 0
+last_absolute_frame = 0
+frame_scale_refresh_done = True
+frame_scale_refresh_pending = False
+frames_to_encode = 0
 # Python scrips folder, to store the json file with configuration data
-ScriptDir = os.path.realpath(sys.argv[0])
-ScriptDir = os.path.dirname(ScriptDir)
-general_config_filename = os.path.join(ScriptDir, "AfterScan.json")
+script_dir = os.path.realpath(sys.argv[0])
+script_dir = os.path.dirname(script_dir)
+general_config_filename = os.path.join(script_dir, "AfterScan.json")
 project_config_basename = "AfterScan-project.json"
 project_config_filename = ""
-PatternFilename = os.path.join(ScriptDir, "Pattern.S8.jpg")
+PatternFilename = os.path.join(script_dir, "Pattern.S8.jpg")
 TargetVideoFilename = ""
 SourceDir = ""
 TargetDir = ""
@@ -79,7 +75,6 @@ ConvertLoopRunning = False
 # preview dimensions (4/3 format)
 PreviewWidth = 700
 PreviewHeight = 525
-VideoEncodingDoNotWarnAgain = False
 ExpertMode = False
 IsWindows = False
 IsLinux = False
@@ -105,7 +100,6 @@ CropTopLeft = (0, 0)
 CropBottomRight = (0, 0)
 VideoFps = 18
 FfmpegBinName = ""
-ExtendedStabilization = False
 
 global win
 global ffmpeg_installed
@@ -165,7 +159,7 @@ def draw_rectangle(event, x, y, flags, param):
 
 def select_rectangle_area():
     global work_image
-    global CurrentFrame, FirstAbsoluteFrame
+    global CurrentFrame, first_absolute_frame
     global SourceDirFileList
     global rectangle_drawing
     global ix, iy
@@ -209,7 +203,7 @@ def select_rectangle_area():
 
 def select_stabilization_area():
     global RectangleWindowTitle
-    global PerformStabilization
+    global perform_stabilization
     global StabilizeTopLeft, StabilizeBottomRight
     global StabilizeAreaDefined
 
@@ -221,7 +215,7 @@ def select_stabilization_area():
 
     if select_rectangle_area():
         StabilizeAreaDefined = True
-        PerformStabilization = True
+        perform_stabilization.set(True)
         StabilizeTopLeft = RectangleTopLeft
         StabilizeBottomRight = RectangleBottomRight
         logging.debug("Selected Rectangle: (%i,%i) - (%i, %i)",
@@ -232,13 +226,9 @@ def select_stabilization_area():
                       StabilizeBottomRight[0], StabilizeBottomRight[1])
     else:
         StabilizeAreaDefined = False
-        PerformStabilization = False
+        perform_stabilization.set(False)
         StabilizeTopLeft = (0, 0)
         StabilizeBottomRight = (0, 0)
-
-    # Update UI
-    if ExpertMode:
-        perform_stabilization.set(PerformStabilization)
 
     # Enable all buttons in main window
     button_status_change_except(0, NORMAL)
@@ -247,7 +237,7 @@ def select_stabilization_area():
 
 def select_cropping_area():
     global RectangleWindowTitle
-    global PerformCropping
+    global perform_cropping
     global CropTopLeft, CropBottomRight
     global CropAreaDefined
 
@@ -260,8 +250,6 @@ def select_cropping_area():
     if select_rectangle_area():
         CropAreaDefined = True
         button_status_change_except(0, NORMAL)
-        PerformCropping = perform_cropping.get()
-        project_config["PerformCropping"] = PerformCropping
         CropTopLeft = RectangleTopLeft
         CropBottomRight = RectangleBottomRight
         logging.debug("Crop area: (%i,%i) - (%i, %i)", CropTopLeft[0],
@@ -269,11 +257,11 @@ def select_cropping_area():
     else:
         CropAreaDefined = False
         button_status_change_except(0, DISABLED)
-        PerformCropping = False
-        project_config["PerformCropping"] = PerformCropping
+        perform_cropping.set(False)
+        project_config["PerformCropping"] = perform_cropping.get()
         perform_cropping.set(False)
         generate_video_checkbox.config(state=NORMAL if ffmpeg_installed and
-                                       PerformCropping else DISABLED)
+                                       perform_cropping.get() else DISABLED)
         CropTopLeft = (0, 0)
         CropBottomRight = (0, 0)
 
@@ -315,8 +303,8 @@ def button_status_change_except(except_button, button_status):
 def widget_state_refresh():
     global perform_cropping_checkbox, perform_cropping, CropAreaDefined
     global CropTopLeft, CropBottomRight
-    global ffmpeg_installed, PerformCropping
-    global GenerateVideo, generate_video_checkbox
+    global ffmpeg_installed, perform_cropping
+    global generate_video, generate_video_checkbox
     global video_fps_dropdown, video_fps_label, video_filename_name
     global ffmpeg_preset_rb1, ffmpeg_preset_rb2, ffmpeg_preset_rb3
 
@@ -326,12 +314,12 @@ def widget_state_refresh():
                                      else DISABLED)
     generate_video_checkbox.config(state=NORMAL if ffmpeg_installed and
                                    perform_cropping.get() else DISABLED)
-    video_fps_dropdown.config(state=NORMAL if GenerateVideo else DISABLED)
-    video_fps_label.config(state=NORMAL if GenerateVideo else DISABLED)
-    video_filename_name.config(state=NORMAL if GenerateVideo else DISABLED)
-    ffmpeg_preset_rb1.config(state=NORMAL if GenerateVideo else DISABLED)
-    ffmpeg_preset_rb2.config(state=NORMAL if GenerateVideo else DISABLED)
-    ffmpeg_preset_rb3.config(state=NORMAL if GenerateVideo else DISABLED)
+    video_fps_dropdown.config(state=NORMAL if generate_video.get() else DISABLED)
+    video_fps_label.config(state=NORMAL if generate_video.get() else DISABLED)
+    video_filename_name.config(state=NORMAL if generate_video.get() else DISABLED)
+    ffmpeg_preset_rb1.config(state=NORMAL if generate_video.get() else DISABLED)
+    ffmpeg_preset_rb2.config(state=NORMAL if generate_video.get() else DISABLED)
+    ffmpeg_preset_rb3.config(state=NORMAL if generate_video.get() else DISABLED)
 
 
 def match_template(template, img, thres):
@@ -352,12 +340,10 @@ def match_template(template, img, thres):
 
 def video_encoding_do_not_warn_again_selection():
     global video_encoding_do_not_warn_again
-    global VideoEncodingDoNotWarnAgain
     global warn_again_from_toplevel
 
-    VideoEncodingDoNotWarnAgain = video_encoding_do_not_warn_again.get()
-    general_config["VideoEncodingDoNotWarnAgain"] = str(
-        VideoEncodingDoNotWarnAgain)
+    general_config["VideoEncodingDoNotWarnAgain"] = \
+    video_encoding_do_not_warn_again.get()
 
 
 def close_video_encoding_warning():
@@ -371,10 +357,9 @@ def video_encoding_warning():
     global win
     global video_encoding_warning
     global video_encoding_do_not_warn_again
-    global VideoEncodingDoNotWarnAgain
     global warn_again_from_toplevel
 
-    if VideoEncodingDoNotWarnAgain:
+    if video_encoding_do_not_warn_again.get():
         return
 
     warn_again_from_toplevel = tk.BooleanVar()
@@ -392,8 +377,6 @@ def video_encoding_warning():
         'output from FFmpeg is redirected to the console, in order to provide '
         'feedback on the encoding process, that in most cases will be quite '
         'long.', wraplength=450, justify=LEFT)
-    video_encoding_do_not_warn_again = tk.BooleanVar(
-        value=VideoEncodingDoNotWarnAgain)
     video_encoding_btn = Button(video_encoding_warning, text="OK", width=2,
                                 height=1, command=close_video_encoding_warning)
     video_encoding_checkbox = tk.Checkbutton(
@@ -585,7 +568,7 @@ def display_pattern(PatternFilename):
 
 def set_source_folder():
     global SourceDir, CurrentFrame, frame_slider, Go_btn, cropping_btn
-    global FirstAbsoluteFrame
+    global first_absolute_frame
 
     # Write project data before switching project
     save_project_config()
@@ -607,15 +590,15 @@ def set_source_folder():
 
     general_config["SourceDir"] = SourceDir
     # Load matching file list from newly selected dir
-    get_current_dir_file_list()  # FirstAbsoluteFrame is set here
+    get_current_dir_file_list()  # first_absolute_frame is set here
     CurrentFrame = 0  # Default in case no config exist, overwritten it it does
-    load_project_config()  # Needs SourceDir and FirstAbsoluteFrame defined
+    load_project_config()  # Needs SourceDir and first_absolute_frame defined
     
     # Enable Start and Crop buttons, plus slider, once we have files to handle
     cropping_btn.config(state=NORMAL)
     frame_slider.config(state=NORMAL)
     Go_btn.config(state=NORMAL)
-    frame_slider.set(CurrentFrame + FirstAbsoluteFrame)
+    frame_slider.set(CurrentFrame + first_absolute_frame)
     init_display()
 
 
@@ -641,7 +624,7 @@ def set_target_folder():
     general_config["TargetDir"] = TargetDir
 
 
-def set_frame_pattern_filename_folder():
+def set_frame_input_filename_pattern():
     global FrameInputFilenamePattern, frame_input_filename_pattern
 
     FrameInputFilenamePattern = frame_input_filename_pattern.get()
@@ -649,55 +632,51 @@ def set_frame_pattern_filename_folder():
 
 
 def perform_stabilization_selection():
-    global perform_stabilization, PerformStabilization
-    PerformStabilization = perform_stabilization.get()
+    global perform_stabilization
+    # Nothing to do here
 
 
 def extended_stabilization_selection():
-    global extended_stabilization, ExtendedStabilization
-    ExtendedStabilization = extended_stabilization.get()
-    project_config["ExtendedStabilization"] = ExtendedStabilization
+    global extended_stabilization
+    project_config["ExtendedStabilization"] = extended_stabilization.get()
     init_display()
 
 
 def perform_cropping_selection():
-    global perform_cropping, PerformCropping
+    global perform_cropping, perform_cropping
     global generate_video_checkbox
-    PerformCropping = perform_cropping.get()
-    project_config["PerformCropping"] = PerformCropping
+    project_config["PerformCropping"] = perform_cropping.get()
     generate_video_checkbox.config(state=NORMAL if ffmpeg_installed
-                                   and PerformCropping else DISABLED)
+                                   and perform_cropping.get() else DISABLED)
 
 
-def from_current_frame_selection():
-    global from_current_frame, StartFromCurrentFrame
-    StartFromCurrentFrame = from_current_frame.get()
-    project_config["StartFromCurrentFrame"] = StartFromCurrentFrame
+def start_from_current_frame_selection():
+    global start_from_current_frame
+    project_config["StartFromCurrentFrame"] = start_from_current_frame.get()
 
 
 def frames_to_encode_selection(updown):
-    global frames_to_encode_spinbox, frames_to_encode
-    project_config["FramesToEncode"] = frames_to_encode_spinbox.get()
-    if project_config["FramesToEncode"] == '0':
+    global frames_to_encode_spinbox, frames_to_encode_str
+    project_config["frames_to_encode"] = frames_to_encode_spinbox.get()
+    if project_config["frames_to_encode"] == '0':
         if updown == 'up':
-            frames_to_encode.set('1')
+            frames_to_encode_str.set('1')
         else:
-            frames_to_encode.set('All')
+            frames_to_encode_str.set('All')
 
 
 def generate_video_selection():
-    global generate_video, GenerateVideo
+    global generate_video
     global video_fps_dropdown, video_fps_label, video_filename_name
     global ffmpeg_preset_rb1, ffmpeg_preset_rb2, ffmpeg_preset_rb3
 
-    GenerateVideo = generate_video.get()
-    project_config["GenerateVideo"] = GenerateVideo
-    video_fps_dropdown.config(state=NORMAL if GenerateVideo else DISABLED)
-    video_fps_label.config(state=NORMAL if GenerateVideo else DISABLED)
-    video_filename_name.config(state=NORMAL if GenerateVideo else DISABLED)
-    ffmpeg_preset_rb1.config(state=NORMAL if GenerateVideo else DISABLED)
-    ffmpeg_preset_rb2.config(state=NORMAL if GenerateVideo else DISABLED)
-    ffmpeg_preset_rb3.config(state=NORMAL if GenerateVideo else DISABLED)
+    project_config["GenerateVideo"] = generate_video.get()
+    video_fps_dropdown.config(state=NORMAL if generate_video.get() else DISABLED)
+    video_fps_label.config(state=NORMAL if generate_video.get() else DISABLED)
+    video_filename_name.config(state=NORMAL if generate_video.get() else DISABLED)
+    ffmpeg_preset_rb1.config(state=NORMAL if generate_video.get() else DISABLED)
+    ffmpeg_preset_rb2.config(state=NORMAL if generate_video.get() else DISABLED)
+    ffmpeg_preset_rb3.config(state=NORMAL if generate_video.get() else DISABLED)
 
 
 def set_fps(selected):
@@ -749,27 +728,27 @@ def is_ffmpeg_installed():
 
 
 def valid_generated_frame_range():
-    global StartFrame, FramesToEncode, FirstAbsoluteFrame
+    global StartFrame, frames_to_encode, first_absolute_frame
 
     file_count = 0
     generated_frame_list = list(glob(os.path.join(
         TargetDir, FrameCheckFilenameOutputPattern)))
-    for i in range(FirstAbsoluteFrame + StartFrame,
-                   FirstAbsoluteFrame + StartFrame + FramesToEncode):
+    for i in range(first_absolute_frame + StartFrame,
+                   first_absolute_frame + StartFrame + frames_to_encode):
         file_to_check = os.path.join(TargetDir,
                                      FrameFilenameOutputPattern % i)
         if file_to_check in generated_frame_list:
             file_count += 1
     logging.debug("Checking frame range %i-%i: %i files found",
-                  FirstAbsoluteFrame + StartFrame,
-                  FirstAbsoluteFrame + StartFrame + FramesToEncode, file_count)
+                  first_absolute_frame + StartFrame,
+                  first_absolute_frame + StartFrame + frames_to_encode, file_count)
 
-    return file_count == FramesToEncode
+    return file_count == frames_to_encode
 
 
 def start_convert():
     global ConvertLoopExitRequested, ConvertLoopRunning
-    global GenerateVideo
+    global generate_video
     global Exit_btn
     global video_writer
     global pipe_ffmpeg
@@ -777,25 +756,25 @@ def start_convert():
     global SourceDirFileList
     global TargetVideoFilename
     global CurrentFrame, StartFrame
-    global StartFromCurrentFrame
-    global FramesToEncode
+    global start_from_current_frame
+    global frames_to_encode
 
     if ConvertLoopRunning:
         ConvertLoopExitRequested = True
     else:
-        if not StartFromCurrentFrame:
+        if not start_from_current_frame.get():
             CurrentFrame = 0
             project_config["CurrentFrame"] = CurrentFrame
         StartFrame = CurrentFrame
-        # Centralize 'FramesToEncode' update here
+        # Centralize 'frames_to_encode' update here
         if frames_to_encode_spinbox.get() == 'All':
-            FramesToEncode = len(SourceDirFileList) - StartFrame
+            frames_to_encode = len(SourceDirFileList) - StartFrame
         else:
-            FramesToEncode = int(frames_to_encode_spinbox.get())
-            if StartFrame + FramesToEncode >= len(SourceDirFileList):
-                FramesToEncode = len(SourceDirFileList) - StartFrame
-        project_config["FramesToEncode"] = FramesToEncode
-        if FramesToEncode == 0:
+            frames_to_encode = int(frames_to_encode_spinbox.get())
+            if StartFrame + frames_to_encode >= len(SourceDirFileList):
+                frames_to_encode = len(SourceDirFileList) - StartFrame
+        project_config["frames_to_encode"] = frames_to_encode
+        if frames_to_encode == 0:
             tk.messagebox.showwarning(
                 "No frames match range",
                 "No frames to encode.\r\n"
@@ -808,7 +787,7 @@ def start_convert():
         button_status_change_except(Go_btn, DISABLED)
         win.update()
 
-        if GenerateVideo:
+        if generate_video.get():
             TargetVideoFilename = video_filename_name.get()
             name, ext = os.path.splitext(TargetVideoFilename)
             if TargetVideoFilename == "":   # Assign default if no filename
@@ -826,7 +805,7 @@ def start_convert():
                              "folder. Overwrite?")
                 if not tk.messagebox.askyesno("Error!", error_msg):
                     return
-        if GenerateVideo and not VideoEncodingDoNotWarnAgain:
+        if generate_video.get() and not video_encoding_do_not_warn_again.get():
             tk.messagebox.showwarning(
                 "Video encoding warning",
                 "\r\nVideo encoding progress is NOT displayed in the user "
@@ -860,7 +839,7 @@ def generation_exit():
 def frame_generation_loop():
     global s8_template
     global draw_capture_label
-    global PerformStabilization, PerformCropping
+    global perform_stabilization, perform_cropping
     global ConvertLoopExitRequested
     global save_bg, save_fg
     global Go_btn
@@ -870,13 +849,13 @@ def frame_generation_loop():
     global video_writer
     global IsWindows
     global TargetVideoFilename
-    global CurrentFrame, FirstAbsoluteFrame
-    global StartFrame, FramesToEncode
+    global CurrentFrame, first_absolute_frame
+    global StartFrame, frames_to_encode
     global stop_event, stop_event_lock
     global FrameFilenameOutputPattern
 
-    if CurrentFrame >= StartFrame + FramesToEncode:
-        if GenerateVideo:
+    if CurrentFrame >= StartFrame + frames_to_encode:
+        if generate_video.get():
             win.after(1, video_generation_phase)
         else:
             generation_exit()
@@ -892,9 +871,9 @@ def frame_generation_loop():
     # read image
     img = cv2.imread(file, cv2.IMREAD_UNCHANGED)
 
-    if PerformStabilization:
+    if perform_stabilization.get():
         img = stabilize_image(img, StabilizeTopLeft, StabilizeBottomRight)
-    if PerformCropping:
+    if perform_cropping.get():
         img = crop_image(img, CropTopLeft, CropBottomRight)
 
     display_image(img)
@@ -907,7 +886,7 @@ def frame_generation_loop():
         target_file = os.path.join(TargetDir, os.path.basename(file))
         cv2.imwrite(target_file, img)
 
-    frame_slider.set(CurrentFrame + FirstAbsoluteFrame)
+    frame_slider.set(CurrentFrame + first_absolute_frame)
 
     CurrentFrame += 1
     project_config["CurrentFrame"] = CurrentFrame
@@ -918,7 +897,7 @@ def frame_generation_loop():
 def video_generation_phase():
     global s8_template
     global draw_capture_label
-    global PerformStabilization
+    global perform_stabilization
     global ConvertLoopExitRequested
     global save_bg, save_fg
     global Go_btn
@@ -935,10 +914,10 @@ def video_generation_phase():
     global ffmpeg_out, ffmpeg_process
     global stop_event, stop_event_lock
     global FrameFilenameOutputPattern
-    global FirstAbsoluteFrame, FramesToEncode
+    global first_absolute_frame, frames_to_encode
 
     # Check for special cases first
-    if FramesToEncode == 0:
+    if frames_to_encode == 0:
         tk.messagebox.showwarning(
             "No frames match range to generate video",
             "Video cannot be generated.\r\n"
@@ -957,7 +936,7 @@ def video_generation_phase():
         Go_btn.config(state=DISABLED)
         logging.debug(
             "First filename in list: %s, extracted number: %s",
-            os.path.basename(SourceDirFileList[0]), FirstAbsoluteFrame)
+            os.path.basename(SourceDirFileList[0]), first_absolute_frame)
         stop_event = threading.Event()
         stop_event_lock = threading.Lock()
 
@@ -972,17 +951,18 @@ def video_generation_phase():
         if IsWindows:
             extra_input_options = ""
             extra_output_options = ""
-            if FramesToEncode > 0:
-                extra_output_options += (' -frames:v' + str(FramesToEncode))
+            if frames_to_encode > 0:
+                extra_output_options += (' -frames:v' + str(frames_to_encode))
             cmd_ffmpeg = (FfmpegBinName
                           + ' -y'
-                          + ' -f image2'
-                          + ' -start_number' + str(StartFrame +
-                                                 FirstAbsoluteFrame)
-                          + ' -framerate' + str(VideoFps)
+                          + '-f image2'
+                          + '-start_number ' + str(StartFrame +
+                                                   first_absolute_frame)
+                          + ' -framerate ' + str(VideoFps)
                           + extra_input_options
-                          + ' -i "' + os.path.join(TargetDir,
-                                                   FrameFilenameOutputPattern)
+                          + ' -i "'
+                          + os.path.join(TargetDir,
+                                         FrameFilenameOutputPattern)
                           + '"'
                           + extra_output_options
                           + ' -an'
@@ -1000,8 +980,8 @@ def video_generation_phase():
         else:
             extra_input_options = []
             extra_output_options = []
-            if FramesToEncode > 0:
-                extra_output_options += ['-frames:v', str(FramesToEncode)]
+            if frames_to_encode > 0:
+                extra_output_options += ['-frames:v', str(frames_to_encode)]
             cmd_ffmpeg = [FfmpegBinName,
                           '-y',
                           '-loglevel', 'error',
@@ -1009,7 +989,7 @@ def video_generation_phase():
                           '-flush_packets', '1',
                           '-f', 'image2',
                           '-start_number', str(StartFrame +
-                                               FirstAbsoluteFrame),
+                                               first_absolute_frame),
                           '-framerate', str(VideoFps),
                           '-i',
                           os.path.join(TargetDir,
@@ -1054,17 +1034,17 @@ def get_current_dir_file_list():
     global SourceDir
     global SourceDirFileList
     global FrameInputFilenamePattern
-    global FirstAbsoluteFrame
+    global first_absolute_frame
     global frame_slider
 
     SourceDirFileList = sorted(list(glob(os.path.join(
         SourceDir,
         FrameInputFilenamePattern))))
-    FirstAbsoluteFrame = int(
+    first_absolute_frame = int(
         ''.join(list(filter(str.isdigit,
                             os.path.basename(SourceDirFileList[0])))))
-    LastAbsoluteFrame = FirstAbsoluteFrame + len(SourceDirFileList)-1
-    frame_slider.config(from_=FirstAbsoluteFrame, to=LastAbsoluteFrame)
+    last_absolute_frame = first_absolute_frame + len(SourceDirFileList)-1
+    frame_slider.config(from_=first_absolute_frame, to=last_absolute_frame)
 
 
 def init_display():
@@ -1072,6 +1052,7 @@ def init_display():
     global CurrentFrame
     global SourceDirFileList
     global StabilizeTopLeft, StabilizeBottomRight
+    global extended_stabilization
 
     # Get first file
     savedir = os.getcwd()
@@ -1097,7 +1078,7 @@ def init_display():
     # Default values are needed before the stabilization search area
     # has been defined, therefore we initialized them here
     if StabilizeTopLeft == (0, 0) and StabilizeBottomRight == (0, 0):
-        if (ExtendedStabilization):
+        if (extended_stabilization.get()):
             StabilizeTopLeft = (0, 0)
             StabilizeBottomRight = (round(width * 0.25), height)
         else:
@@ -1107,15 +1088,15 @@ def init_display():
 
 def scale_display_update():
     global win
-    global FrameScaleRefreshDone, FrameScaleRefreshPending
+    global frame_scale_refresh_done, frame_scale_refresh_pending
     global CurrentFrame
 
     file = SourceDirFileList[CurrentFrame]
     img = cv2.imread(file, cv2.IMREAD_UNCHANGED)
     display_image(img)
-    FrameScaleRefreshDone = True
-    if FrameScaleRefreshPending:
-        FrameScaleRefreshPending = False
+    frame_scale_refresh_done = True
+    if frame_scale_refresh_pending:
+        frame_scale_refresh_pending = False
         win.after(100, scale_display_update)
 
 
@@ -1124,19 +1105,19 @@ def select_scale_frame(selected_frame):
     global SourceDir
     global CurrentFrame
     global SourceDirFileList
-    global FirstAbsoluteFrame
-    global FrameScaleRefreshDone, FrameScaleRefreshPending
+    global first_absolute_frame
+    global frame_scale_refresh_done, frame_scale_refresh_pending
 
     if not ConvertLoopRunning:  # Do not refresh during conversion loop
         frame_slider.focus()
-        CurrentFrame = int(selected_frame) - FirstAbsoluteFrame
+        CurrentFrame = int(selected_frame) - first_absolute_frame
         project_config["CurrentFrame"] = CurrentFrame
-        if FrameScaleRefreshDone:
-            FrameScaleRefreshDone = False
-            FrameScaleRefreshPending = False
+        if frame_scale_refresh_done:
+            frame_scale_refresh_done = False
+            frame_scale_refresh_pending = False
             win.after(5, scale_display_update)
         else:
-            FrameScaleRefreshPending = True
+            frame_scale_refresh_pending = True
 
 
 def save_general_config():
@@ -1153,7 +1134,7 @@ def load_general_config():
     global SourceDir, TargetDir
     global folder_frame_source_dir, folder_frame_target_dir
     global PatternFilename, pattern_filename
-    global VideoEncodingDoNotWarnAgain
+    global video_encoding_do_not_warn_again
 
     # Check if persisted data file exist: If it does, load it
     if os.path.isfile(general_config_filename):
@@ -1182,7 +1163,7 @@ def load_general_config():
     if 'GeneralConfigDate' in general_config:
         GeneralConfigDate = general_config["GeneralConfigDate"]
     if 'VideoEncodingDoNotWarnAgain' in general_config:
-        VideoEncodingDoNotWarnAgain = general_config["VideoEncodingDoNotWarnAgain"]
+        video_encoding_do_not_warn_again.set(general_config["VideoEncodingDoNotWarnAgain"])
 
 
 def save_project_config():
@@ -1191,7 +1172,7 @@ def save_project_config():
     global ffmpeg_preset
     
     # Write project data upon exit
-    project_config["FramesToEncode"] = frames_to_encode_spinbox.get()
+    project_config["frames_to_encode"] = frames_to_encode_spinbox.get()
     project_config["skip_frame_regeneration"] = skip_frame_regeneration.get()
     project_config["ffmpeg_preset"] = ffmpeg_preset.get()
     project_config["ProjectConfigDate"] = str(datetime.now())
@@ -1206,10 +1187,10 @@ def load_project_config():
     global frame_slider
     global VideoFps, video_fps_dropdown_selected
     global frame_input_filename_pattern, FrameInputFilenamePattern
-    global from_current_frame, StartFromCurrentFrame
+    global start_from_current_frame
     global skip_frame_regeneration
-    global GenerateVideo
-    global CropTopLeft, CropBottomRight, PerformCropping
+    global generate_video
+    global CropTopLeft, CropBottomRight, perform_cropping
 
     project_config_filename = os.path.join(SourceDir, project_config_basename)
     # Check if persisted project data file exist: If it does, load it
@@ -1225,26 +1206,22 @@ def load_project_config():
             ProjectConfigDate = project_config["ProjectConfigDate"]
         if 'CurrentFrame' in project_config:
             CurrentFrame = project_config["CurrentFrame"]
-            frame_slider.set(CurrentFrame + FirstAbsoluteFrame)
+            frame_slider.set(CurrentFrame + first_absolute_frame)
         if 'StartFromCurrentFrame' in project_config:
-            StartFromCurrentFrame = project_config["StartFromCurrentFrame"]
-            from_current_frame.set(StartFromCurrentFrame)
-        if 'FramesToEncode' in project_config:
-            FramesToEncode = project_config["FramesToEncode"]
-            #frames_to_encode_spinbox.set(FramesToEncode)
-            frames_to_encode.set(FramesToEncode)
+            start_from_current_frame.set(project_config["StartFromCurrentFrame"])
+        if 'frames_to_encode' in project_config:
+            frames_to_encode = project_config["frames_to_encode"]
+            #frames_to_encode_spinbox.set(frames_to_encode)
+            frames_to_encode_str.set(frames_to_encode)
         if 'ExtendedStabilization' in project_config:
-            ExtendedStabilization = project_config["ExtendedStabilization"]
-            extended_stabilization.set(ExtendedStabilization)
+            extended_stabilization.set(project_config["ExtendedStabilization"])
         if 'PerformCropping' in project_config:
-            PerformCropping = project_config["PerformCropping"]
-            perform_cropping.set(PerformCropping)
+            perform_cropping.set(project_config["PerformCropping"])
         if 'CropRectangle' in project_config:
             CropBottomRight = tuple(project_config["CropRectangle"][1])
             CropTopLeft = tuple(project_config["CropRectangle"][0])
         if 'GenerateVideo' in project_config:
-            GenerateVideo = project_config["GenerateVideo"]
-            generate_video.set(GenerateVideo)
+            generate_video.set(project_config["GenerateVideo"])
         if 'skip_frame_regeneration' in project_config:
             skip_frame_regeneration.set(project_config["skip_frame_regeneration"])
         if 'VideoFps' in project_config:
@@ -1267,19 +1244,15 @@ def load_project_config():
                 display_pattern(PatternFilename)
     else:   # Project config file does not exists. Set defaults
         CurrentFrame = 0
-        frame_slider.set(CurrentFrame + FirstAbsoluteFrame)
-        StartFromCurrentFrame = False
-        from_current_frame.set(StartFromCurrentFrame)
-        FramesToEncode = 0
-        frames_to_encode.set(FramesToEncode)
-        ExtendedStabilization = False
-        extended_stabilization.set(ExtendedStabilization)
-        PerformCropping = False
-        perform_cropping.set(PerformCropping)
+        frame_slider.set(CurrentFrame + first_absolute_frame)
+        start_from_current_frame.set(False)
+        frames_to_encode = 0
+        frames_to_encode_str.set(frames_to_encode)
+        extended_stabilization.set(False)
+        perform_cropping.set(False)
         CropBottomRight = (0, 0)
         CropTopLeft = (0, 0)
-        GenerateVideo = False
-        generate_video.set(GenerateVideo)
+        generate_video.set(False)
         skip_frame_regeneration.set(False)
         VideoFps = 18
         video_fps_dropdown_selected.set(VideoFps)
@@ -1380,13 +1353,13 @@ def build_ui():
     global win
     global SourceDir, TargetDir
     global folder_frame_source_dir, folder_frame_target_dir
-    global PerformStabilization, perform_stabilization
-    global PerformCropping, perform_cropping, cropping_btn
-    global GenerateVideo, generate_video
-    global from_current_frame, StartFromCurrentFrame
-    global frames_to_encode_spinbox, frames_to_encode, FramesToEncode
+    global perform_cropping, cropping_btn
+    global generate_video
+    global start_from_current_frame
+    global frames_to_encode_spinbox, frames_to_encode_str, frames_to_encode
     global save_bg, save_fg
     global source_folder_btn, target_folder_btn
+    global perform_stabilization
     global perform_stabilization_checkbox
     global perform_cropping_checkbox, Crop_btn
     global Go_btn
@@ -1418,9 +1391,9 @@ def build_ui():
                                width=26, height=8)
     picture_frame.pack(side=LEFT, padx=2, pady=2)
 
-    FrameSelected = IntVar()
+    frame_selected = IntVar()
     frame_slider = Scale(picture_frame, orient=HORIZONTAL, from_=0, to=0,
-                         variable=FrameSelected, command=select_scale_frame,
+                         variable=frame_selected, command=select_scale_frame,
                          font=("Arial", 16))
     frame_slider.pack(side=BOTTOM)
 
@@ -1485,7 +1458,7 @@ def build_ui():
     frame_filename_pattern_btn = Button(
         frame_filename_pattern_frame,
         text='Set', width=2, height=1,
-        command=set_frame_pattern_filename_folder,
+        command=set_frame_input_filename_pattern,
         activebackground='green',
         activeforeground='white',
         wraplength=80, font=("Arial", 8))
@@ -1499,12 +1472,12 @@ def build_ui():
     postprocessing_row = 0
 
     # Check box to select start from current frame
-    from_current_frame = tk.BooleanVar(value=StartFromCurrentFrame)
-    from_current_frame_checkbox = tk.Checkbutton(
+    start_from_current_frame = tk.BooleanVar(value=False)
+    start_from_current_frame_checkbox = tk.Checkbutton(
         postprocessing_frame, text='Start from current frame',
-        variable=from_current_frame, onvalue=True, offvalue=False,
-        command=from_current_frame_selection, width=20)
-    from_current_frame_checkbox.grid(row=postprocessing_row, column=0,
+        variable=start_from_current_frame, onvalue=True, offvalue=False,
+        command=start_from_current_frame_selection, width=20)
+    start_from_current_frame_checkbox.grid(row=postprocessing_row, column=0,
                                      columnspan=2, sticky=W)
     postprocessing_row += 1
 
@@ -1514,19 +1487,19 @@ def build_ui():
                                       width=25)
     frames_to_encode_label.grid(row=postprocessing_row, column=0,
                                 columnspan=2, sticky=W)
-    frames_to_encode = tk.StringVar(value=str(FramesToEncode))
+    frames_to_encode_str = tk.StringVar(value=str(frames_to_encode))
     frames_to_encode_selection_aux = postprocessing_frame.register(
         frames_to_encode_selection)
     frames_to_encode_spinbox = tk.Spinbox(
         postprocessing_frame,
         command=(frames_to_encode_selection_aux, '%d'), width=8,
-        textvariable=frames_to_encode, from_=0, to=50000)
+        textvariable=frames_to_encode_str, from_=0, to=50000)
     frames_to_encode_spinbox.grid(row=postprocessing_row, column=2, sticky=W)
     frames_to_encode_selection('down')
     postprocessing_row += 1
 
     # Checkbox to select extended hole search area (for films with bad synchro)
-    extended_stabilization = tk.BooleanVar(value=ExtendedStabilization)
+    extended_stabilization = tk.BooleanVar(value=False)
     extended_stabilization_checkbox = tk.Checkbutton(
         postprocessing_frame,
         text='Extended stabilization (bad sync films)',
@@ -1538,7 +1511,7 @@ def build_ui():
     postprocessing_row += 1
 
     # Check box to do cropping or not
-    perform_cropping = tk.BooleanVar(value=PerformCropping)
+    perform_cropping = tk.BooleanVar(value=False)
     perform_cropping_checkbox = tk.Checkbutton(
         postprocessing_frame, text='Crop', variable=perform_cropping,
         onvalue=True, offvalue=False, command=perform_cropping_selection,
@@ -1553,7 +1526,7 @@ def build_ui():
     postprocessing_row += 1
 
     # Check box to generate video or not
-    generate_video = tk.BooleanVar(value=GenerateVideo)
+    generate_video = tk.BooleanVar(value=False)
     generate_video_checkbox = tk.Checkbutton(postprocessing_frame,
                                              text='Video',
                                              variable=generate_video,
@@ -1562,7 +1535,7 @@ def build_ui():
                                              width=5)
     generate_video_checkbox.grid(row=postprocessing_row, column=0, sticky=W)
     generate_video_checkbox.config(state=NORMAL if ffmpeg_installed and
-                                   PerformCropping else DISABLED)
+                                   perform_cropping.get() else DISABLED)
     # Check box to skip frame regeneration
     skip_frame_regeneration = tk.BooleanVar(value=False)
     skip_frame_regeneration_cb = tk.Checkbutton(
@@ -1652,7 +1625,7 @@ def build_ui():
                          target_folder_btn,
                          frame_input_filename_pattern,
                          frame_filename_pattern_btn,
-                         from_current_frame_checkbox,
+                         start_from_current_frame_checkbox,
                          frames_to_encode_spinbox,
                          extended_stabilization_checkbox,
                          perform_cropping_checkbox,
@@ -1693,7 +1666,6 @@ def build_ui():
         pattern_filename_btn.grid(row=0, column=2, sticky=W)
 
         # Check box to do stabilization or not
-        perform_stabilization = tk.BooleanVar(value=PerformStabilization)
         perform_stabilization_checkbox = tk.Checkbutton(
             stabilize_frame, text='Stabilize', variable=perform_stabilization,
             onvalue=True, offvalue=False, width=7, font=("Arial", 7),
@@ -1722,12 +1694,13 @@ def build_ui():
 def main(argv):
     global LogLevel, LoggingMode
     global s8_template
-    global VideoEncodingDoNotWarnAgain
+    global video_encoding_do_not_warn_again
     global ExpertMode
     global FfmpegBinName
     global IsWindows, IsLinux
     global PatternFilename
     global project_config_filename, project_config_basename
+    global video_encoding_do_not_warn_again, perform_stabilization
 
     LoggingMode = "warning"
 
@@ -1779,6 +1752,12 @@ def main(argv):
 
     build_ui()
 
+    # Init some variables here
+    # video_encoding_do_not_warn_again is required by config read
+    # perform_stabilization was defined only in expert mode
+    video_encoding_do_not_warn_again = tk.BooleanVar(value=False)
+    perform_stabilization = tk.BooleanVar(value=True)
+
     load_general_config()
 
     if SourceDir is not None:
@@ -1788,7 +1767,7 @@ def main(argv):
     load_project_config()
     
     # Display video encoding warning if not previously declined
-    if not VideoEncodingDoNotWarnAgain:
+    if not video_encoding_do_not_warn_again.get():
         video_encoding_warning()
     # Disable a few items that shoul dbe not operational withous source folder
     if len(SourceDir) == 0:
