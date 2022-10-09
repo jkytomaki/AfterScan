@@ -1780,7 +1780,7 @@ def main(argv):
     build_ui()
 
     load_general_config()
-    print(datetime.now())
+
     if SourceDir is not None:
         project_config_filename = os.path.join(SourceDir,
                                                project_config_basename)
