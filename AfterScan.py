@@ -1308,11 +1308,11 @@ def afterscan_postprod_init():
     screen_height = win.winfo_screenheight()
     # Set dimensions of UI elements adapted to screen size
     if screen_height >= 1080:
-        preview_factor = 0.5
+        preview_factor = 0.75
         PreviewWidth = 700
         PreviewHeight = 525
     else:
-        preview_factor = 0.25
+        preview_factor = 0.50
         PreviewWidth = 560
         PreviewHeight = 420
     app_width = PreviewWidth + 320 + 30
