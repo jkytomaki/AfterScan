@@ -976,14 +976,13 @@ def video_generation_phase():
                 extra_output_options += (' -frames:v' + str(FramesToEncode))
             cmd_ffmpeg = (FfmpegBinName
                           + ' -y'
-                          + '-f image2'
-                          + '-start_number ' + str(StartFrame +
-                                                   FirstAbsoluteFrame)
-                          + ' -framerate ' + str(VideoFps)
+                          + ' -f image2'
+                          + ' -start_number' + str(StartFrame +
+                                                 FirstAbsoluteFrame)
+                          + ' -framerate' + str(VideoFps)
                           + extra_input_options
-                          + ' -i "'
-                          + os.path.join(TargetDir,
-                                         FrameFilenameOutputPattern)
+                          + ' -i "' + os.path.join(TargetDir,
+                                                   FrameFilenameOutputPattern)
                           + '"'
                           + extra_output_options
                           + ' -an'
