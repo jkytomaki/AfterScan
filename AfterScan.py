@@ -1303,18 +1303,18 @@ def afterscan_postprod_init():
 
     win = Tk()  # Create main window, store it in 'win'
 
-    # Get screen size
-    screen_width = win.winfo_screenwidth()
-    screen_height = win.winfo_screenheight()
+    # Get screen size - maxsize gives the usable screen size
+    screen_width, screen_height = win.maxsize()
     # Set dimensions of UI elements adapted to screen size
-    if screen_height >= 1080:
-        preview_factor = 0.75
+    if screen_height >= 1000:
         PreviewWidth = 700
         PreviewHeight = 525
     else:
-        preview_factor = 0.50
         PreviewWidth = 560
         PreviewHeight = 420
+    # Replace hardcoded preview_factor, make proportional to RPi image height
+    # Deduct 80 pixels (aproximately) for taskbar + window title
+    preview_factor = (screen_height - 80) / 1520
     app_width = PreviewWidth + 320 + 30
     app_height = PreviewHeight + 25
     if ExpertMode:
