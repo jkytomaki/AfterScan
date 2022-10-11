@@ -707,19 +707,26 @@ def display_image(img):
     global PreviewWidth, PreviewHeight
     global draw_capture_label, preview_border_frame
 
-    height = img.shape[0]
-    width = img.shape[1]
-    # Calculate padding to display preview centered in preview label
-    padding_y = round((PreviewHeight - (height * (PreviewWidth/width))) / 2)
+    # Calculate display ratio and padding to display preview centered
+    image_height = img.shape[0]
+    image_width = img.shape[1]
+    if (abs(PreviewWidth - image_width) > abs(PreviewHeight - image_height)):
+        ratio = PreviewWidth/image_width
+        padding_y = max(0,round((PreviewHeight - (image_height * ratio)) / 2))
+        padding_x = 0
+    else:
+        ratio = PreviewHeight/image_height
+        padding_x = max(0,round((PreviewWidth - (image_width * ratio)) / 2))
+        padding_y = 0
     
-    img = resize_image(img, round((PreviewWidth/width)*100))
+    img = resize_image(img, round(ratio*100))
     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     DisplayableImage = ImageTk.PhotoImage(Image.fromarray(img))
 
     # The Label widget can be used to display a text or image on the screen.
     draw_capture_label.config(image=DisplayableImage)
     draw_capture_label.image = DisplayableImage
-    draw_capture_label.pack(ipady=padding_y)
+    draw_capture_label.pack(ipadx=padding_x, ipady=padding_y)
     win.update()
 
 
