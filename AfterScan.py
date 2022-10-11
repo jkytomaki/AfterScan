@@ -19,7 +19,7 @@ __author__ = 'Juan Remirez de Esparza'
 __copyright__ = "Copyright 2022, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
-__version__ = "1.0"
+__version__ = "1.2"
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
 __status__ = "Development"
@@ -307,26 +307,45 @@ def button_status_change_except(except_button, button_status):
     if not CropAreaDefined:
         perform_cropping_checkbox.config(state=DISABLED)
 
+
 def widget_state_refresh():
     global perform_cropping_checkbox, perform_cropping, CropAreaDefined
     global CropTopLeft, CropBottomRight
     global ffmpeg_installed, perform_cropping
     global generate_video, generate_video_checkbox
+    global fill_borders, fill_borders_checkbox
+    global fill_borders_thickness_slider, fill_borders_mode_label
+    global fill_borders_mode_label_dropdown
     global video_fps_dropdown, video_fps_label, video_filename_name
     global ffmpeg_preset_rb1, ffmpeg_preset_rb2, ffmpeg_preset_rb3
 
-    if CropTopLeft != (0, 0) and CropBottomRight!= (0, 0):
+    if CropTopLeft != (0, 0) and CropBottomRight != (0, 0):
         CropAreaDefined = True
-    perform_cropping_checkbox.config(state=NORMAL if CropAreaDefined
-                                     else DISABLED)
-    generate_video_checkbox.config(state=NORMAL if ffmpeg_installed and
-                                   perform_cropping.get() else DISABLED)
-    video_fps_dropdown.config(state=NORMAL if generate_video.get() else DISABLED)
-    video_fps_label.config(state=NORMAL if generate_video.get() else DISABLED)
-    video_filename_name.config(state=NORMAL if generate_video.get() else DISABLED)
-    ffmpeg_preset_rb1.config(state=NORMAL if generate_video.get() else DISABLED)
-    ffmpeg_preset_rb2.config(state=NORMAL if generate_video.get() else DISABLED)
-    ffmpeg_preset_rb3.config(state=NORMAL if generate_video.get() else DISABLED)
+    perform_cropping_checkbox.config(
+        state=NORMAL if CropAreaDefined else DISABLED)
+    generate_video_checkbox.config(
+        state=NORMAL if ffmpeg_installed and perform_cropping.get()
+        else DISABLED)
+    video_fps_dropdown.config(
+        state=NORMAL if generate_video.get() else DISABLED)
+    video_fps_label.config(
+        state=NORMAL if generate_video.get() else DISABLED)
+    video_filename_name.config(
+        state=NORMAL if generate_video.get() else DISABLED)
+    ffmpeg_preset_rb1.config(
+        state=NORMAL if generate_video.get() else DISABLED)
+    ffmpeg_preset_rb2.config(
+        state=NORMAL if generate_video.get() else DISABLED)
+    ffmpeg_preset_rb3.config(
+        state=NORMAL if generate_video.get() else DISABLED)
+    fill_borders_checkbox.config(
+        state=NORMAL if generate_video.get() else DISABLED)
+    fill_borders_thickness_slider.config(
+        state=NORMAL if generate_video.get() else DISABLED)
+    fill_borders_mode_label.config(
+        state=NORMAL if generate_video.get() else DISABLED)
+    fill_borders_mode_label_dropdown.config(
+        state=NORMAL if generate_video.get() else DISABLED)
 
 
 def match_template(template, img, thres):
@@ -350,7 +369,7 @@ def video_encoding_do_not_warn_again_selection():
     global warn_again_from_toplevel
 
     general_config["VideoEncodingDoNotWarnAgain"] = \
-    video_encoding_do_not_warn_again.get()
+        video_encoding_do_not_warn_again.get()
 
 
 def close_video_encoding_warning():
@@ -600,7 +619,7 @@ def set_source_folder():
     get_current_dir_file_list()  # first_absolute_frame is set here
     CurrentFrame = 0  # Default in case no config exist, overwritten it it does
     load_project_config()  # Needs SourceDir and first_absolute_frame defined
-    
+
     # Enable Start and Crop buttons, plus slider, once we have files to handle
     cropping_btn.config(state=NORMAL)
     frame_slider.config(state=NORMAL)
@@ -664,12 +683,32 @@ def start_from_current_frame_selection():
 
 def frames_to_encode_selection(updown):
     global frames_to_encode_spinbox, frames_to_encode_str
-    project_config["frames_to_encode"] = frames_to_encode_spinbox.get()
-    if project_config["frames_to_encode"] == '0':
+    project_config["FramesToEncode"] = frames_to_encode_spinbox.get()
+    if project_config["FramesToEncode"] == '0':
         if updown == 'up':
             frames_to_encode_str.set('1')
         else:
             frames_to_encode_str.set('All')
+
+
+def fill_borders_selection():
+    global fill_borders
+    project_config["FillBorders"] = fill_borders.get()
+
+
+def set_fill_borders_mode(selected):
+    global fill_borders_mode
+
+    fill_borders_mode.set(selected)
+    project_config["FillBordersMode"] = fill_borders_mode.get()
+
+
+def select_scale_fill_borders_thickness(selected_thickness):
+    global fill_borders_thickness
+
+    fill_borders_thickness_slider.focus()
+    fill_borders_thickness.set(selected_thickness)
+    project_config["FillBordersThinkness"] = fill_borders_thickness.get()
 
 
 def generate_video_selection():
@@ -678,12 +717,26 @@ def generate_video_selection():
     global ffmpeg_preset_rb1, ffmpeg_preset_rb2, ffmpeg_preset_rb3
 
     project_config["GenerateVideo"] = generate_video.get()
-    video_fps_dropdown.config(state=NORMAL if generate_video.get() else DISABLED)
-    video_fps_label.config(state=NORMAL if generate_video.get() else DISABLED)
-    video_filename_name.config(state=NORMAL if generate_video.get() else DISABLED)
-    ffmpeg_preset_rb1.config(state=NORMAL if generate_video.get() else DISABLED)
-    ffmpeg_preset_rb2.config(state=NORMAL if generate_video.get() else DISABLED)
-    ffmpeg_preset_rb3.config(state=NORMAL if generate_video.get() else DISABLED)
+    video_fps_dropdown.config(
+        state=NORMAL if generate_video.get() else DISABLED)
+    video_fps_label.config(
+        state=NORMAL if generate_video.get() else DISABLED)
+    video_filename_name.config(
+        state=NORMAL if generate_video.get() else DISABLED)
+    ffmpeg_preset_rb1.config(
+        state=NORMAL if generate_video.get() else DISABLED)
+    ffmpeg_preset_rb2.config(
+        state=NORMAL if generate_video.get() else DISABLED)
+    ffmpeg_preset_rb3.config(
+        state=NORMAL if generate_video.get() else DISABLED)
+    fill_borders_checkbox.config(
+        state=NORMAL if generate_video.get() else DISABLED)
+    fill_borders_thickness_slider.config(
+        state=NORMAL if generate_video.get() else DISABLED)
+    fill_borders_mode_label.config(
+        state=NORMAL if generate_video.get() else DISABLED)
+    fill_borders_mode_label_dropdown.config(
+        state=NORMAL if generate_video.get() else DISABLED)
 
 
 def set_fps(selected):
@@ -712,13 +765,13 @@ def display_image(img):
     image_width = img.shape[1]
     if (abs(PreviewWidth - image_width) > abs(PreviewHeight - image_height)):
         ratio = PreviewWidth/image_width
-        padding_y = max(0,round((PreviewHeight - (image_height * ratio)) / 2))
+        padding_y = max(0, round((PreviewHeight - (image_height * ratio)) / 2))
         padding_x = 0
     else:
         ratio = PreviewHeight/image_height
-        padding_x = max(0,round((PreviewWidth - (image_width * ratio)) / 2))
+        padding_x = max(0, round((PreviewWidth - (image_width * ratio)) / 2))
         padding_y = 0
-    
+
     img = resize_image(img, round(ratio*100))
     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     DisplayableImage = ImageTk.PhotoImage(Image.fromarray(img))
@@ -759,7 +812,8 @@ def valid_generated_frame_range():
             file_count += 1
     logging.debug("Checking frame range %i-%i: %i files found",
                   first_absolute_frame + StartFrame,
-                  first_absolute_frame + StartFrame + frames_to_encode, file_count)
+                  first_absolute_frame + StartFrame + frames_to_encode,
+                  file_count)
 
     return file_count == frames_to_encode
 
@@ -791,7 +845,7 @@ def start_convert():
             frames_to_encode = int(frames_to_encode_spinbox.get())
             if StartFrame + frames_to_encode >= len(SourceDirFileList):
                 frames_to_encode = len(SourceDirFileList) - StartFrame
-        project_config["frames_to_encode"] = frames_to_encode
+        project_config["FramesToEncode"] = str(frames_to_encode)
         if frames_to_encode == 0:
             tk.messagebox.showwarning(
                 "No frames match range",
@@ -969,6 +1023,16 @@ def video_generation_phase():
             extra_output_options = ""
             if frames_to_encode > 0:
                 extra_output_options += (' -frames:v' + str(frames_to_encode))
+            if fill_borders.get():
+                extra_output_options += [
+                     '-filter_complex',
+                     '[0:v] fillborders='
+                     'left=' + str(fill_borders_thickness.get()) + ':'
+                     'right=' + str(fill_borders_thickness.get()) + ':'
+                     'top=' + str(fill_borders_thickness.get()) + ':'
+                     'bottom=' + str(fill_borders_thickness.get()) + ':'
+                     'mode=' + fill_borders_mode.get() + ' [v]',
+                     '-map', '[v]']
             cmd_ffmpeg = (FfmpegBinName
                           + ' -y'
                           + '-f image2'
@@ -998,6 +1062,16 @@ def video_generation_phase():
             extra_output_options = []
             if frames_to_encode > 0:
                 extra_output_options += ['-frames:v', str(frames_to_encode)]
+            if fill_borders.get():
+                extra_output_options += [
+                     '-filter_complex',
+                     '[0:v] fillborders='
+                     'left=' + str(fill_borders_thickness.get()) + ':'
+                     'right=' + str(fill_borders_thickness.get()) + ':'
+                     'top=' + str(fill_borders_thickness.get()) + ':'
+                     'bottom=' + str(fill_borders_thickness.get()) + ':'
+                     'mode=' + fill_borders_mode.get() + ' [v]',
+                     '-map', '[v]']
             cmd_ffmpeg = [FfmpegBinName,
                           '-y',
                           '-loglevel', 'error',
@@ -1179,18 +1253,22 @@ def load_general_config():
     if 'GeneralConfigDate' in general_config:
         GeneralConfigDate = general_config["GeneralConfigDate"]
     if 'VideoEncodingDoNotWarnAgain' in general_config:
-        video_encoding_do_not_warn_again.set(general_config["VideoEncodingDoNotWarnAgain"])
+        video_encoding_do_not_warn_again.set(
+            general_config["VideoEncodingDoNotWarnAgain"])
 
 
 def save_project_config():
     global skip_frame_regeneration
     global frames_to_encode_spinbox
     global ffmpeg_preset
-    
+
     # Write project data upon exit
-    project_config["frames_to_encode"] = frames_to_encode_spinbox.get()
+    project_config["FramesToEncode"] = frames_to_encode_spinbox.get()
     project_config["skip_frame_regeneration"] = skip_frame_regeneration.get()
-    project_config["ffmpeg_preset"] = ffmpeg_preset.get()
+    project_config["FFmpegPreset"] = ffmpeg_preset.get()
+    project_config["FillBorders"] = fill_borders.get()
+    project_config["FillBordersThickness"] = fill_borders_thickness.get()
+    project_config["FillBordersMode"] = fill_borders_mode.get()
     project_config["ProjectConfigDate"] = str(datetime.now())
     with open(project_config_filename, 'w') as f:
         json.dump(project_config, f)
@@ -1214,78 +1292,103 @@ def load_project_config():
         persisted_data_file = open(project_config_filename)
         project_config = json.load(persisted_data_file)
         persisted_data_file.close()
+    else:   # No project config file. Set empty config to force defaults
+        project_config = {}
 
-        for item in project_config:
-            logging.info("%s=%s", item, str(project_config[item]))
+    for item in project_config:
+        logging.info("%s=%s", item, str(project_config[item]))
 
-        if 'ProjectConfigDate' in project_config:
-            ProjectConfigDate = project_config["ProjectConfigDate"]
-        if 'CurrentFrame' in project_config:
-            CurrentFrame = project_config["CurrentFrame"]
-            frame_slider.set(CurrentFrame + first_absolute_frame)
-        if 'StartFromCurrentFrame' in project_config:
-            start_from_current_frame.set(project_config["StartFromCurrentFrame"])
-        if 'frames_to_encode' in project_config:
-            frames_to_encode = project_config["frames_to_encode"]
-            #frames_to_encode_spinbox.set(frames_to_encode)
-            frames_to_encode_str.set(frames_to_encode)
-        if 'ExtendedStabilization' in project_config:
-            extended_stabilization.set(project_config["ExtendedStabilization"])
-        if 'PerformCropping' in project_config:
-            perform_cropping.set(project_config["PerformCropping"])
-        if 'CropRectangle' in project_config:
-            CropBottomRight = tuple(project_config["CropRectangle"][1])
-            CropTopLeft = tuple(project_config["CropRectangle"][0])
-        if 'GenerateVideo' in project_config:
-            generate_video.set(project_config["GenerateVideo"])
-        if 'skip_frame_regeneration' in project_config:
-            skip_frame_regeneration.set(project_config["skip_frame_regeneration"])
-        if 'VideoFps' in project_config:
-            VideoFps = eval(project_config["VideoFps"])
-            video_fps_dropdown_selected.set(VideoFps)
-        if 'FrameInputFilenamePattern' in project_config:
-            FrameInputFilenamePattern = project_config["FrameInputFilenamePattern"]
-            frame_input_filename_pattern
-            frame_input_filename_pattern.delete(0, 'end')
-            frame_input_filename_pattern.insert('end',
-                                                     FrameInputFilenamePattern)
-        if 'ffmpeg_preset' in project_config:
-            ffmpeg_preset.set(project_config["ffmpeg_preset"])
-            
-        if ExpertMode:
-            if 'PatternFilename' in project_config:
-                PatternFilename = project_config["PatternFilename"]
-                pattern_filename.delete(0, 'end')
-                pattern_filename.insert('end', PatternFilename)
-                display_pattern(PatternFilename)
-    else:   # Project config file does not exists. Set defaults
+    if 'ProjectConfigDate' in project_config:
+        ProjectConfigDate = project_config["ProjectConfigDate"]
+    if 'CurrentFrame' in project_config:
+        CurrentFrame = project_config["CurrentFrame"]
+        frame_slider.set(CurrentFrame + first_absolute_frame)
+    else:
         CurrentFrame = 0
         frame_slider.set(CurrentFrame + first_absolute_frame)
+    if 'StartFromCurrentFrame' in project_config:
+        start_from_current_frame.set(project_config["StartFromCurrentFrame"])
+    else:
         start_from_current_frame.set(False)
-        frames_to_encode = 0
+    if 'FramesToEncode' in project_config:
+        frames_to_encode = project_config["FramesToEncode"]
+        # frames_to_encode_spinbox.set(frames_to_encode)
         frames_to_encode_str.set(frames_to_encode)
+    else:
+        frames_to_encode = "All"
+        frames_to_encode_str.set(frames_to_encode)
+    if 'ExtendedStabilization' in project_config:
+        extended_stabilization.set(project_config["ExtendedStabilization"])
+    else:
         extended_stabilization.set(False)
+    if 'PerformCropping' in project_config:
+        perform_cropping.set(project_config["PerformCropping"])
+    else:
         perform_cropping.set(False)
+    if 'CropRectangle' in project_config:
+        CropBottomRight = tuple(project_config["CropRectangle"][1])
+        CropTopLeft = tuple(project_config["CropRectangle"][0])
+    else:
         CropBottomRight = (0, 0)
         CropTopLeft = (0, 0)
+    if 'GenerateVideo' in project_config:
+        generate_video.set(project_config["GenerateVideo"])
+    else:
         generate_video.set(False)
+    if 'skip_frame_regeneration' in project_config:
+        skip_frame_regeneration.set(project_config["skip_frame_regeneration"])
+    else:
         skip_frame_regeneration.set(False)
+    if 'VideoFps' in project_config:
+        VideoFps = eval(project_config["VideoFps"])
+        video_fps_dropdown_selected.set(VideoFps)
+    else:
         VideoFps = 18
         video_fps_dropdown_selected.set(VideoFps)
+    if 'FrameInputFilenamePattern' in project_config:
+        FrameInputFilenamePattern = project_config["FrameInputFilenamePattern"]
+        frame_input_filename_pattern
+        frame_input_filename_pattern.delete(0, 'end')
+        frame_input_filename_pattern.insert('end',
+                                            FrameInputFilenamePattern)
+    else:
         FrameInputFilenamePattern = "picture-*.jpg"
         frame_input_filename_pattern.delete(0, 'end')
         frame_input_filename_pattern.insert('end', FrameInputFilenamePattern)
-        if 'ffmpeg_preset' in project_config:
-            ffmpeg_preset.set("veryfast")
-            
-        if ExpertMode:
+    if 'FFmpegPreset' in project_config:
+        ffmpeg_preset.set(project_config["FFmpegPreset"])
+    else:
+        ffmpeg_preset.set("veryfast")
+
+    if 'FillBorders' in project_config:
+        fill_borders.set(project_config["FillBorders"])
+    else:
+        fill_borders.set(False)
+
+    if 'FillBordersThickness' in project_config:
+        fill_borders_thickness.set(project_config["FillBordersThickness"])
+    else:
+        fill_borders_thickness.set(5)
+
+    if 'FillBordersMode' in project_config:
+        fill_borders_mode.set(project_config["FillBordersMode"])
+    else:
+        fill_borders_mode.set('smear')
+
+    if ExpertMode:
+        if 'PatternFilename' in project_config:
+            PatternFilename = project_config["PatternFilename"]
+            pattern_filename.delete(0, 'end')
+            pattern_filename.insert('end', PatternFilename)
+            display_pattern(PatternFilename)
+        else:
             PatternFilename = "Pattern.S8.jpg"
             pattern_filename.delete(0, 'end')
             pattern_filename.insert('end', PatternFilename)
             display_pattern(PatternFilename)
 
     widget_state_refresh()
-    
+
     win.update()
 
 
@@ -1371,13 +1474,16 @@ def build_ui():
     global SourceDir, TargetDir
     global folder_frame_source_dir, folder_frame_target_dir
     global perform_cropping, cropping_btn
-    global generate_video
+    global generate_video, generate_video_checkbox
+    global fill_borders, fill_borders_checkbox
+    global fill_borders_thickness, fill_borders_thickness_slider
+    global fill_borders_thickness_slider, fill_borders_mode_label
+    global fill_borders_mode_label_dropdown, fill_borders_mode
     global start_from_current_frame
     global frames_to_encode_spinbox, frames_to_encode_str, frames_to_encode
     global save_bg, save_fg
     global source_folder_btn, target_folder_btn
-    global perform_stabilization
-    global perform_stabilization_checkbox
+    global perform_stabilization, perform_stabilization_checkbox
     global perform_cropping_checkbox, Crop_btn
     global Go_btn
     global Exit_btn
@@ -1389,7 +1495,6 @@ def build_ui():
     global pattern_filename
     global pattern_canvas
     global ExpertMode
-    global generate_video_checkbox
     global extended_stabilization, extended_stabilization_checkbox
     global frame_input_filename_pattern
     global FrameInputFilenamePattern
@@ -1467,8 +1572,9 @@ def build_ui():
                                          text='Frame input filename pattern:',
                                          font=("Arial", 8))
     frame_filename_pattern_label.pack(side=LEFT, anchor=W)
-    frame_input_filename_pattern = Entry(frame_filename_pattern_frame, width=16,
-                                        borderwidth=1, font=("Arial", 8))
+    frame_input_filename_pattern = Entry(frame_filename_pattern_frame,
+                                         width=16, borderwidth=1,
+                                         font=("Arial", 8))
     frame_input_filename_pattern.pack(side=LEFT, anchor=W)
     frame_input_filename_pattern.delete(0, 'end')
     frame_input_filename_pattern.insert('end', FrameInputFilenamePattern)
@@ -1495,7 +1601,7 @@ def build_ui():
         variable=start_from_current_frame, onvalue=True, offvalue=False,
         command=start_from_current_frame_selection, width=20)
     start_from_current_frame_checkbox.grid(row=postprocessing_row, column=0,
-                                     columnspan=2, sticky=W)
+                                           columnspan=2, sticky=W)
     postprocessing_row += 1
 
     # Spinbox to select number of frames to process
@@ -1542,41 +1648,48 @@ def build_ui():
     cropping_btn.grid(row=postprocessing_row, column=1, columnspan=2, sticky=W)
     postprocessing_row += 1
 
+    # Define video generating area
+    video_frame = LabelFrame(regular_frame,
+                             text='Video generation',
+                             width=50, height=8)
+    video_frame.pack(side=TOP, padx=2, pady=2, anchor=W)
+    video_row = 0
+
     # Check box to generate video or not
     generate_video = tk.BooleanVar(value=False)
-    generate_video_checkbox = tk.Checkbutton(postprocessing_frame,
+    generate_video_checkbox = tk.Checkbutton(video_frame,
                                              text='Video',
                                              variable=generate_video,
                                              onvalue=True, offvalue=False,
                                              command=generate_video_selection,
                                              width=5)
-    generate_video_checkbox.grid(row=postprocessing_row, column=0, sticky=W)
+    generate_video_checkbox.grid(row=video_row, column=0, sticky=W)
     generate_video_checkbox.config(state=NORMAL if ffmpeg_installed and
                                    perform_cropping.get() else DISABLED)
     # Check box to skip frame regeneration
     skip_frame_regeneration = tk.BooleanVar(value=False)
     skip_frame_regeneration_cb = tk.Checkbutton(
-        postprocessing_frame, text='Skip Frame regeneration',
+        video_frame, text='Skip Frame regeneration',
         variable=skip_frame_regeneration, onvalue=True, offvalue=False,
         width=20)
-    skip_frame_regeneration_cb.grid(row=postprocessing_row, column=1,
+    skip_frame_regeneration_cb.grid(row=video_row, column=1,
                                     columnspan=2, sticky=W)
     skip_frame_regeneration_cb.config(state=NORMAL if ffmpeg_installed
                                       else DISABLED)
-    postprocessing_row += 1
+    video_row += 1
 
     # Video filename
-    video_filename_label = Label(postprocessing_frame, text='Video filename:',
+    video_filename_label = Label(video_frame, text='Video filename:',
                                  font=("Arial", 8))
-    video_filename_label.grid(row=postprocessing_row, column=0, sticky=W)
-    video_filename_name = Entry(postprocessing_frame, width=32, borderwidth=1,
+    video_filename_label.grid(row=video_row, column=0, sticky=W)
+    video_filename_name = Entry(video_frame, width=32, borderwidth=1,
                                 font=("Arial", 8))
-    video_filename_name.grid(row=postprocessing_row, column=1, columnspan=2,
+    video_filename_name.grid(row=video_row, column=1, columnspan=2,
                              sticky=W)
     video_filename_name.delete(0, 'end')
     video_filename_name.insert('end', TargetVideoFilename)
     video_filename_name.config(state=DISABLED)
-    postprocessing_row += 1
+    video_row += 1
 
     # Drop down to select FPS
     # Dropdown menu options
@@ -1597,8 +1710,8 @@ def build_ui():
     video_fps_dropdown_selected.set("18")
 
     # Create FPS Dropdown menu
-    video_fps_frame = Frame(postprocessing_frame)
-    video_fps_frame.grid(row=postprocessing_row, column=0, sticky=W)
+    video_fps_frame = Frame(video_frame)
+    video_fps_frame.grid(row=video_row, column=0, sticky=W)
     video_fps_label = Label(video_fps_frame, text='FPS:')
     video_fps_label.pack(side=LEFT, anchor=W)
     video_fps_label.config(state=DISABLED)
@@ -1607,9 +1720,10 @@ def build_ui():
                                     command=set_fps)
     video_fps_dropdown.pack(side=LEFT, anchor=E)
     video_fps_dropdown.config(state=DISABLED)
+
     # Create FFmpeg preset options
-    ffmpeg_preset_frame = Frame(postprocessing_frame)
-    ffmpeg_preset_frame.grid(row=postprocessing_row, column=1, columnspan=2,
+    ffmpeg_preset_frame = Frame(video_frame)
+    ffmpeg_preset_frame.grid(row=video_row, column=1, columnspan=2,
                              sticky=W)
     ffmpeg_preset = StringVar()
     ffmpeg_preset_rb1 = Radiobutton(ffmpeg_preset_frame,
@@ -1627,10 +1741,60 @@ def build_ui():
     ffmpeg_preset_rb3.pack(side=TOP, anchor=W)
     ffmpeg_preset_rb3.config(state=DISABLED)
     ffmpeg_preset.set('medium')
-    postprocessing_row += 1
+    video_row += 1
 
-    postprocessing_bottom_frame = Frame(postprocessing_frame, width=30)
-    postprocessing_bottom_frame.grid(row=postprocessing_row, column=0)
+    # Check box - Fill borders
+    fill_borders = tk.BooleanVar(value=False)
+    fill_borders_checkbox = tk.Checkbutton(video_frame,
+                                           text='Fill borders',
+                                           variable=fill_borders,
+                                           onvalue=True, offvalue=False,
+                                           command=fill_borders_selection,
+                                           width=9)
+    fill_borders_checkbox.grid(row=video_row, column=0, columnspan=1, sticky=W)
+    fill_borders_checkbox.config(state=NORMAL if ffmpeg_installed and
+                                 perform_cropping.get() else DISABLED)
+    # Fill border thickness
+    fill_borders_thickness = IntVar(value=20)
+    fill_borders_thickness_slider = Scale(
+        video_frame, orient=HORIZONTAL, from_=5, to=50,
+        variable=fill_borders_thickness,
+        command=select_scale_fill_borders_thickness,
+        font=("Arial", 8), length=80)
+    fill_borders_thickness_slider.grid(row=video_row, column=1, sticky=W)
+    fill_borders_thickness_slider.config(state=DISABLED)
+    # Fill border mode
+    # Dropdown menu options
+    fill_borders_mode_list = [
+        "smear",
+        "mirror",
+        "fixed"
+    ]
+
+    # datatype of menu text
+    fill_borders_mode = StringVar()
+
+    # initial menu text
+    fill_borders_mode.set("smear")
+
+    # Create fill border mode Dropdown menu
+    fill_borders_mode_frame = Frame(video_frame)
+    fill_borders_mode_frame.grid(row=video_row, column=2, sticky=W)
+    fill_borders_mode_label = Label(fill_borders_mode_frame, text='Mode:')
+    fill_borders_mode_label.pack(side=LEFT, anchor=W)
+    fill_borders_mode_label.config(state=DISABLED)
+    fill_borders_mode_label_dropdown = OptionMenu(
+        fill_borders_mode_frame,
+        fill_borders_mode,
+        *fill_borders_mode_list,
+        command=set_fill_borders_mode)
+    fill_borders_mode_label_dropdown.pack(side=LEFT, anchor=E)
+    fill_borders_mode_label_dropdown.config(state=DISABLED)
+
+    video_row += 1
+
+    postprocessing_bottom_frame = Frame(video_frame, width=30)
+    postprocessing_bottom_frame.grid(row=video_row, column=0)
 
     # Set focus tab order
     AfterScan_widgets = [frame_slider,
@@ -1653,7 +1817,9 @@ def build_ui():
                          video_fps_dropdown,
                          ffmpeg_preset_rb1,
                          ffmpeg_preset_rb2,
-                         ffmpeg_preset_rb3]
+                         ffmpeg_preset_rb3,
+                         fill_borders_checkbox,
+                         fill_borders_thickness_slider]
     for aw in AfterScan_widgets:
         aw.lift()
     frame_slider.focus()
@@ -1782,7 +1948,7 @@ def main(argv):
                                                project_config_basename)
 
     load_project_config()
-    
+
     # Display video encoding warning if not previously declined
     if not video_encoding_do_not_warn_again.get():
         video_encoding_warning()
