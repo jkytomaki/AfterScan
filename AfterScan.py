@@ -250,8 +250,15 @@ def select_cropping_area():
     if select_rectangle_area():
         CropAreaDefined = True
         button_status_change_except(0, NORMAL)
+        # FFmpeg does not like odd dimensions
+        # Adjust (increasing BottomRight)in case of odd width/height
+        RectangleBottomRightList = list(RectangleBottomRight)
+        if (RectangleBottomRight[0] - RectangleTopLeft[0]) % 2 == 1:
+            RectangleBottomRightList[0] += 1
+        if (RectangleBottomRight[1] - RectangleTopLeft[1]) % 2 == 1:
+            RectangleBottomRightList[1] += 1
         CropTopLeft = RectangleTopLeft
-        CropBottomRight = RectangleBottomRight
+        CropBottomRight = tuple(RectangleBottomRightList)
         logging.debug("Crop area: (%i,%i) - (%i, %i)", CropTopLeft[0],
                       CropTopLeft[1], CropBottomRight[0], CropBottomRight[1])
     else:
