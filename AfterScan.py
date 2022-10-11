@@ -19,7 +19,7 @@ __author__ = 'Juan Remirez de Esparza'
 __copyright__ = "Copyright 2022, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
-__version__ = "0.9beta"
+__version__ = "1.0"
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
 __status__ = "Development"
@@ -302,7 +302,7 @@ def button_status_change_except(except_button, button_status):
         Exit_btn.config(state=button_status)
     if ExpertMode:
         if except_button != perform_stabilization_checkbox:
-            perform_stabilization_checkbox.config(button_status)
+            perform_stabilization_checkbox.config(state=button_status)
 
     if not CropAreaDefined:
         perform_cropping_checkbox.config(state=DISABLED)
@@ -704,10 +704,14 @@ def exit_app():  # Exit Application
 
 
 def display_image(img):
-    global PreviewWidth
+    global PreviewWidth, PreviewHeight
+    global draw_capture_label, preview_border_frame
 
+    height = img.shape[0]
     width = img.shape[1]
-
+    # Calculate padding to display preview centered in preview label
+    padding_y = round((PreviewHeight - (height * (PreviewWidth/width))) / 2)
+    
     img = resize_image(img, round((PreviewWidth/width)*100))
     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     DisplayableImage = ImageTk.PhotoImage(Image.fromarray(img))
@@ -715,7 +719,7 @@ def display_image(img):
     # The Label widget can be used to display a text or image on the screen.
     draw_capture_label.config(image=DisplayableImage)
     draw_capture_label.image = DisplayableImage
-    draw_capture_label.pack()
+    draw_capture_label.pack(ipady=padding_y)
     win.update()
 
 
@@ -845,7 +849,6 @@ def generation_exit():
 
 def frame_generation_loop():
     global s8_template
-    global draw_capture_label
     global perform_stabilization, perform_cropping
     global ConvertLoopExitRequested
     global save_bg, save_fg
@@ -903,7 +906,6 @@ def frame_generation_loop():
 
 def video_generation_phase():
     global s8_template
-    global draw_capture_label
     global perform_stabilization
     global ConvertLoopExitRequested
     global save_bg, save_fg
@@ -1280,7 +1282,7 @@ def load_project_config():
     win.update()
 
 
-def afterscan_postprod_init():
+def afterscan_init():
     global win
     global TopWinX
     global TopWinY
@@ -1290,6 +1292,7 @@ def afterscan_postprod_init():
     global draw_capture_label
     global PreviewWidth, PreviewHeight
     global preview_factor
+    global preview_border_frame
     global ExpertMode
 
     # Initialize logging
@@ -1327,7 +1330,7 @@ def afterscan_postprod_init():
     if ExpertMode:
         app_height += 75
 
-    win.title('AfterScan')  # setting title of the window
+    win.title('AfterScan ' + __version__)  # setting title of the window
     win.geometry('1080x700')  # setting the size of the window
     win.geometry('+50+50')  # setting the position of the window
     # Prevent window resize
@@ -1731,7 +1734,7 @@ def main(argv):
     if not isinstance(LogLevel, int):
         raise ValueError('Invalid log level: %s' % LogLevel)
 
-    afterscan_postprod_init()
+    afterscan_init()
 
     ffmpeg_installed = False
     if platform.system() == 'Windows':
@@ -1757,13 +1760,13 @@ def main(argv):
             "Frame stabilization and cropping will still work, "
             "video generation will not")
 
-    build_ui()
-
     # Init some variables here
     # video_encoding_do_not_warn_again is required by config read
     # perform_stabilization was defined only in expert mode
     video_encoding_do_not_warn_again = tk.BooleanVar(value=False)
     perform_stabilization = tk.BooleanVar(value=True)
+
+    build_ui()
 
     load_general_config()
 
