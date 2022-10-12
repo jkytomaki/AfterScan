@@ -624,7 +624,7 @@ def set_source_folder():
     cropping_btn.config(state=NORMAL)
     frame_slider.config(state=NORMAL)
     Go_btn.config(state=NORMAL)
-    frame_slider.set(CurrentFrame + first_absolute_frame)
+    frame_slider.set(CurrentFrame)
     init_display()
 
 
@@ -957,7 +957,7 @@ def frame_generation_loop():
         target_file = os.path.join(TargetDir, os.path.basename(file))
         cv2.imwrite(target_file, img)
 
-    frame_slider.set(CurrentFrame + first_absolute_frame)
+    frame_slider.set(CurrentFrame)
 
     CurrentFrame += 1
     project_config["CurrentFrame"] = CurrentFrame
@@ -1124,7 +1124,7 @@ def get_current_dir_file_list():
     global SourceDir
     global SourceDirFileList
     global FrameInputFilenamePattern
-    global first_absolute_frame
+    global CurrentFrame, first_absolute_frame
     global frame_slider
 
     SourceDirFileList = sorted(list(glob(os.path.join(
@@ -1134,7 +1134,8 @@ def get_current_dir_file_list():
         ''.join(list(filter(str.isdigit,
                             os.path.basename(SourceDirFileList[0])))))
     last_absolute_frame = first_absolute_frame + len(SourceDirFileList)-1
-    frame_slider.config(from_=first_absolute_frame, to=last_absolute_frame)
+    frame_slider.config(from_=0, to=len(SourceDirFileList)-1,
+                        label='Global:'+str(CurrentFrame+first_absolute_frame))
 
 
 def init_display():
@@ -1154,6 +1155,7 @@ def init_display():
         extended_stabilization_checkbox.config(state=NORMAL)
 
     os.chdir(SourceDir)
+
     file = SourceDirFileList[CurrentFrame]
 
     img = cv2.imread(file, cv2.IMREAD_UNCHANGED)
@@ -1197,11 +1199,14 @@ def select_scale_frame(selected_frame):
     global SourceDirFileList
     global first_absolute_frame
     global frame_scale_refresh_done, frame_scale_refresh_pending
+    global frame_slider
 
     if not ConvertLoopRunning:  # Do not refresh during conversion loop
         frame_slider.focus()
-        CurrentFrame = int(selected_frame) - first_absolute_frame
+        CurrentFrame = int(selected_frame)
         project_config["CurrentFrame"] = CurrentFrame
+        frame_slider.config(label='Global:'+
+                            str(CurrentFrame+first_absolute_frame))
         if frame_scale_refresh_done:
             frame_scale_refresh_done = False
             frame_scale_refresh_pending = False
@@ -1302,10 +1307,11 @@ def load_project_config():
         ProjectConfigDate = project_config["ProjectConfigDate"]
     if 'CurrentFrame' in project_config:
         CurrentFrame = project_config["CurrentFrame"]
-        frame_slider.set(CurrentFrame + first_absolute_frame)
+        CurrentFrame = max(CurrentFrame, 0)
+        frame_slider.set(CurrentFrame)
     else:
         CurrentFrame = 0
-        frame_slider.set(CurrentFrame + first_absolute_frame)
+        frame_slider.set(CurrentFrame)
     if 'StartFromCurrentFrame' in project_config:
         start_from_current_frame.set(project_config["StartFromCurrentFrame"])
     else:
@@ -1451,7 +1457,7 @@ def afterscan_init():
 
     # Set default font size
     default_font = tkFont.nametofont("TkDefaultFont")
-    default_font.configure(size=10)
+    default_font.configure(size=8)
 
     # Get Top window coordinates
     TopWinX = win.winfo_x()
@@ -1502,22 +1508,22 @@ def build_ui():
 
     # Frame for standard widgets
     regular_frame = Frame(win, width=320, height=450)
-    regular_frame.grid(row=0, column=1, rowspan=2, padx=10, pady=10, sticky=N)
+    regular_frame.grid(row=0, column=1, rowspan=2, padx=5, pady=5, sticky=N)
 
     # Frame for top section of standard widgets
     regular_top_section_frame = Frame(regular_frame, width=50, height=50)
     regular_top_section_frame.pack(side=TOP, padx=2, pady=2, anchor=W)
 
-    # Create frame to display current frame and selection buttons
-    picture_frame = LabelFrame(regular_top_section_frame, text='Current frame',
+    # Create frame to display current frame and slider
+    frame_frame = LabelFrame(regular_top_section_frame, text='Current frame',
                                width=26, height=8)
-    picture_frame.pack(side=LEFT, padx=2, pady=2)
+    frame_frame.pack(side=LEFT, padx=2, pady=0)
 
     frame_selected = IntVar()
-    frame_slider = Scale(picture_frame, orient=HORIZONTAL, from_=0, to=0,
+    frame_slider = Scale(frame_frame, orient=HORIZONTAL, from_=0, to=0,
                          variable=frame_selected, command=select_scale_frame,
-                         font=("Arial", 16))
-    frame_slider.pack(side=BOTTOM)
+                         label='Global:', font=("Arial", 8))
+    frame_slider.pack(side=BOTTOM, ipady=4)
 
     # Application start button
     Go_btn = Button(regular_top_section_frame, text="Start", width=8, height=3,
