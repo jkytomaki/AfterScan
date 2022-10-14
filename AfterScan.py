@@ -1127,6 +1127,9 @@ def get_current_dir_file_list():
     global CurrentFrame, first_absolute_frame
     global frame_slider
 
+    if not os.path.isdir(SourceDir):
+        return
+
     SourceDirFileList = sorted(list(glob(os.path.join(
         SourceDir,
         FrameInputFilenamePattern))))
