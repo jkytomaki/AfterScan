@@ -291,7 +291,7 @@ def set_film_type():
         expected_pattern_pos = (6.5, 34)
     elif film_type.get() == 'R8':
         pattern_filename = r8_pattern_filename
-        expected_pattern_pos = (9.2, 15.7)
+        expected_pattern_pos = (9.6, 13.3)
     film_hole_template = load_pattern_and_adjust_size(pattern_filename)
     project_config["FilmType"] = film_type.get()
     win.update()
@@ -694,7 +694,7 @@ def set_target_folder():
         folder_frame_target_dir.delete(0, 'end')
         folder_frame_target_dir.insert('end', TargetDir)
 
-    general_config["TargetDir"] = TargetDir
+    project_config["TargetDir"] = TargetDir
 
 
 def set_frame_input_filename_pattern():
@@ -797,7 +797,7 @@ def exit_app():  # Exit Application
     win.destroy()
 
 
-def display_image(img):
+def display_image_in_label(img):
     global PreviewWidth, PreviewHeight
     global draw_capture_label, preview_border_frame
 
@@ -820,6 +820,29 @@ def display_image(img):
     draw_capture_label.image = DisplayableImage
     #draw_capture_label.pack(ipadx=padding_x, ipady=padding_y)
     draw_capture_label.pack()
+    win.update()
+
+
+def display_image(img):
+    global PreviewWidth, PreviewHeight
+    global draw_capture_canvas, preview_border_frame
+
+    img = resize_image(img, round(PreviewRatio*100))
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    DisplayableImage = ImageTk.PhotoImage(Image.fromarray(img))
+
+    image_height = img.shape[0]
+    image_width = img.shape[1]
+    padding_x = 0
+    padding_y = 0
+    if PreviewWidth > image_width:
+        padding_x = round((PreviewWidth - image_width) / 2)
+    if PreviewHeight > image_height:
+        padding_y = round((PreviewHeight - image_height) / 2)
+
+    draw_capture_canvas.create_image(padding_x, padding_y, anchor=NW, image=DisplayableImage)
+    draw_capture_canvas.image = DisplayableImage
+
     win.update()
 
 
@@ -1296,13 +1319,6 @@ def load_general_config():
         folder_frame_source_dir.delete(0, 'end')
         folder_frame_source_dir.insert('end', SourceDir)
         get_current_dir_file_list()
-    if 'TargetDir' in general_config:
-        TargetDir = general_config["TargetDir"]
-        # If directory in configuration does not exist, set current working dir
-        if not os.path.isdir(TargetDir):
-            TargetDir = ""
-        folder_frame_target_dir.delete(0, 'end')
-        folder_frame_target_dir.insert('end', TargetDir)
     if 'GeneralConfigDate' in general_config:
         GeneralConfigDate = general_config["GeneralConfigDate"]
     if 'VideoEncodingDoNotWarnAgain' in general_config:
@@ -1358,6 +1374,13 @@ def load_project_config():
 
     if 'ProjectConfigDate' in project_config:
         ProjectConfigDate = project_config["ProjectConfigDate"]
+    if 'TargetDir' in project_config:
+        TargetDir = project_config["TargetDir"]
+        # If directory in configuration does not exist, set current working dir
+        if not os.path.isdir(TargetDir):
+            TargetDir = ""
+        folder_frame_target_dir.delete(0, 'end')
+        folder_frame_target_dir.insert('end', TargetDir)
     if 'CurrentFrame' in project_config:
         CurrentFrame = project_config["CurrentFrame"]
         CurrentFrame = max(CurrentFrame, 0)
@@ -1452,6 +1475,7 @@ def afterscan_init():
     global SourceDir
     global LogLevel
     global draw_capture_label
+    global draw_capture_canvas
     global PreviewWidth, PreviewHeight
     global preview_factor
     global preview_border_frame
@@ -1516,7 +1540,10 @@ def afterscan_init():
                                  bg='dark grey')
     preview_border_frame.grid(row=0, column=0, padx=5, pady=5, sticky=N)
     # Also a label to draw images
-    draw_capture_label = tk.Label(preview_border_frame)
+    # draw_capture_label = tk.Label(preview_border_frame)
+
+    draw_capture_canvas = Canvas(preview_border_frame, bg='dark grey', width=PreviewWidth, height=PreviewHeight)
+    draw_capture_canvas.pack()
 
     logging.debug("AfterScan initialized")
 
