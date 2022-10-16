@@ -586,14 +586,16 @@ def load_pattern_and_adjust_size(pattern_filename):
     global pattern_filename_entry
 
     pattern_img = cv2.imread(pattern_filename, 0)
-    width = pattern_img.shape[1]
-    height = pattern_img.shape[0]
+    # width = pattern_img.shape[1]
+    # height = pattern_img.shape[0]
 
-    if height > 1000:
-        ratio = 1000/pattern_img.shape[0]
-        logging.debug("Film hole template too big (%i,%i). Downsizing by a factor of %i", width, height, ratio)
-    else:
-        ratio = 1
+    # Code introduced due to some errors that appeared to tell template is too big
+    # For now we disable it, we will see if it is needed again
+    # if height > 1000:
+    #     ratio = 1000/pattern_img.shape[0]
+    #     logging.debug("Film hole template too big (%i,%i). Downsizing by a factor of %i", width, height, ratio)
+    # else:
+    #     ratio = 1
 
     if ui_init_done:    # do not attempt to update UI if not already constructed
         # Update UI with new template file details
@@ -603,10 +605,10 @@ def load_pattern_and_adjust_size(pattern_filename):
         general_config["PatternFilename"] = pattern_filename
         display_pattern(pattern_img)
 
-    # dsize
-    dsize = (round(ratio*width), round(ratio*height))
+    # dsize = (round(ratio*width), round(ratio*height))
     # resize image and return it
-    return cv2.resize(pattern_img, dsize)
+    # return cv2.resize(pattern_img, dsize)
+    return pattern_img
 
 def display_pattern(pattern_img):
     global pattern_canvas
@@ -826,6 +828,7 @@ def display_image_in_label(img):
 def display_image(img):
     global PreviewWidth, PreviewHeight
     global draw_capture_canvas, preview_border_frame
+    global perform_cropping
 
     img = resize_image(img, round(PreviewRatio*100))
     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
@@ -835,10 +838,12 @@ def display_image(img):
     image_width = img.shape[1]
     padding_x = 0
     padding_y = 0
-    if PreviewWidth > image_width:
-        padding_x = round((PreviewWidth - image_width) / 2)
-    if PreviewHeight > image_height:
-        padding_y = round((PreviewHeight - image_height) / 2)
+    # Center only when cropping, otherwise image will shake
+    if perform_cropping.get():
+        if PreviewWidth > image_width:
+            padding_x = round((PreviewWidth - image_width) / 2)
+        if PreviewHeight > image_height:
+            padding_y = round((PreviewHeight - image_height) / 2)
 
     draw_capture_canvas.create_image(padding_x, padding_y, anchor=NW, image=DisplayableImage)
     draw_capture_canvas.image = DisplayableImage
