@@ -1289,7 +1289,7 @@ def select_scale_frame(selected_frame):
 def save_general_config():
     # Write config data upon exit
     general_config["GeneralConfigDate"] = str(datetime.now())
-    with open(general_config_filename, 'w') as f:
+    with open(general_config_filename, 'w+') as f:
         json.dump(general_config, f)
 
 
@@ -1342,7 +1342,7 @@ def save_project_config():
     project_config["ProjectConfigDate"] = str(datetime.now())
     project_config["FilmType"] = film_type.get()
     project_config["HolePatternFilename"] = pattern_filename
-    with open(project_config_filename, 'w') as f:
+    with open(project_config_filename, 'w+') as f:
         json.dump(project_config, f)
 
 
