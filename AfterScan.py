@@ -63,7 +63,7 @@ project_config_filename = ""
 r8_pattern_filename = os.path.join(script_dir, "Pattern.R8.jpg")
 s8_pattern_filename = os.path.join(script_dir, "Pattern.S8.jpg")
 pattern_filename = s8_pattern_filename
-expected_pattern_pos = (12, 38)
+expected_pattern_pos = (6.5, 38)
 TargetVideoFilename = ""
 SourceDir = ""
 TargetDir = ""
@@ -78,6 +78,7 @@ ConvertLoopRunning = False
 # preview dimensions (4/3 format)
 PreviewWidth = 700
 PreviewHeight = 525
+PreviewRatio = 1  # Defined globally for homogeneity, to be calculated once per project
 ExpertMode = False
 IsWindows = False
 IsLinux = False
@@ -97,12 +98,13 @@ StabilizeAreaDefined = False
 CropAreaDefined = False
 RectangleTopLeft = (0, 0)
 RectangleBottomRight = (0, 0)
-StabilizeTopLeft = (0, 0)
-StabilizeBottomRight = (0, 0)
+HoleSearchTopLeft = (0, 0)
+HoleSearchBottomRight = (0, 0)
 CropTopLeft = (0, 0)
 CropBottomRight = (0, 0)
 VideoFps = 18
 FfmpegBinName = ""
+ui_init_done = False
 
 global win
 global ffmpeg_installed
@@ -203,7 +205,7 @@ def select_rectangle_area():
 def select_stabilization_area():
     global RectangleWindowTitle
     global perform_stabilization
-    global StabilizeTopLeft, StabilizeBottomRight
+    global HoleSearchTopLeft, HoleSearchBottomRight
     global StabilizeAreaDefined
 
     # Disable all buttons in main window
@@ -216,20 +218,20 @@ def select_stabilization_area():
         StabilizeAreaDefined = True
         perform_stabilization.set(True)
         # Avoid negative values
-        StabilizeTopLeft = RectangleTopLeft
-        StabilizeBottomRight = RectangleBottomRight
+        HoleSearchTopLeft = RectangleTopLeft
+        HoleSearchBottomRight = RectangleBottomRight
         logging.debug("Selected Rectangle: (%i,%i) - (%i, %i)",
                       RectangleTopLeft[0], RectangleTopLeft[1],
                       RectangleBottomRight[0], RectangleBottomRight[1])
         logging.debug("Hole search area: (%i,%i) - (%i, %i)",
-                      StabilizeTopLeft[0], StabilizeTopLeft[1],
-                      StabilizeBottomRight[0], StabilizeBottomRight[1])
+                      HoleSearchTopLeft[0], HoleSearchTopLeft[1],
+                      HoleSearchBottomRight[0], HoleSearchBottomRight[1])
     else:
         # If stabilization window is dismissed, keep previous values, just remove check
         perform_stabilization.set(False)
         # StabilizeAreaDefined = False
-        # StabilizeTopLeft = (0, 0)
-        # StabilizeBottomRight = (0, 0)
+        # HoleSearchTopLeft = (0, 0)
+        # HoleSearchBottomRight = (0, 0)
 
     # Enable all buttons in main window
     button_status_change_except(0, NORMAL)
@@ -286,12 +288,13 @@ def set_film_type():
     global film_type, expected_pattern_pos, pattern_filename, film_hole_template
     if film_type.get() == 'S8':
         pattern_filename = s8_pattern_filename
-        expected_pattern_pos = (12, 38)
+        expected_pattern_pos = (6.5, 34)
     elif film_type.get() == 'R8':
         pattern_filename = r8_pattern_filename
-        expected_pattern_pos = (0, 0)
+        expected_pattern_pos = (9.2, 15.7)
     film_hole_template = load_pattern_and_adjust_size(pattern_filename)
     project_config["FilmType"] = film_type.get()
+    win.update()
 
 
 def button_status_change_except(except_button, button_status):
@@ -374,12 +377,12 @@ def match_template(template, img, thres):
     if top_left[1] > 500:
         logging.debug("Image out of bounds: (%i,%i)",
                       top_left[0], top_left[1])
-        # img_grey = resize_image(img_grey, 50)
-        # img_bw = resize_image(img_bw, 50)
-        # cv2.namedWindow("gray")
-        # cv2.imshow("gray", img_grey)
-        # cv2.namedWindow("bw")
-        # cv2.imshow("bw", img_bw)
+    #     img_grey = resize_image(img_grey, 50)
+    #     img_bw = resize_image(img_bw, 50)
+    #     cv2.namedWindow("gray")
+    #     cv2.imshow("gray", img_grey)
+    #     cv2.namedWindow("bw")
+    #     cv2.imshow("bw", img_bw)
     # cv2.namedWindow("template")
     # cv2.imshow("template", template)
     # bottom_right = (top_left[0] + w, top_left[1] + h)
@@ -497,7 +500,7 @@ def resize_image(img, percent):
 
 def stabilize_image(img):
     global SourceDirFileList, CurrentFrame
-    global StabilizeTopLeft, StabilizeBottomRight
+    global HoleSearchTopLeft, HoleSearchBottomRight
     global expected_pattern_pos, film_hole_template
     # Get image dimensions to perform image shift later
     width = img.shape[1]
@@ -507,25 +510,25 @@ def stabilize_image(img):
     # since we need the intermediate values
     # Default values defined at display initialization time, after source
     # folder is defined
-    horizontal_range = (StabilizeTopLeft[0], StabilizeBottomRight[0])
-    vertical_range = (StabilizeTopLeft[1], StabilizeBottomRight[1])
+    horizontal_range = (HoleSearchTopLeft[0], HoleSearchBottomRight[0])
+    vertical_range = (HoleSearchTopLeft[1], HoleSearchBottomRight[1])
     cropped_image = img[vertical_range[0]:vertical_range[1],
                         horizontal_range[0]:horizontal_range[1]]
 
     # Search film hole pattern
     try:
-        top_left = match_template(film_hole_template, cropped_image, 250)
+        top_left = match_template(film_hole_template, cropped_image, 230)
         # The coordinates returned by match template are relative to the
         # cropped image. In order to calculate the correct values to provide
         # to the translation matrix, need to convert to absolute coordinates
-        top_left = (top_left[0] + StabilizeTopLeft[0],
-                    top_left[1] + StabilizeTopLeft[1])
+        top_left = (top_left[0] + HoleSearchTopLeft[0],
+                    top_left[1] + HoleSearchTopLeft[1])
         # According to tests done during the development, the ideal top left
         # position for a match of the hole template used (63*339 pixels) should
         # be situated at 12% of the horizontal axis, and 38% of the vertical
         # axis. Calculate shift, according to those proportions
 
-        move_x = round((expected_pattern_pos[0]*width / 100)) - top_left[0]
+        move_x = round((expected_pattern_pos[0] * width / 100)) - top_left[0]
         move_y = round((expected_pattern_pos[1] * height / 100)) - top_left[1]
         logging.debug("Stabilizing frame: (%i,%i) to move (%i, %i)",
                       top_left[0], top_left[1], move_x, move_y)
@@ -563,7 +566,7 @@ def crop_image(img, top_left, botton_right):
 
 
 def get_pattern_file():
-    global pattern_filename, pattern_filename_entry, film_hole_template
+    global pattern_filename, film_hole_template
 
     pattern_file = tk.filedialog.askopenfilename(
         initialdir=os.path.dirname(pattern_filename),
@@ -574,18 +577,14 @@ def get_pattern_file():
 
     if not pattern_file:
         return
-    else:
-        pattern_filename_entry.delete(0, 'end')
-        pattern_filename_entry.insert('end', pattern_file)
-        pattern_filename = pattern_filename_entry.get()
 
-    general_config["PatternFilename"] = pattern_filename
-    film_hole_template = load_pattern_and_adjust_size(pattern_filename)
-
-    display_pattern(pattern_filename)
+    general_config["PatternFilename"] = pattern_file
+    film_hole_template = load_pattern_and_adjust_size(pattern_file)
 
 
 def load_pattern_and_adjust_size(pattern_filename):
+    global pattern_filename_entry
+
     pattern_img = cv2.imread(pattern_filename, 0)
     width = pattern_img.shape[1]
     height = pattern_img.shape[0]
@@ -596,13 +595,20 @@ def load_pattern_and_adjust_size(pattern_filename):
     else:
         ratio = 1
 
+    if ui_init_done:    # do not attempt to update UI if not already constructed
+        # Update UI with new template file details
+        pattern_filename_entry.delete(0, 'end')
+        pattern_filename_entry.insert('end', pattern_filename)
+        pattern_filename_entry.icursor('end')
+        general_config["PatternFilename"] = pattern_filename
+        display_pattern(pattern_img)
+
     # dsize
     dsize = (round(ratio*width), round(ratio*height))
-    # return pattern_img
-    # resize image
+    # resize image and return it
     return cv2.resize(pattern_img, dsize)
 
-def display_pattern(pattern_filename):
+def display_pattern(pattern_img):
     global pattern_canvas
 
     # If file does not exists, return
@@ -612,8 +618,6 @@ def display_pattern(pattern_filename):
     # Get canvas size
     canvas_width = pattern_canvas.winfo_reqwidth()
     canvas_height = pattern_canvas.winfo_reqheight()
-    # Load hole pattern image
-    pattern_img = load_pattern_and_adjust_size(pattern_filename)
     # Calculate resize ratio (% calculated with 90 instead of 100
     # to keep some margins
     width_ratio = 100
@@ -703,12 +707,6 @@ def set_frame_input_filename_pattern():
 def perform_stabilization_selection():
     global perform_stabilization
     # Nothing to do here
-
-
-def extended_stabilization_selection():
-    global extended_stabilization
-    project_config["ExtendedStabilization"] = extended_stabilization.get()
-    init_display()
 
 
 def perform_cropping_selection():
@@ -807,22 +805,21 @@ def display_image(img):
     image_height = img.shape[0]
     image_width = img.shape[1]
     if (abs(PreviewWidth - image_width) > abs(PreviewHeight - image_height)):
-        ratio = PreviewWidth/image_width
-        padding_y = max(0, round((PreviewHeight - (image_height * ratio)) / 2))
+        padding_y = max(0, round((PreviewHeight - (image_height * PreviewRatio)) / 2))
         padding_x = 0
     else:
-        ratio = PreviewHeight/image_height
-        padding_x = max(0, round((PreviewWidth - (image_width * ratio)) / 2))
+        padding_x = max(0, round((PreviewWidth - (image_width * PreviewRatio)) / 2))
         padding_y = 0
 
-    img = resize_image(img, round(ratio*100))
+    img = resize_image(img, round(PreviewRatio*100))
     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     DisplayableImage = ImageTk.PhotoImage(Image.fromarray(img))
 
     # The Label widget can be used to display a text or image on the screen.
     draw_capture_label.config(image=DisplayableImage)
     draw_capture_label.image = DisplayableImage
-    draw_capture_label.pack(ipadx=padding_x, ipady=padding_y)
+    #draw_capture_label.pack(ipadx=padding_x, ipady=padding_y)
+    draw_capture_label.pack()
     win.update()
 
 
@@ -1186,6 +1183,7 @@ def init_display():
     global SourceDir
     global CurrentFrame
     global SourceDirFileList
+    global PreviewWidth, PreviewHeight, PreviewRatio
 
     # Get first file
     savedir = os.getcwd()
@@ -1193,8 +1191,6 @@ def init_display():
         tk.messagebox.showerror("Error!",
                                 "Please specify source and target folders.")
         return
-    else:
-        extended_stabilization_checkbox.config(state=NORMAL)
 
     os.chdir(SourceDir)
 
@@ -1202,14 +1198,21 @@ def init_display():
 
     img = cv2.imread(file, cv2.IMREAD_UNCHANGED)
 
+    # Calculate preview image display ratio
+    image_height = img.shape[0]
+    image_width = img.shape[1]
+    if abs(PreviewWidth - image_width) > abs(PreviewHeight - image_height):
+        PreviewRatio = PreviewWidth/image_width
+    else:
+        PreviewRatio = PreviewHeight/image_height
+
     display_image(img)
 
     set_default_stabilization_values(img)
 
 
 def set_default_stabilization_values(img):
-    global StabilizeTopLeft, StabilizeBottomRight
-    global extended_stabilization
+    global HoleSearchTopLeft, HoleSearchBottomRight
 
     # Initizalize default values for perforation search area,
     # as they are relative to image size
@@ -1218,13 +1221,9 @@ def set_default_stabilization_values(img):
     height = img.shape[0]
     # Default values are needed before the stabilization search area
     # has been defined, therefore we initialized them here
-    if StabilizeTopLeft == (0, 0) and StabilizeBottomRight == (0, 0):
-        if (extended_stabilization.get()):
-            StabilizeTopLeft = (0, 0)
-            StabilizeBottomRight = (round(width * 0.25), height)
-        else:
-            StabilizeTopLeft = (0, round(height * 0.30))
-            StabilizeBottomRight = (round(width * 0.2), round(height * 0.70))
+    if HoleSearchTopLeft == (0, 0) and HoleSearchBottomRight == (0, 0):
+        HoleSearchTopLeft = (0, 0)
+        HoleSearchBottomRight = (round(width * 0.25), height)
 
 
 def scale_display_update():
@@ -1277,7 +1276,7 @@ def load_general_config():
     global LastSessionDate
     global SourceDir, TargetDir
     global folder_frame_source_dir, folder_frame_target_dir
-    global pattern_filename, pattern_filename_entry
+    global pattern_filename
     global video_encoding_do_not_warn_again
 
     # Check if persisted data file exist: If it does, load it
@@ -1377,10 +1376,6 @@ def load_project_config():
     else:
         frames_to_encode = "All"
         frames_to_encode_str.set(frames_to_encode)
-    if 'ExtendedStabilization' in project_config:
-        extended_stabilization.set(project_config["ExtendedStabilization"])
-    else:
-        extended_stabilization.set(False)
     if 'PerformCropping' in project_config:
         perform_cropping.set(project_config["PerformCropping"])
     else:
@@ -1439,17 +1434,10 @@ def load_project_config():
 
     if ExpertMode:
         if 'HolePatternFilename' in project_config:
-            pattern_filename = project_config["HolePatternFilename"]
-            pattern_filename_entry.delete(0, 'end')
-            pattern_filename_entry.insert('end', pattern_filename)
-            # film_hole_template = load_pattern_and_adjust_size(pattern_filename)
-            display_pattern(pattern_filename)
+            film_hole_template = load_pattern_and_adjust_size(pattern_filename)
         else:
             # Use default filename, or the one set by set_film_type
-            pattern_filename_entry.delete(0, 'end')
-            pattern_filename_entry.insert('end', pattern_filename)
-            # film_hole_template = load_pattern_and_adjust_size(pattern_filename)
-            display_pattern(pattern_filename)
+            film_hole_template = load_pattern_and_adjust_size(pattern_filename)
 
     widget_state_refresh()
 
@@ -1556,14 +1544,14 @@ def build_ui():
     global ffmpeg_preset
     global ffmpeg_preset_rb1, ffmpeg_preset_rb2, ffmpeg_preset_rb3
     global skip_frame_regeneration
-    global pattern_filename_entry
-    global pattern_canvas
     global ExpertMode
-    global extended_stabilization, extended_stabilization_checkbox
+    global pattern_canvas
+    global pattern_filename_entry
     global frame_input_filename_pattern
     global FrameInputFilenamePattern
     global frame_slider
     global film_type, film_hole_template
+    global ui_init_done
 
     # Frame for standard widgets
     regular_frame = Frame(win, width=320, height=450)
@@ -1684,18 +1672,6 @@ def build_ui():
         textvariable=frames_to_encode_str, from_=0, to=50000)
     frames_to_encode_spinbox.grid(row=postprocessing_row, column=2, sticky=W)
     frames_to_encode_selection('down')
-    postprocessing_row += 1
-
-    # Checkbox to select extended hole search area (for films with bad synchro)
-    extended_stabilization = tk.BooleanVar(value=False)
-    extended_stabilization_checkbox = tk.Checkbutton(
-        postprocessing_frame,
-        text='Extended stabilization (bad sync films)',
-        variable=extended_stabilization, onvalue=True, offvalue=False,
-        command=extended_stabilization_selection, width=32)
-    extended_stabilization_checkbox.grid(row=postprocessing_row, column=0,
-                                         columnspan=3, sticky=W)
-    extended_stabilization_checkbox.config(state=DISABLED)
     postprocessing_row += 1
 
     # Check box to do cropping or not
@@ -1884,7 +1860,6 @@ def build_ui():
                          frame_filename_pattern_btn,
                          start_from_current_frame_checkbox,
                          frames_to_encode_spinbox,
-                         extended_stabilization_checkbox,
                          perform_cropping_checkbox,
                          cropping_btn,
                          generate_video_checkbox,
@@ -1916,6 +1891,7 @@ def build_ui():
         if os.path.isfile(pattern_filename):
             pattern_filename_entry.delete(0, 'end')
             pattern_filename_entry.insert('end', pattern_filename)
+            pattern_filename_entry.icursor('end')
             film_hole_template = load_pattern_and_adjust_size(pattern_filename)
         pattern_filename_entry.grid(row=0, column=0, columnspan=2, sticky=W)
         pattern_filename_btn = Button(stabilize_frame, text='Pattern', width=6,
@@ -1948,7 +1924,7 @@ def build_ui():
         pattern_canvas = Canvas(stabilize_frame, width=22, height=22,
                                 bg='black')
         pattern_canvas.grid(row=0, column=3, sticky=N, padx=5)
-        display_pattern(pattern_filename)
+        ui_init_done = True
 
 
 def main(argv):
