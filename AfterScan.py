@@ -577,9 +577,11 @@ def get_pattern_file():
 
     if not pattern_file:
         return
+    else:
+        pattern_filename = pattern_file
 
-    general_config["PatternFilename"] = pattern_file
-    film_hole_template = load_pattern_and_adjust_size(pattern_file)
+    general_config["PatternFilename"] = pattern_filename
+    film_hole_template = load_pattern_and_adjust_size(pattern_filename)
 
 
 def load_pattern_and_adjust_size(pattern_filename):
@@ -611,7 +613,7 @@ def load_pattern_and_adjust_size(pattern_filename):
     return pattern_img
 
 def display_pattern(pattern_img):
-    global pattern_canvas
+    global pattern_canvas, pattern_filename
 
     # If file does not exists, return
     if not os.path.isfile(pattern_filename):
@@ -1304,7 +1306,6 @@ def load_general_config():
     global LastSessionDate
     global SourceDir, TargetDir
     global folder_frame_source_dir, folder_frame_target_dir
-    global pattern_filename
     global video_encoding_do_not_warn_again
 
     # Check if persisted data file exist: If it does, load it
@@ -1362,8 +1363,7 @@ def load_project_config():
     global skip_frame_regeneration
     global generate_video
     global CropTopLeft, CropBottomRight, perform_cropping
-    global pattern_filename, film_hole_template
-
+    global pattern_filename_entry, pattern_filename, film_hole_template
 
     project_config_filename = os.path.join(SourceDir, project_config_basename)
     # Check if persisted project data file exist: If it does, load it
@@ -1462,10 +1462,12 @@ def load_project_config():
 
     if ExpertMode:
         if 'HolePatternFilename' in project_config:
-            film_hole_template = load_pattern_and_adjust_size(pattern_filename)
-        else:
-            # Use default filename, or the one set by set_film_type
-            film_hole_template = load_pattern_and_adjust_size(pattern_filename)
+            pattern_filename = project_config["HolePatternFilename"]
+            pattern_filename_entry.delete(0, 'end')
+            pattern_filename_entry.insert('end', pattern_filename)
+            pattern_filename_entry.icursor('end')
+
+        film_hole_template = load_pattern_and_adjust_size(pattern_filename)
 
     widget_state_refresh()
 
@@ -1578,12 +1580,11 @@ def build_ui():
     global skip_frame_regeneration
     global ExpertMode
     global pattern_canvas
-    global pattern_filename_entry
+    global pattern_filename_entry, pattern_filename
     global frame_input_filename_pattern
     global FrameInputFilenamePattern
     global frame_slider
     global film_type, film_hole_template
-    global ui_init_done
 
     # Frame for standard widgets
     regular_frame = Frame(win, width=320, height=450)
@@ -1721,7 +1722,7 @@ def build_ui():
     cropping_btn.grid(row=postprocessing_row, column=1, columnspan=2, sticky=W)
     postprocessing_row += 1
 
-    # Buttons to select R8/S8. Required to select adequate pattern, and match position
+    # Radio buttons to select R8/S8. Required to select adequate pattern, and match position
     film_type = StringVar()
     film_type_S8_rb = Radiobutton(postprocessing_frame, text="Super 8", command=set_film_type,
                                   variable=film_type, value='S8')
@@ -1954,9 +1955,8 @@ def build_ui():
 
         # Create canvas to display pattern image
         pattern_canvas = Canvas(stabilize_frame, width=22, height=22,
-                                bg='black')
+                                bg='dark grey')
         pattern_canvas.grid(row=0, column=3, sticky=N, padx=5)
-        ui_init_done = True
 
 
 def main(argv):
@@ -1969,6 +1969,8 @@ def main(argv):
     global pattern_filename
     global project_config_filename, project_config_basename
     global video_encoding_do_not_warn_again, perform_stabilization
+    global ui_init_done
+
 
     LoggingMode = "warning"
 
@@ -2033,6 +2035,8 @@ def main(argv):
                                                project_config_basename)
 
     load_project_config()
+
+    ui_init_done = True
 
     # Display video encoding warning if not previously declined
     if not video_encoding_do_not_warn_again.get():
