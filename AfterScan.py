@@ -66,6 +66,8 @@ pattern_filename = s8_pattern_filename
 expected_pattern_pos = (6.5, 38)
 S8_default_hole_height = 344
 R8_default_interhole_height = 808
+pattern_bw_filename = os.path.join(script_dir, "Pattern_BW.jpg")
+pattern_wb_filename = os.path.join(script_dir, "Pattern_WB.jpg")
 film_hole_height = 0
 film_hole_template = None
 TargetVideoFilename = ""
@@ -108,6 +110,7 @@ CropBottomRight = (0, 0)
 VideoFps = 18
 FfmpegBinName = ""
 ui_init_done = False
+IgnoreConfig = False
 
 global win
 global ffmpeg_installed
@@ -180,6 +183,7 @@ def select_rectangle_area():
 
     # load the image, clone it, and setup the mouse callback function
     work_image = cv2.imread(file, cv2.IMREAD_UNCHANGED)
+
     # Scale hole template as required
     # adjust_hole_pattern_size()
     # Image is stabilized to have an accurate selection of crop area.
@@ -215,37 +219,26 @@ def select_hole_height():
     global film_hole_height, film_hole_template, preview_factor
 
     # Disable all buttons in main window
-    button_status_change_except(0, DISABLED)
-    win.update()
+    # button_status_change_except(0, DISABLED)
+    # win.update()
 
-    RectangleWindowTitle = StabilizeWindowTitle
-
-    if select_rectangle_area():
-        StabilizeAreaDefined = True
-        perform_stabilization_checkbox.config(state=NORMAL)
-        # Avoid negative values
-        film_hole_height = (RectangleBottomRight[1] - RectangleTopLeft[1]) / preview_factor
-        logging.debug("Selected Rectangle: (%i,%i) - (%i, %i)",
-                      RectangleTopLeft[0], RectangleTopLeft[1],
-                      RectangleBottomRight[0], RectangleBottomRight[1])
-        logging.debug("Hole height: %i", film_hole_height)
-        # Simplified name. for S8, it is th eactual hole height, fot R8 it is
-        # the height of the inter-hole space (holes don't fit most of often)
-    else:
-        # If stabilization window is dismissed, keep previous values, just remove check
+    # load the image, find hole height
+    while True:
+        file = SourceDirFileList[CurrentFrame]
+        work_image = cv2.imread(file, cv2.IMREAD_UNCHANGED)
+        set_default_stabilization_values(work_image)
+        film_hole_height = determine_hole_height(work_image)
+        if (film_hole_height != 0):
+            break
+    if film_hole_height < 0:
+        film_hole_height = 0
         StabilizeAreaDefined = False
         perform_stabilization.set(False)
         perform_stabilization_checkbox.config(state=DISABLED)
-        film_hole_template = cv2.imread(pattern_filename, 0)
-        if film_type.get() == 'S8':
-            film_hole_height = S8_default_hole_height
-        elif film_type.get() == 'R8':
-            film_hole_height = R8_default_interhole_height
-
-    adjust_hole_pattern_size()
-
-    # Enable all buttons in main window
-    button_status_change_except(0, NORMAL)
+    else:
+        StabilizeAreaDefined = True
+        perform_stabilization_checkbox.config(state=NORMAL)
+        adjust_hole_pattern_size()
     win.update()
 
 
@@ -294,6 +287,35 @@ def select_cropping_area():
     win.update()
 
 
+def determine_hole_height(img):
+    global film_hole_template, film_bw_template, film_wb_template
+
+    if film_type.get() == 'S8':
+        template_1 = film_bw_template
+        template_2 = film_wb_template
+        other_film_type = 'R8'
+    elif film_type.get() == 'R8':
+        template_1 = film_wb_template
+        template_2 = film_bw_template
+        other_film_type = 'S8'
+    search_img = get_image_left_stripe(img)
+    top_left_1 = match_template(template_1, search_img, 230)
+    top_left_2 = match_template(template_2, search_img, 230)
+    if (top_left_1[1] > top_left_2[1]):
+        if tk.messagebox.askyesno(
+                "Wrong film type detected",
+                "Current project is defined to handle " + film_type.get() +
+                " film type, however frames seem to be " + other_film_type + ".\r\n"
+                "Do you want to change it now?"):
+            film_type.set(other_film_type)
+            set_film_type()
+            top_left_aux = top_left_1
+            top_left_1 = top_left_2
+            top_left_2 = top_left_aux
+            return 0
+    logging.debug("Hole height: %i", top_left_2[1]-top_left_1[1])
+    return top_left_2[1]-top_left_1[1]
+
 def adjust_hole_pattern_size():
     global film_hole_height, film_hole_template
 
@@ -302,8 +324,7 @@ def adjust_hole_pattern_size():
         ratio = film_hole_height / S8_default_hole_height
     elif film_type.get() == 'R8':
         ratio = film_hole_height / R8_default_interhole_height
-    print("ratio=", ratio)
-    print("pattern_filename",pattern_filename)
+    logging.debug("Hole pattern, ratio: %s, %.2f", pattern_filename, ratio)
     film_hole_template = resize_image(film_hole_template, ratio*100)
 
 
@@ -318,7 +339,6 @@ def set_film_type():
         pattern_filename = r8_pattern_filename
         expected_pattern_pos = (9.6, 13.3)
         film_hole_height = R8_default_interhole_height
-    print("pattern_filename",pattern_filename)
     film_hole_template = cv2.imread(pattern_filename, 0)
 
     project_config["FilmType"] = film_type.get()
@@ -344,9 +364,8 @@ def button_status_change_except(except_button, button_status):
         Go_btn.config(state=button_status)
     if except_button != Exit_btn:
         Exit_btn.config(state=button_status)
-    if ExpertMode:
-        if except_button != perform_stabilization_checkbox:
-            perform_stabilization_checkbox.config(state=button_status)
+    if except_button != perform_stabilization_checkbox:
+        perform_stabilization_checkbox.config(state=button_status)
 
     if not CropAreaDefined:
         perform_cropping_checkbox.config(state=DISABLED)
@@ -397,6 +416,10 @@ def widget_state_refresh():
 def match_template(template, img, thres):
     w = template.shape[1]
     h = template.shape[0]
+    if (w >= img.shape[1] or h >= img.shape[0]):
+        logging.debug("Template (%ix%i) bigger than image  (%ix%i)",
+                      w, h, img.shape[1], img.shape[0])
+        return (0, 0)
     # convert img to grey
     img_grey = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     img_bw = cv2.threshold(img_grey, thres, 255, cv2.THRESH_BINARY)[1]
@@ -517,13 +540,8 @@ def resize_image(img, percent):
     return cv2.resize(img, dsize)
 
 
-def stabilize_image(img):
-    global SourceDirFileList, CurrentFrame
+def get_image_left_stripe(img):
     global HoleSearchTopLeft, HoleSearchBottomRight
-    global expected_pattern_pos, film_hole_template
-    # Get image dimensions to perform image shift later
-    width = img.shape[1]
-    height = img.shape[0]
     # Get partial image where the hole should be (to facilitate template search
     # by OpenCV). We do the calculations inline instead of calling the function
     # since we need the intermediate values
@@ -531,8 +549,18 @@ def stabilize_image(img):
     # folder is defined
     horizontal_range = (HoleSearchTopLeft[0], HoleSearchBottomRight[0])
     vertical_range = (HoleSearchTopLeft[1], HoleSearchBottomRight[1])
-    cropped_image = img[vertical_range[0]:vertical_range[1],
-                        horizontal_range[0]:horizontal_range[1]]
+    return img[vertical_range[0]:vertical_range[1], horizontal_range[0]:horizontal_range[1]]
+
+
+def stabilize_image(img):
+    global SourceDirFileList, CurrentFrame
+    global HoleSearchTopLeft, HoleSearchBottomRight
+    global expected_pattern_pos, film_hole_template
+    # Get image dimensions to perform image shift later
+    width = img.shape[1]
+    height = img.shape[0]
+
+    cropped_image = get_image_left_stripe(img)
 
     # Search film hole pattern
     try:
@@ -607,10 +635,9 @@ def set_source_folder():
         folder_frame_source_dir.insert('end', SourceDir)
 
     general_config["SourceDir"] = SourceDir
+    load_project_config()  # Needs SourceDir and first_absolute_frame defined
     # Load matching file list from newly selected dir
     get_current_dir_file_list()  # first_absolute_frame is set here
-    CurrentFrame = 0  # Default in case no config exist, overwritten it it does
-    load_project_config()  # Needs SourceDir and first_absolute_frame defined
 
     # Enable Start and Crop buttons, plus slider, once we have files to handle
     cropping_btn.config(state=NORMAL)
@@ -647,6 +674,8 @@ def set_frame_input_filename_pattern():
 
     FrameInputFilenamePattern = frame_input_filename_pattern.get()
     project_config["FrameInputFilenamePattern"] = FrameInputFilenamePattern
+    get_current_dir_file_list()
+    init_display()
 
 
 def perform_stabilization_selection():
@@ -1101,15 +1130,16 @@ def video_generation_phase():
                 "\r\nVideo generation by FFMPEG has failed\r\nPlease "
                 "check the logs to determine what the problem was.")
 
-    generation_exit()  # Restore all setigns to normal
+    generation_exit()  # Restore all settings to normal
 
 
 def get_current_dir_file_list():
     global SourceDir
     global SourceDirFileList
     global FrameInputFilenamePattern
-    global CurrentFrame, first_absolute_frame
+    global CurrentFrame, first_absolute_frame, last_absolute_frame
     global frame_slider
+    global CurrentFrame
 
     if not os.path.isdir(SourceDir):
         return
@@ -1123,12 +1153,17 @@ def get_current_dir_file_list():
                                 "Please specify new one and try again")
         return
 
+    CurrentFrame = 0
     first_absolute_frame = int(
         ''.join(list(filter(str.isdigit,
                             os.path.basename(SourceDirFileList[0])))))
     last_absolute_frame = first_absolute_frame + len(SourceDirFileList)-1
     frame_slider.config(from_=0, to=len(SourceDirFileList)-1,
                         label='Global:'+str(CurrentFrame+first_absolute_frame))
+
+    select_hole_height()
+
+    return len(SourceDirFileList)
 
 
 def init_display():
@@ -1163,8 +1198,6 @@ def init_display():
 
     display_image(img)
 
-    set_default_stabilization_values(img)
-
 
 def set_default_stabilization_values(img):
     global HoleSearchTopLeft, HoleSearchBottomRight
@@ -1176,9 +1209,8 @@ def set_default_stabilization_values(img):
     height = img.shape[0]
     # Default values are needed before the stabilization search area
     # has been defined, therefore we initialized them here
-    if HoleSearchTopLeft == (0, 0) and HoleSearchBottomRight == (0, 0):
-        HoleSearchTopLeft = (0, 0)
-        HoleSearchBottomRight = (round(width * 0.25), height)
+    HoleSearchTopLeft = (0, 0)
+    HoleSearchBottomRight = (round(width * 0.25), height)
 
 
 def scale_display_update():
@@ -1234,10 +1266,12 @@ def load_general_config():
     global video_encoding_do_not_warn_again
 
     # Check if persisted data file exist: If it does, load it
-    if os.path.isfile(general_config_filename):
+    if not IgnoreConfig and os.path.isfile(general_config_filename):
         persisted_data_file = open(general_config_filename)
         general_config = json.load(persisted_data_file)
         persisted_data_file.close()
+    else:   # No project config file. Set empty config to force defaults
+        general_config = {}
 
     for item in general_config:
         logging.info("%s=%s", item, str(general_config[item]))
@@ -1249,7 +1283,6 @@ def load_general_config():
             SourceDir = ""
         folder_frame_source_dir.delete(0, 'end')
         folder_frame_source_dir.insert('end', SourceDir)
-        get_current_dir_file_list()
     if 'GeneralConfigDate' in general_config:
         GeneralConfigDate = general_config["GeneralConfigDate"]
     if 'VideoEncodingDoNotWarnAgain' in general_config:
@@ -1299,7 +1332,7 @@ def load_project_config():
 
     project_config_filename = os.path.join(SourceDir, project_config_basename)
     # Check if persisted project data file exist: If it does, load it
-    if os.path.isfile(project_config_filename):
+    if not IgnoreConfig and os.path.isfile(project_config_filename):
         persisted_data_file = open(project_config_filename)
         project_config = json.load(persisted_data_file)
         persisted_data_file.close()
@@ -1405,7 +1438,6 @@ def load_project_config():
             fill_borders_mode.set(project_config["FillBordersMode"])
         else:
             fill_borders_mode.set('smear')
-
 
     widget_state_refresh()
 
@@ -1653,11 +1685,6 @@ def build_ui():
     perform_stabilization_checkbox.grid(row=postprocessing_row, column=0,
                                         sticky=W)
     perform_stabilization_checkbox.config(state=DISABLED)
-    stabilize_btn = Button(postprocessing_frame, text='Define hole height',
-                          width=24, height=1, command=select_hole_height,
-                          activebackground='green', activeforeground='white',
-                          wraplength=120, font=("Arial", 8))
-    stabilize_btn.grid(row=postprocessing_row, column=1, columnspan=2, sticky=W)
     postprocessing_row += 1
 
     # Check box to do cropping or not
@@ -1872,7 +1899,7 @@ def build_ui():
 
 def main(argv):
     global LogLevel, LoggingMode
-    global film_hole_template
+    global film_hole_template, film_bw_template, film_wb_template
     global video_encoding_do_not_warn_again
     global ExpertMode
     global FfmpegBinName
@@ -1881,33 +1908,41 @@ def main(argv):
     global project_config_filename, project_config_basename
     global video_encoding_do_not_warn_again, perform_stabilization
     global ui_init_done
+    global IgnoreConfig
+
 
 
     LoggingMode = "warning"
 
-    if os.path.isfile(pattern_filename):
-        film_hole_template = cv2.imread(pattern_filename, 0)
-    else:
-        tk.messagebox.showerror(
-            "Error: Hole template not found",
-            "After scan needs film hole templates to work.\r\n"
-            "File " + os.path.basename(pattern_filename) + " does not exist; "
-            "Please copy it to the working folder of AfterScan and try again.")
-        exit(-1)
+    pattern_filenames = [pattern_filename, pattern_bw_filename, pattern_wb_filename]
+    for filename in pattern_filenames:
+        if not os.path.isfile(filename):
+            tk.messagebox.showerror(
+                "Error: Hole template not found",
+                "After scan needs film hole templates to work.\r\n"
+                "File " + os.path.basename(filename) +
+                " does not exist; Please copy it to the working folder of "
+                "AfterScan and try again.")
+            exit(-1)
+    film_hole_template = cv2.imread(pattern_filename, 0)
+    film_bw_template =  cv2.imread(pattern_bw_filename, 0)
+    film_wb_template =  cv2.imread(pattern_wb_filename, 0)
 
-
-    opts, args = getopt.getopt(argv, "hel:")
+    opts, args = getopt.getopt(argv, "hiel:")
 
     for opt, arg in opts:
         if opt == '-l':
             LoggingMode = arg
         elif opt == '-e':
             ExpertMode = True
+        elif opt == '-i':
+            IgnoreConfig = True
         elif opt == '-h':
             print("AfterScan")
             print("  -l <log mode>  Set log level:")
             print("      <log mode> = [DEBUG|INFO|WARNING|ERROR]")
             print("  -e             Enable expert mode")
+            print("  -i             Ignore existing config")
             exit()
 
     LogLevel = getattr(logging, LoggingMode.upper(), None)
@@ -1953,6 +1988,8 @@ def main(argv):
                                                project_config_basename)
 
     load_project_config()
+
+    get_current_dir_file_list()
 
     ui_init_done = True
 
