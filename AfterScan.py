@@ -64,6 +64,10 @@ r8_pattern_filename = os.path.join(script_dir, "Pattern.R8.jpg")
 s8_pattern_filename = os.path.join(script_dir, "Pattern.S8.jpg")
 pattern_filename = s8_pattern_filename
 expected_pattern_pos = (6.5, 38)
+S8_default_hole_height = 344
+R8_default_interhole_height = 808
+film_hole_height = 0
+film_hole_template = None
 TargetVideoFilename = ""
 SourceDir = ""
 TargetDir = ""
@@ -90,9 +94,8 @@ ix, iy = -1, -1
 x_, y_ = 0, 0
 CropWindowTitle = "Select area to crop, press Enter to confirm, " \
                   "Escape to cancel"
-StabilizeWindowTitle = "Select area where to search film hole " \
-                       "(small area around it), press Enter to confirm, " \
-                       "Escape to cancel"
+StabilizeWindowTitle = "Select height of S8 hole, or R8 inter-hole space. " \
+                       "Press Enter to confirm, Escape to cancel"
 RectangleWindowTitle = ""
 StabilizeAreaDefined = False
 CropAreaDefined = False
@@ -177,6 +180,8 @@ def select_rectangle_area():
 
     # load the image, clone it, and setup the mouse callback function
     work_image = cv2.imread(file, cv2.IMREAD_UNCHANGED)
+    # Scale hole template as required
+    # adjust_hole_pattern_size()
     # Image is stabilized to have an accurate selection of crop area.
     # This leads to some interesting situation...
     work_image = stabilize_image(work_image)
@@ -202,11 +207,12 @@ def select_rectangle_area():
     return retvalue
 
 
-def select_stabilization_area():
+def select_hole_height():
     global RectangleWindowTitle
-    global perform_stabilization
+    global perform_stabilization, perform_stabilization_checkbox
     global HoleSearchTopLeft, HoleSearchBottomRight
     global StabilizeAreaDefined
+    global film_hole_height, film_hole_template
 
     # Disable all buttons in main window
     button_status_change_except(0, DISABLED)
@@ -216,22 +222,27 @@ def select_stabilization_area():
 
     if select_rectangle_area():
         StabilizeAreaDefined = True
-        perform_stabilization.set(True)
+        perform_stabilization_checkbox.config(state=NORMAL)
         # Avoid negative values
-        HoleSearchTopLeft = RectangleTopLeft
-        HoleSearchBottomRight = RectangleBottomRight
+        film_hole_height = RectangleBottomRight[1] - RectangleTopLeft[1]
         logging.debug("Selected Rectangle: (%i,%i) - (%i, %i)",
                       RectangleTopLeft[0], RectangleTopLeft[1],
                       RectangleBottomRight[0], RectangleBottomRight[1])
-        logging.debug("Hole search area: (%i,%i) - (%i, %i)",
-                      HoleSearchTopLeft[0], HoleSearchTopLeft[1],
-                      HoleSearchBottomRight[0], HoleSearchBottomRight[1])
+        logging.debug("Hole height: %i", film_hole_height)
+        # Simplified name. for S8, it is th eactual hole height, fot R8 it is
+        # the height of the inter-hole space (holes don't fit most of often)
     else:
         # If stabilization window is dismissed, keep previous values, just remove check
+        StabilizeAreaDefined = False
         perform_stabilization.set(False)
-        # StabilizeAreaDefined = False
-        # HoleSearchTopLeft = (0, 0)
-        # HoleSearchBottomRight = (0, 0)
+        perform_stabilization_checkbox.config(state=DISABLED)
+        film_hole_template = cv2.imread(pattern_filename, 0)
+        if film_type.get() == 'S8':
+            film_hole_height = S8_default_hole_height
+        elif film_type.get() == 'R8':
+            film_hole_height = R8_default_interhole_height
+
+    adjust_hole_pattern_size()
 
     # Enable all buttons in main window
     button_status_change_except(0, NORMAL)
@@ -268,7 +279,6 @@ def select_cropping_area():
         CropAreaDefined = False
         button_status_change_except(0, DISABLED)
         perform_cropping.set(False)
-        project_config["PerformCropping"] = perform_cropping.get()
         perform_cropping.set(False)
         generate_video_checkbox.config(state=NORMAL if ffmpeg_installed and
                                        perform_cropping.get() else DISABLED)
@@ -284,15 +294,33 @@ def select_cropping_area():
     win.update()
 
 
+def adjust_hole_pattern_size():
+    global film_hole_height, film_hole_template
+
+    ratio = 1
+    if perform_stabilization.get():
+        if film_type.get() == 'S8':
+            ratio = film_hole_height / S8_default_hole_height
+        elif film_type.get() == 'R8':
+            ratio = film_hole_height / R8_default_interhole_height
+    print("ratio=", ratio)
+    film_hole_template = resize_image(film_hole_template, ratio*100)
+
+
 def set_film_type():
     global film_type, expected_pattern_pos, pattern_filename, film_hole_template
+    global S8_default_hole_height, R8_default_interhole_height
     if film_type.get() == 'S8':
         pattern_filename = s8_pattern_filename
         expected_pattern_pos = (6.5, 34)
+        film_hole_height = S8_default_hole_height
     elif film_type.get() == 'R8':
         pattern_filename = r8_pattern_filename
         expected_pattern_pos = (9.6, 13.3)
-    film_hole_template = load_pattern_and_adjust_size(pattern_filename)
+        film_hole_height = R8_default_interhole_height
+    print("pattern_filename",pattern_filename)
+    film_hole_template = cv2.imread(pattern_filename, 0)
+
     project_config["FilmType"] = film_type.get()
     win.update()
 
@@ -377,17 +405,6 @@ def match_template(template, img, thres):
     if top_left[1] > 500:
         logging.debug("Image out of bounds: (%i,%i)",
                       top_left[0], top_left[1])
-    #     img_grey = resize_image(img_grey, 50)
-    #     img_bw = resize_image(img_bw, 50)
-    #     cv2.namedWindow("gray")
-    #     cv2.imshow("gray", img_grey)
-    #     cv2.namedWindow("bw")
-    #     cv2.imshow("bw", img_bw)
-    # cv2.namedWindow("template")
-    # cv2.imshow("template", template)
-    # bottom_right = (top_left[0] + w, top_left[1] + h)
-    # Drawing rectangle only for debugging
-    # cv2.rectangle(img, top_left, bottom_right, (0, 255, 0), 2)
     return top_left
 
 
@@ -581,66 +598,7 @@ def get_pattern_file():
         pattern_filename = pattern_file
 
     general_config["PatternFilename"] = pattern_filename
-    film_hole_template = load_pattern_and_adjust_size(pattern_filename)
-
-
-def load_pattern_and_adjust_size(pattern_filename):
-    global pattern_filename_entry
-
-    pattern_img = cv2.imread(pattern_filename, 0)
-    # width = pattern_img.shape[1]
-    # height = pattern_img.shape[0]
-
-    # Code introduced due to some errors that appeared to tell template is too big
-    # For now we disable it, we will see if it is needed again
-    # if height > 1000:
-    #     ratio = 1000/pattern_img.shape[0]
-    #     logging.debug("Film hole template too big (%i,%i). Downsizing by a factor of %i", width, height, ratio)
-    # else:
-    #     ratio = 1
-
-    if ui_init_done:    # do not attempt to update UI if not already constructed
-        # Update UI with new template file details
-        pattern_filename_entry.delete(0, 'end')
-        pattern_filename_entry.insert('end', pattern_filename)
-        pattern_filename_entry.icursor('end')
-        general_config["PatternFilename"] = pattern_filename
-        display_pattern(pattern_img)
-
-    # dsize = (round(ratio*width), round(ratio*height))
-    # resize image and return it
-    # return cv2.resize(pattern_img, dsize)
-    return pattern_img
-
-def display_pattern(pattern_img):
-    global pattern_canvas, pattern_filename
-
-    # If file does not exists, return
-    if not os.path.isfile(pattern_filename):
-        return
-
-    # Get canvas size
-    canvas_width = pattern_canvas.winfo_reqwidth()
-    canvas_height = pattern_canvas.winfo_reqheight()
-    # Calculate resize ratio (% calculated with 90 instead of 100
-    # to keep some margins
-    width_ratio = 100
-    height_ratio = 100
-    if pattern_img.shape[1] > canvas_width:
-        width_ratio = round(canvas_width*90/pattern_img.shape[1])
-    if pattern_img.shape[0] > canvas_height:
-        height_ratio = round(canvas_height*90/pattern_img.shape[0])
-    resize_ratio = min(width_ratio, height_ratio)
-    # Display image in dedicated space
-    pattern_img = resize_image(pattern_img, resize_ratio)
-    DisplayImage = ImageTk.PhotoImage(Image.fromarray(pattern_img))
-    # Label widget can be used to display a text or image on the screen.
-    pattern_canvas.create_image(round((canvas_width-pattern_img.shape[1])/2),
-                                round((canvas_height-pattern_img.shape[0])/2),
-                                anchor=NW, image=DisplayImage)
-    pattern_canvas.image = DisplayImage
-    # pattern_canvas.pack()
-    win.update()
+    film_hole_template = cv2.imread(pattern_filename, 0)
 
 
 def set_source_folder():
@@ -716,7 +674,6 @@ def perform_stabilization_selection():
 def perform_cropping_selection():
     global perform_cropping, perform_cropping
     global generate_video_checkbox
-    project_config["PerformCropping"] = perform_cropping.get()
     generate_video_checkbox.config(state=NORMAL if ffmpeg_installed
                                    and perform_cropping.get() else DISABLED)
 
@@ -799,32 +756,6 @@ def exit_app():  # Exit Application
     save_project_config()
 
     win.destroy()
-
-
-def display_image_in_label(img):
-    global PreviewWidth, PreviewHeight
-    global draw_capture_label, preview_border_frame
-
-    # Calculate display ratio and padding to display preview centered
-    image_height = img.shape[0]
-    image_width = img.shape[1]
-    if (abs(PreviewWidth - image_width) > abs(PreviewHeight - image_height)):
-        padding_y = max(0, round((PreviewHeight - (image_height * PreviewRatio)) / 2))
-        padding_x = 0
-    else:
-        padding_x = max(0, round((PreviewWidth - (image_width * PreviewRatio)) / 2))
-        padding_y = 0
-
-    img = resize_image(img, round(PreviewRatio*100))
-    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    DisplayableImage = ImageTk.PhotoImage(Image.fromarray(img))
-
-    # The Label widget can be used to display a text or image on the screen.
-    draw_capture_label.config(image=DisplayableImage)
-    draw_capture_label.image = DisplayableImage
-    #draw_capture_label.pack(ipadx=padding_x, ipady=padding_y)
-    draw_capture_label.pack()
-    win.update()
 
 
 def display_image(img):
@@ -959,6 +890,7 @@ def start_convert():
         ConvertLoopRunning = True
 
         if not skip_frame_regeneration.get():
+            adjust_hole_pattern_size()
             win.after(1, frame_generation_loop)
         else:
             win.after(1, video_generation_phase)
@@ -1336,7 +1268,7 @@ def save_project_config():
     global skip_frame_regeneration
     global frames_to_encode_spinbox
     global ffmpeg_preset, film_type
-    global pattern_filename
+    global StabilizeAreaDefined, film_hole_height
 
     # Write project data upon exit
     project_config["FramesToEncode"] = frames_to_encode_spinbox.get()
@@ -1347,7 +1279,10 @@ def save_project_config():
     project_config["FillBordersMode"] = fill_borders_mode.get()
     project_config["ProjectConfigDate"] = str(datetime.now())
     project_config["FilmType"] = film_type.get()
-    project_config["HolePatternFilename"] = pattern_filename
+    project_config["PerformCropping"] = perform_cropping.get()
+    if StabilizeAreaDefined:
+        project_config["HoleHeight"] = film_hole_height
+        project_config["PerformStabilization"] = perform_stabilization.get()
     with open(project_config_filename, 'w+') as f:
         json.dump(project_config, f)
 
@@ -1363,7 +1298,8 @@ def load_project_config():
     global skip_frame_regeneration
     global generate_video
     global CropTopLeft, CropBottomRight, perform_cropping
-    global pattern_filename_entry, pattern_filename, film_hole_template
+    global StabilizeAreaDefined, film_hole_height
+
 
     project_config_filename = os.path.join(SourceDir, project_config_basename)
     # Check if persisted project data file exist: If it does, load it
@@ -1460,14 +1396,19 @@ def load_project_config():
     else:
         fill_borders_mode.set('smear')
 
-    if ExpertMode:
-        if 'HolePatternFilename' in project_config:
-            pattern_filename = project_config["HolePatternFilename"]
-            pattern_filename_entry.delete(0, 'end')
-            pattern_filename_entry.insert('end', pattern_filename)
-            pattern_filename_entry.icursor('end')
+    if 'HoleHeight' in project_config:
+        film_hole_height = project_config["HoleHeight"]
+        StabilizeAreaDefined = True
+        perform_stabilization_checkbox.config(state=NORMAL)
+    else:
+        film_hole_height = 0
+        StabilizeAreaDefined = False
+        perform_stabilization_checkbox.config(state=DISABLED)
 
-        film_hole_template = load_pattern_and_adjust_size(pattern_filename)
+    if 'PerformStabilization' in project_config:
+        perform_stabilization.set(project_config["PerformStabilization"])
+    else:
+        perform_stabilization.set(False)
 
     widget_state_refresh()
 
@@ -1579,8 +1520,7 @@ def build_ui():
     global ffmpeg_preset_rb1, ffmpeg_preset_rb2, ffmpeg_preset_rb3
     global skip_frame_regeneration
     global ExpertMode
-    global pattern_canvas
-    global pattern_filename_entry, pattern_filename
+    global pattern_filename
     global frame_input_filename_pattern
     global FrameInputFilenamePattern
     global frame_slider
@@ -1705,6 +1645,22 @@ def build_ui():
         textvariable=frames_to_encode_str, from_=0, to=50000)
     frames_to_encode_spinbox.grid(row=postprocessing_row, column=2, sticky=W)
     frames_to_encode_selection('down')
+    postprocessing_row += 1
+
+    # Check box to do stabilization or not
+    perform_stabilization = tk.BooleanVar(value=False)
+    perform_stabilization_checkbox = tk.Checkbutton(
+        postprocessing_frame, text='Stabilize',
+        variable=perform_stabilization, onvalue=True, offvalue=False, width=7,
+        command=perform_stabilization_selection)
+    perform_stabilization_checkbox.grid(row=postprocessing_row, column=0,
+                                        sticky=W)
+    perform_stabilization_checkbox.config(state=DISABLED)
+    stabilize_btn = Button(postprocessing_frame, text='Define hole height',
+                          width=24, height=1, command=select_hole_height,
+                          activebackground='green', activeforeground='white',
+                          wraplength=120, font=("Arial", 8))
+    stabilize_btn.grid(row=postprocessing_row, column=1, columnspan=2, sticky=W)
     postprocessing_row += 1
 
     # Check box to do cropping or not
@@ -1915,48 +1871,9 @@ def build_ui():
 
         # Stabilization details (in non-expert mode default values are OK)
         # Pattern file selection
-        stabilize_frame = LabelFrame(expert_frame, text='Stabilize details',
+        test_frame = LabelFrame(expert_frame, text='Test Area',
                                      width=26, height=8, font=("Arial", 7))
-        stabilize_frame.pack(side=LEFT, anchor=N)
-        pattern_filename_entry = Entry(stabilize_frame, width=38, borderwidth=1,
-                                 font=("Arial", 7))
-        # Only if file does exists, add it to edit box, and load it
-        if os.path.isfile(pattern_filename):
-            pattern_filename_entry.delete(0, 'end')
-            pattern_filename_entry.insert('end', pattern_filename)
-            pattern_filename_entry.icursor('end')
-            film_hole_template = load_pattern_and_adjust_size(pattern_filename)
-        pattern_filename_entry.grid(row=0, column=0, columnspan=2, sticky=W)
-        pattern_filename_btn = Button(stabilize_frame, text='Pattern', width=6,
-                                      height=1, command=get_pattern_file,
-                                      activebackground='green',
-                                      activeforeground='white', wraplength=80,
-                                      font=("Arial", 7))
-        pattern_filename_btn.grid(row=0, column=2, sticky=W)
-
-        # Check box to do stabilization or not
-        perform_stabilization_checkbox = tk.Checkbutton(
-            stabilize_frame, text='Stabilize', variable=perform_stabilization,
-            onvalue=True, offvalue=False, width=7, font=("Arial", 7),
-            command=perform_stabilization_selection)
-        perform_stabilization_checkbox.grid(row=1, column=0, sticky=W)
-        # Initially the stabilization checkbox was disabled by default, until
-        # the area was defined. However, since the default values calculated by
-        # the app are good enough, we remove this dependency. Furthermore, the
-        # whole stabilizatino settings will be moved to the expert area (for
-        # special cases only)
-        stabilization_btn = Button(stabilize_frame,
-                                   text='Sprocket hole search area',
-                                   width=34, height=1, font=("Arial", 7),
-                                   command=select_stabilization_area,
-                                   activebackground='green',
-                                   activeforeground='white', wraplength=120)
-        stabilization_btn.grid(row=1, column=1, columnspan=2, sticky=W)
-
-        # Create canvas to display pattern image
-        pattern_canvas = Canvas(stabilize_frame, width=22, height=22,
-                                bg='dark grey')
-        pattern_canvas.grid(row=0, column=3, sticky=N, padx=5)
+        test_frame.pack(side=LEFT, anchor=N)
 
 
 def main(argv):
@@ -1974,7 +1891,7 @@ def main(argv):
 
     LoggingMode = "warning"
 
-    film_hole_template = load_pattern_and_adjust_size(pattern_filename)
+    film_hole_template = cv2.imread(pattern_filename, 0)
 
     opts, args = getopt.getopt(argv, "hel:")
 
@@ -2022,9 +1939,7 @@ def main(argv):
 
     # Init some variables here
     # video_encoding_do_not_warn_again is required by config read
-    # perform_stabilization was defined only in expert mode
     video_encoding_do_not_warn_again = tk.BooleanVar(value=False)
-    perform_stabilization = tk.BooleanVar(value=True)
 
     build_ui()
 
