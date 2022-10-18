@@ -184,7 +184,7 @@ def select_rectangle_area():
     # adjust_hole_pattern_size()
     # Image is stabilized to have an accurate selection of crop area.
     # This leads to some interesting situation...
-    work_image = stabilize_image(work_image)
+    # work_image = stabilize_image(work_image)
     work_image = resize_image(work_image, 100*preview_factor)
 
     # work_image = np.zeros((512,512,3), np.uint8)
@@ -212,7 +212,7 @@ def select_hole_height():
     global perform_stabilization, perform_stabilization_checkbox
     global HoleSearchTopLeft, HoleSearchBottomRight
     global StabilizeAreaDefined
-    global film_hole_height, film_hole_template
+    global film_hole_height, film_hole_template, preview_factor
 
     # Disable all buttons in main window
     button_status_change_except(0, DISABLED)
@@ -224,7 +224,7 @@ def select_hole_height():
         StabilizeAreaDefined = True
         perform_stabilization_checkbox.config(state=NORMAL)
         # Avoid negative values
-        film_hole_height = RectangleBottomRight[1] - RectangleTopLeft[1]
+        film_hole_height = (RectangleBottomRight[1] - RectangleTopLeft[1]) / preview_factor
         logging.debug("Selected Rectangle: (%i,%i) - (%i, %i)",
                       RectangleTopLeft[0], RectangleTopLeft[1],
                       RectangleBottomRight[0], RectangleBottomRight[1])
@@ -298,12 +298,12 @@ def adjust_hole_pattern_size():
     global film_hole_height, film_hole_template
 
     ratio = 1
-    if perform_stabilization.get():
-        if film_type.get() == 'S8':
-            ratio = film_hole_height / S8_default_hole_height
-        elif film_type.get() == 'R8':
-            ratio = film_hole_height / R8_default_interhole_height
+    if film_type.get() == 'S8':
+        ratio = film_hole_height / S8_default_hole_height
+    elif film_type.get() == 'R8':
+        ratio = film_hole_height / R8_default_interhole_height
     print("ratio=", ratio)
+    print("pattern_filename",pattern_filename)
     film_hole_template = resize_image(film_hole_template, ratio*100)
 
 
@@ -362,6 +362,7 @@ def widget_state_refresh():
     global fill_borders_mode_label_dropdown
     global video_fps_dropdown, video_fps_label, video_filename_name
     global ffmpeg_preset_rb1, ffmpeg_preset_rb2, ffmpeg_preset_rb3
+    global ExpertMode
 
     if CropTopLeft != (0, 0) and CropBottomRight != (0, 0):
         CropAreaDefined = True
@@ -382,14 +383,15 @@ def widget_state_refresh():
         state=NORMAL if generate_video.get() else DISABLED)
     ffmpeg_preset_rb3.config(
         state=NORMAL if generate_video.get() else DISABLED)
-    fill_borders_checkbox.config(
-        state=NORMAL if generate_video.get() else DISABLED)
-    fill_borders_thickness_slider.config(
-        state=NORMAL if generate_video.get() else DISABLED)
-    fill_borders_mode_label.config(
-        state=NORMAL if generate_video.get() else DISABLED)
-    fill_borders_mode_label_dropdown.config(
-        state=NORMAL if generate_video.get() else DISABLED)
+    if ExpertMode:
+        fill_borders_checkbox.config(
+            state=NORMAL if generate_video.get() else DISABLED)
+        fill_borders_thickness_slider.config(
+            state=NORMAL if generate_video.get() else DISABLED)
+        fill_borders_mode_label.config(
+            state=NORMAL if generate_video.get() else DISABLED)
+        fill_borders_mode_label_dropdown.config(
+            state=NORMAL if generate_video.get() else DISABLED)
 
 
 def match_template(template, img, thres):
@@ -582,25 +584,6 @@ def crop_image(img, top_left, botton_right):
     return img[Y_start:Y_end, X_start:X_end]
 
 
-def get_pattern_file():
-    global pattern_filename, film_hole_template
-
-    pattern_file = tk.filedialog.askopenfilename(
-        initialdir=os.path.dirname(pattern_filename),
-        title="Select perforation hole pattern file",
-        filetypes=(("jpeg files", "*.jpg"),
-                   ("png files", "*.png"),
-                   ("all files", "*.*")))
-
-    if not pattern_file:
-        return
-    else:
-        pattern_filename = pattern_file
-
-    general_config["PatternFilename"] = pattern_filename
-    film_hole_template = cv2.imread(pattern_filename, 0)
-
-
 def set_source_folder():
     global SourceDir, CurrentFrame, frame_slider, Go_btn, cropping_btn
     global first_absolute_frame
@@ -731,14 +714,15 @@ def generate_video_selection():
         state=NORMAL if generate_video.get() else DISABLED)
     ffmpeg_preset_rb3.config(
         state=NORMAL if generate_video.get() else DISABLED)
-    fill_borders_checkbox.config(
-        state=NORMAL if generate_video.get() else DISABLED)
-    fill_borders_thickness_slider.config(
-        state=NORMAL if generate_video.get() else DISABLED)
-    fill_borders_mode_label.config(
-        state=NORMAL if generate_video.get() else DISABLED)
-    fill_borders_mode_label_dropdown.config(
-        state=NORMAL if generate_video.get() else DISABLED)
+    if ExpertMode:
+        fill_borders_checkbox.config(
+            state=NORMAL if generate_video.get() else DISABLED)
+        fill_borders_thickness_slider.config(
+            state=NORMAL if generate_video.get() else DISABLED)
+        fill_borders_mode_label.config(
+            state=NORMAL if generate_video.get() else DISABLED)
+        fill_borders_mode_label_dropdown.config(
+            state=NORMAL if generate_video.get() else DISABLED)
 
 
 def set_fps(selected):
@@ -890,7 +874,7 @@ def start_convert():
         ConvertLoopRunning = True
 
         if not skip_frame_regeneration.get():
-            adjust_hole_pattern_size()
+            # adjust_hole_pattern_size()
             win.after(1, frame_generation_loop)
         else:
             win.after(1, video_generation_phase)
@@ -1023,7 +1007,7 @@ def video_generation_phase():
             extra_output_options = ""
             if frames_to_encode > 0:
                 extra_output_options += (' -frames:v' + str(frames_to_encode))
-            if fill_borders.get():
+            if ExpertMode and fill_borders.get():
                 extra_output_options += [
                      '-filter_complex',
                      '[0:v] fillborders='
@@ -1062,7 +1046,7 @@ def video_generation_phase():
             extra_output_options = []
             if frames_to_encode > 0:
                 extra_output_options += ['-frames:v', str(frames_to_encode)]
-            if fill_borders.get():
+            if ExpertMode and fill_borders.get():
                 extra_output_options += [
                      '-filter_complex',
                      '[0:v] fillborders='
@@ -1133,6 +1117,12 @@ def get_current_dir_file_list():
     SourceDirFileList = sorted(list(glob(os.path.join(
         SourceDir,
         FrameInputFilenamePattern))))
+    if len(SourceDirFileList) == 0:
+        tk.messagebox.showerror("Error!",
+                                "No files match pattern name. "
+                                "Please specify new one and try again")
+        return
+
     first_absolute_frame = int(
         ''.join(list(filter(str.isdigit,
                             os.path.basename(SourceDirFileList[0])))))
@@ -1155,6 +1145,9 @@ def init_display():
         return
 
     os.chdir(SourceDir)
+
+    if len(SourceDirFileList) == 0:
+        return
 
     file = SourceDirFileList[CurrentFrame]
 
@@ -1274,15 +1267,17 @@ def save_project_config():
     project_config["FramesToEncode"] = frames_to_encode_spinbox.get()
     project_config["skip_frame_regeneration"] = skip_frame_regeneration.get()
     project_config["FFmpegPreset"] = ffmpeg_preset.get()
-    project_config["FillBorders"] = fill_borders.get()
-    project_config["FillBordersThickness"] = fill_borders_thickness.get()
-    project_config["FillBordersMode"] = fill_borders_mode.get()
     project_config["ProjectConfigDate"] = str(datetime.now())
     project_config["FilmType"] = film_type.get()
     project_config["PerformCropping"] = perform_cropping.get()
     if StabilizeAreaDefined:
         project_config["HoleHeight"] = film_hole_height
         project_config["PerformStabilization"] = perform_stabilization.get()
+    if ExpertMode:
+        project_config["FillBorders"] = fill_borders.get()
+        project_config["FillBordersThickness"] = fill_borders_thickness.get()
+        project_config["FillBordersMode"] = fill_borders_mode.get()
+
     with open(project_config_filename, 'w+') as f:
         json.dump(project_config, f)
 
@@ -1299,6 +1294,7 @@ def load_project_config():
     global generate_video
     global CropTopLeft, CropBottomRight, perform_cropping
     global StabilizeAreaDefined, film_hole_height
+    global ExpertMode
 
 
     project_config_filename = os.path.join(SourceDir, project_config_basename)
@@ -1381,21 +1377,6 @@ def load_project_config():
     else:
         ffmpeg_preset.set("veryfast")
 
-    if 'FillBorders' in project_config:
-        fill_borders.set(project_config["FillBorders"])
-    else:
-        fill_borders.set(False)
-
-    if 'FillBordersThickness' in project_config:
-        fill_borders_thickness.set(project_config["FillBordersThickness"])
-    else:
-        fill_borders_thickness.set(5)
-
-    if 'FillBordersMode' in project_config:
-        fill_borders_mode.set(project_config["FillBordersMode"])
-    else:
-        fill_borders_mode.set('smear')
-
     if 'HoleHeight' in project_config:
         film_hole_height = project_config["HoleHeight"]
         StabilizeAreaDefined = True
@@ -1409,6 +1390,22 @@ def load_project_config():
         perform_stabilization.set(project_config["PerformStabilization"])
     else:
         perform_stabilization.set(False)
+
+    if ExpertMode:
+        if 'FillBorders' in project_config:
+            fill_borders.set(project_config["FillBorders"])
+        else:
+            fill_borders.set(False)
+        if 'FillBordersThickness' in project_config:
+            fill_borders_thickness.set(project_config["FillBordersThickness"])
+        else:
+            fill_borders_thickness.set(5)
+
+        if 'FillBordersMode' in project_config:
+            fill_borders_mode.set(project_config["FillBordersMode"])
+        else:
+            fill_borders_mode.set('smear')
+
 
     widget_state_refresh()
 
@@ -1784,56 +1781,6 @@ def build_ui():
     ffmpeg_preset.set('medium')
     video_row += 1
 
-    # Check box - Fill borders
-    fill_borders = tk.BooleanVar(value=False)
-    fill_borders_checkbox = tk.Checkbutton(video_frame,
-                                           text='Fill borders',
-                                           variable=fill_borders,
-                                           onvalue=True, offvalue=False,
-                                           command=fill_borders_selection,
-                                           width=9)
-    fill_borders_checkbox.grid(row=video_row, column=0, columnspan=1, sticky=W)
-    fill_borders_checkbox.config(state=NORMAL if ffmpeg_installed and
-                                 perform_cropping.get() else DISABLED)
-    # Fill border thickness
-    fill_borders_thickness = IntVar(value=20)
-    fill_borders_thickness_slider = Scale(
-        video_frame, orient=HORIZONTAL, from_=5, to=50,
-        variable=fill_borders_thickness,
-        command=select_scale_fill_borders_thickness,
-        font=("Arial", 8), length=80)
-    fill_borders_thickness_slider.grid(row=video_row, column=1, sticky=W)
-    fill_borders_thickness_slider.config(state=DISABLED)
-    # Fill border mode
-    # Dropdown menu options
-    fill_borders_mode_list = [
-        "smear",
-        "mirror",
-        "fixed"
-    ]
-
-    # datatype of menu text
-    fill_borders_mode = StringVar()
-
-    # initial menu text
-    fill_borders_mode.set("smear")
-
-    # Create fill border mode Dropdown menu
-    fill_borders_mode_frame = Frame(video_frame)
-    fill_borders_mode_frame.grid(row=video_row, column=2, sticky=W)
-    fill_borders_mode_label = Label(fill_borders_mode_frame, text='Mode:')
-    fill_borders_mode_label.pack(side=LEFT, anchor=W)
-    fill_borders_mode_label.config(state=DISABLED)
-    fill_borders_mode_label_dropdown = OptionMenu(
-        fill_borders_mode_frame,
-        fill_borders_mode,
-        *fill_borders_mode_list,
-        command=set_fill_borders_mode)
-    fill_borders_mode_label_dropdown.pack(side=LEFT, anchor=E)
-    fill_borders_mode_label_dropdown.config(state=DISABLED)
-
-    video_row += 1
-
     postprocessing_bottom_frame = Frame(video_frame, width=30)
     postprocessing_bottom_frame.grid(row=video_row, column=0)
 
@@ -1857,9 +1804,7 @@ def build_ui():
                          video_fps_dropdown,
                          ffmpeg_preset_rb1,
                          ffmpeg_preset_rb2,
-                         ffmpeg_preset_rb3,
-                         fill_borders_checkbox,
-                         fill_borders_thickness_slider]
+                         ffmpeg_preset_rb3]
     for aw in AfterScan_widgets:
         aw.lift()
     frame_slider.focus()
@@ -1869,11 +1814,60 @@ def build_ui():
         expert_frame = Frame(win, width=900, height=100)
         expert_frame.grid(row=1, column=0, padx=5, pady=5, sticky=W)
 
-        # Stabilization details (in non-expert mode default values are OK)
-        # Pattern file selection
-        test_frame = LabelFrame(expert_frame, text='Test Area',
+        # Video filters area
+        video_filters_frame = LabelFrame(expert_frame, text='Video Filters Area',
                                      width=26, height=8, font=("Arial", 7))
-        test_frame.pack(side=LEFT, anchor=N)
+        video_filters_frame.pack(side=LEFT, anchor=N)
+
+        # Check box - Fill borders
+        fill_borders = tk.BooleanVar(value=False)
+        fill_borders_checkbox = tk.Checkbutton(video_filters_frame,
+                                               text='Fill borders',
+                                               variable=fill_borders,
+                                               onvalue=True, offvalue=False,
+                                               command=fill_borders_selection,
+                                               width=9)
+        fill_borders_checkbox.grid(row=0, column=0, columnspan=1, sticky=W)
+        fill_borders_checkbox.config(state=NORMAL if ffmpeg_installed and
+                                     perform_cropping.get() else DISABLED)
+        # Fill border thickness
+        fill_borders_thickness = IntVar(value=20)
+        fill_borders_thickness_slider = Scale(
+            video_filters_frame, orient=HORIZONTAL, from_=5, to=50,
+            variable=fill_borders_thickness,
+            command=select_scale_fill_borders_thickness,
+            font=("Arial", 8), length=80)
+        fill_borders_thickness_slider.grid(row=0, column=1, sticky=W)
+        fill_borders_thickness_slider.config(state=DISABLED)
+        # Fill border mode
+        # Dropdown menu options
+        fill_borders_mode_list = [
+            "smear",
+            "mirror",
+            "fixed"
+        ]
+
+        # datatype of menu text
+        fill_borders_mode = StringVar()
+
+        # initial menu text
+        fill_borders_mode.set("smear")
+
+        # Create fill border mode Dropdown menu
+        fill_borders_mode_frame = Frame(video_filters_frame)
+        fill_borders_mode_frame.grid(row=0, column=2, sticky=W)
+        fill_borders_mode_label = Label(fill_borders_mode_frame, text='Mode:')
+        fill_borders_mode_label.pack(side=LEFT, anchor=W)
+        fill_borders_mode_label.config(state=DISABLED)
+        fill_borders_mode_label_dropdown = OptionMenu(
+            fill_borders_mode_frame,
+            fill_borders_mode,
+            *fill_borders_mode_list,
+            command=set_fill_borders_mode)
+        fill_borders_mode_label_dropdown.pack(side=LEFT, anchor=E)
+        fill_borders_mode_label_dropdown.config(state=DISABLED)
+
+        video_row += 1
 
 
 def main(argv):
@@ -1891,7 +1885,16 @@ def main(argv):
 
     LoggingMode = "warning"
 
-    film_hole_template = cv2.imread(pattern_filename, 0)
+    if os.path.isfile(pattern_filename):
+        film_hole_template = cv2.imread(pattern_filename, 0)
+    else:
+        tk.messagebox.showerror(
+            "Error: Hole template not found",
+            "After scan needs film hole templates to work.\r\n"
+            "File " + os.path.basename(pattern_filename) + " does not exist; "
+            "Please copy it to the working folder of AfterScan and try again.")
+        exit(-1)
+
 
     opts, args = getopt.getopt(argv, "hel:")
 
