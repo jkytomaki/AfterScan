@@ -19,7 +19,7 @@ This tool relies in the following open source projects to achieve its objectives
 ## How it works:
 Sprocket holes in 8mm films are expected to be in a very precise location for each film type (S8/R8). What this tool does is to detect, thanks to OpenCV, the hole() in each frame, and then shift the frame as required so that the holes fall in the expected position. This process is individual for each frame, so the length of the scanned film should have no effect on the result. A few points to highlight:
 - Make sure that the input files provided to the tool contain each a full frame, with the sprocket hole(s) visible, or at least 50% visible. Otherwise the results will not be good.
-- When dealing with overexposed frames, where the sprocket hole is not visible to the naked eye, the tool will not be able to stabilize the frame properly. However that use case does not sound like a bit issue to me.
+- When dealing with overexposed frames, where the sprocket hole is not visible to the naked eye, the tool will not be able to stabilize the frame properly. However, as nothing is usually visible in such frames, and there should be very few of them, should not be a big deal.
 
 ## Basic instructions:
 1) Select the source and target folders. They have to be different folders; frames will be taken from the source folder and, after processing, saved in the target folder, to be used at the video generation step, or by a third party tool to perform further processing.
