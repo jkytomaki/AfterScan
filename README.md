@@ -1,6 +1,6 @@
 # AfterScan - R8/S8 film post-scan utility 
 
-__Update - Extended validation done for Regular 8, which now seems to work fine (same as S8 at least). Also some basic validation in Windows done. If you have problems with the stability of the frames, you can tune the film hole templates (Pattern.S8.jpg and Pattern.R8.jpg) to match your captured frames.__
+__Update - After some changes in the last few days, the tool is able now to handle R8/S8 frames with different sizes than the default one used by T-Scann 8 with RPi HD camera (2028x1520), without the need to create any custom template. Also all the bugs identified (mostly happening during the change of project) should be fixed.__
 
 This utility is intended to handle the basic post-processing after film scanning is completed.
 Originally created for the T-Scann 8 project (Torulf Holmström, http://tscann8.torulf.com/index.html), but probably can be used for other film scanners as well.
