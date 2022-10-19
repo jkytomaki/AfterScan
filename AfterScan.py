@@ -57,8 +57,7 @@ frame_scale_refresh_pending = False
 frames_to_encode = 0
 CurrentFrame = 0
 StartFrame = 0
-global work_image
-global img_original
+global work_image, base_image, original_image
 
 # Configuration & support file vars
 script_dir = os.path.realpath(sys.argv[0])
@@ -709,8 +708,7 @@ adapted from various authors in Stack Overflow)
 
 
 def draw_rectangle(event, x, y, flags, param):
-    global work_image
-    global img_original
+    global work_image, base_image, original_image
     global rectangle_drawing
     global ix, iy
     global x_, y_
@@ -720,7 +718,7 @@ def draw_rectangle(event, x, y, flags, param):
 
     if event == cv2.EVENT_LBUTTONDOWN:
         if not rectangle_drawing:
-            work_image = np.copy(img_original)
+            work_image = np.copy(base_image)
             x_, y_ = -10, -10
             ix, iy = -10, -10
         rectangle_drawing = True
@@ -738,22 +736,21 @@ def draw_rectangle(event, x, y, flags, param):
         # Need to account for the fact area calculated with 50% reduced image
         RectangleTopLeft = (max(0, round(min(ix, x)/area_select_image_factor)),
                             max(0, round(min(iy, y)/area_select_image_factor)))
-        RectangleBottomRight = (min(img_original.shape[1], round(max(ix, x)/area_select_image_factor)),
-                                min(img_original.shape[0], round(max(iy, y)/area_select_image_factor)))
-        logging.debug("Original image: (%i, %i)", img_original.shape[1], img_original.shape[0])
+        RectangleBottomRight = (min(original_image.shape[1], round(max(ix, x)/area_select_image_factor)),
+                                min(original_image.shape[0], round(max(iy, y)/area_select_image_factor)))
+        logging.debug("Original image: (%i, %i)", original_image.shape[1], original_image.shape[0])
         logging.debug("Selected area: (%i, %i), (%i, %i)",
                       RectangleTopLeft[0], RectangleTopLeft[1],
                       RectangleBottomRight[0], RectangleBottomRight[1])
 
 
 def select_rectangle_area():
-    global work_image
+    global work_image, base_image, original_image
     global CurrentFrame, first_absolute_frame
     global SourceDirFileList
     global rectangle_drawing
     global ix, iy
     global x_, y_
-    global img_original
     global area_select_image_factor
 
     retvalue = False
@@ -763,17 +760,14 @@ def select_rectangle_area():
     file = SourceDirFileList[CurrentFrame]
 
     # load the image, clone it, and setup the mouse callback function
-    work_image = cv2.imread(file, cv2.IMREAD_UNCHANGED)
-
-    # Scale hole template as required
-    # adjust_hole_pattern_size()
-    # Image is stabilized to have an accurate selection of crop area.
-    # This leads to some interesting situation...
-    # work_image = stabilize_image(work_image)
-    work_image = resize_image(work_image, 100*area_select_image_factor)
+    original_image = cv2.imread(file, cv2.IMREAD_UNCHANGED)
+    # Stabilize image to make sure target image matches user visual definition
+    original_image = stabilize_image(original_image)
+    # Scale area selection image as required
+    work_image = resize_image(original_image, 100*area_select_image_factor)
 
     # work_image = np.zeros((512,512,3), np.uint8)
-    img_original = np.copy(work_image)
+    base_image = np.copy(work_image)
     cv2.namedWindow(RectangleWindowTitle)
     cv2.setMouseCallback(RectangleWindowTitle, draw_rectangle)
     while 1:
@@ -1503,7 +1497,7 @@ def afterscan_init():
     global draw_capture_label
     global draw_capture_canvas
     global PreviewWidth, PreviewHeight
-    global area_select_image_factor, screen_height
+    global screen_height
     global preview_border_frame
     global ExpertMode
 
