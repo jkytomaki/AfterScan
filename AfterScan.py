@@ -49,12 +49,18 @@ import platform
 import threading
 import re
 
+# Frame vars
 first_absolute_frame = 0
 last_absolute_frame = 0
 frame_scale_refresh_done = True
 frame_scale_refresh_pending = False
 frames_to_encode = 0
-# Python scrips folder, to store the json file with configuration data
+CurrentFrame = 0
+StartFrame = 0
+global work_image
+global img_original
+
+# Configuration & support file vars
 script_dir = os.path.realpath(sys.argv[0])
 script_dir = os.path.dirname(script_dir)
 general_config_filename = os.path.join(script_dir, "AfterScan.json")
@@ -63,6 +69,12 @@ project_config_filename = ""
 r8_pattern_filename = os.path.join(script_dir, "Pattern.R8.jpg")
 s8_pattern_filename = os.path.join(script_dir, "Pattern.S8.jpg")
 pattern_filename = s8_pattern_filename
+general_config = {
+}
+project_config = {
+}
+
+# Film hole search vars
 expected_pattern_pos = (6.5, 38)
 S8_default_hole_height = 344
 R8_default_interhole_height = 808
@@ -70,24 +82,26 @@ pattern_bw_filename = os.path.join(script_dir, "Pattern_BW.jpg")
 pattern_wb_filename = os.path.join(script_dir, "Pattern_WB.jpg")
 film_hole_height = 0
 film_hole_template = None
+HoleSearchTopLeft = (0, 0)
+HoleSearchBottomRight = (0, 0)
+
+# Film frames (in/out) file vars
 TargetVideoFilename = ""
 SourceDir = ""
 TargetDir = ""
-FrameFilenameOutputPattern = "picture-%05d.jpg"
-FrameCheckFilenameOutputPattern = "picture-*.jpg"  # We need this because ...
-FrameInputFilenamePattern = "picture-*.jpg"  # ...this one can be customized
+FrameFilenameOutputPattern = "picture_out-%05d.jpg"
+FrameCheckFilenameOutputPattern = "picture_out-*.jpg"  # Req. for ffmpeg gen.
+FrameInputFilenamePattern = "picture-*.jpg"
 SourceDirFileList = []
-CurrentFrame = 0
-StartFrame = 0
+
+#Flow control vars
 ConvertLoopExitRequested = False
 ConvertLoopRunning = False
-# preview dimensions (4/3 format)
+
+# preview dimensions (4/3 format) vars
 PreviewWidth = 700
 PreviewHeight = 525
 PreviewRatio = 1  # Defined globally for homogeneity, to be calculated once per project
-ExpertMode = False
-IsWindows = False
-IsLinux = False
 
 # Crop area rectangle drawing vars
 ref_point = []
@@ -103,334 +117,229 @@ StabilizeAreaDefined = False
 CropAreaDefined = False
 RectangleTopLeft = (0, 0)
 RectangleBottomRight = (0, 0)
-HoleSearchTopLeft = (0, 0)
-HoleSearchBottomRight = (0, 0)
 CropTopLeft = (0, 0)
 CropBottomRight = (0, 0)
+
+# Video generation vars
 VideoFps = 18
 FfmpegBinName = ""
 ui_init_done = False
 IgnoreConfig = False
-
-global win
 global ffmpeg_installed
-global work_image
-global img_original
 
-general_config = {
-}
-
-project_config = {
-}
-
-# Code below to draw a rectangle to select area to crop or find hole, taken
-# from various authors in Stack Overflow:
+# Miscellaneous vars
+global win
+ExpertMode = False
+IsWindows = False
+IsLinux = False
 
 
-def draw_rectangle(event, x, y, flags, param):
-    global work_image
-    global img_original
-    global rectangle_drawing
-    global ix, iy
-    global x_, y_
-    # Code posted by Ahsin Shabbir, same Stack overflow thread
-    global RectangleTopLeft, RectangleBottomRight
-    global preview_factor
-
-    if event == cv2.EVENT_LBUTTONDOWN:
-        if not rectangle_drawing:
-            work_image = np.copy(img_original)
-            x_, y_ = -10, -10
-            ix, iy = -10, -10
-        rectangle_drawing = True
-        ix, iy = x, y
-        x_, y_ = x, y
-    elif event == cv2.EVENT_MOUSEMOVE and rectangle_drawing:
-        copy = work_image.copy()
-        x_, y_ = x, y
-        cv2.rectangle(copy, (ix, iy), (x_, y_), (0, 255, 0), 1)
-        cv2.imshow(RectangleWindowTitle, copy)
-    elif event == cv2.EVENT_LBUTTONUP:
-        rectangle_drawing = False
-        cv2.rectangle(work_image, (ix, iy), (x, y), (0, 255, 0), 1)
-        # Update global variables with area
-        # Need to account for the fact area calculated with 50% reduced image
-        RectangleTopLeft = (max(0, round(min(ix, x)/preview_factor)),
-                            max(0, round(min(iy, y)/preview_factor)))
-        RectangleBottomRight = (min(img_original.shape[1], round(max(ix, x)/preview_factor)),
-                                min(img_original.shape[0], round(max(iy, y)/preview_factor)))
-        logging.debug("Original image: (%i, %i)", img_original.shape[1], img_original.shape[0])
-        logging.debug("Selected area: (%i, %i), (%i, %i)",
-                      RectangleTopLeft[0], RectangleTopLeft[1],
-                      RectangleBottomRight[0], RectangleBottomRight[1])
+"""
+####################################
+Configuration file support functions
+####################################
+"""
 
 
-def select_rectangle_area():
-    global work_image
-    global CurrentFrame, first_absolute_frame
-    global SourceDirFileList
-    global rectangle_drawing
-    global ix, iy
-    global x_, y_
-    global img_original
-    global preview_factor
-
-    retvalue = False
-    ix, iy = -1, -1
-    x_, y_ = 0, 0
-
-    file = SourceDirFileList[CurrentFrame]
-
-    # load the image, clone it, and setup the mouse callback function
-    work_image = cv2.imread(file, cv2.IMREAD_UNCHANGED)
-
-    # Scale hole template as required
-    # adjust_hole_pattern_size()
-    # Image is stabilized to have an accurate selection of crop area.
-    # This leads to some interesting situation...
-    # work_image = stabilize_image(work_image)
-    work_image = resize_image(work_image, 100*preview_factor)
-
-    # work_image = np.zeros((512,512,3), np.uint8)
-    img_original = np.copy(work_image)
-    cv2.namedWindow(RectangleWindowTitle)
-    cv2.setMouseCallback(RectangleWindowTitle, draw_rectangle)
-    while 1:
-        cv2.imshow(RectangleWindowTitle, work_image)
-        if not cv2.EVENT_MOUSEMOVE:
-            copy = work_image.copy()
-            cv2.rectangle(copy, (ix, iy), (x_, y_), (0, 255, 0), 1)
-            cv2.imshow(RectangleWindowTitle, copy)
-        k = cv2.waitKey(1) & 0xFF
-        if k == 13 and not rectangle_drawing:  # Enter: Confirm selection
-            retvalue = True
-            break
-        elif k == 27:  # Escape: Cancel selection
-            break
-    cv2.destroyAllWindows()
-    return retvalue
+def save_general_config():
+    # Write config data upon exit
+    general_config["GeneralConfigDate"] = str(datetime.now())
+    with open(general_config_filename, 'w+') as f:
+        json.dump(general_config, f)
 
 
-def select_hole_height():
-    global RectangleWindowTitle
-    global perform_stabilization, perform_stabilization_checkbox
-    global HoleSearchTopLeft, HoleSearchBottomRight
-    global StabilizeAreaDefined
-    global film_hole_height, film_hole_template, preview_factor
+def load_general_config():
+    global general_config
+    global general_config_filename
+    global LastSessionDate
+    global SourceDir, TargetDir
+    global folder_frame_source_dir, folder_frame_target_dir
+    global video_encoding_do_not_warn_again
 
-    # Disable all buttons in main window
-    # button_status_change_except(0, DISABLED)
-    # win.update()
+    # Check if persisted data file exist: If it does, load it
+    if not IgnoreConfig and os.path.isfile(general_config_filename):
+        persisted_data_file = open(general_config_filename)
+        general_config = json.load(persisted_data_file)
+        persisted_data_file.close()
+    else:   # No project config file. Set empty config to force defaults
+        general_config = {}
 
-    # load the image, find hole height
-    while True:
-        file = SourceDirFileList[CurrentFrame]
-        work_image = cv2.imread(file, cv2.IMREAD_UNCHANGED)
-        set_default_stabilization_values(work_image)
-        film_hole_height = determine_hole_height(work_image)
-        if (film_hole_height != 0):
-            break
-    if film_hole_height < 0:
-        film_hole_height = 0
-        StabilizeAreaDefined = False
-        perform_stabilization.set(False)
-        perform_stabilization_checkbox.config(state=DISABLED)
-    else:
-        StabilizeAreaDefined = True
-        perform_stabilization_checkbox.config(state=NORMAL)
-        adjust_hole_pattern_size()
-    win.update()
+    for item in general_config:
+        logging.info("%s=%s", item, str(general_config[item]))
 
-
-def select_cropping_area():
-    global RectangleWindowTitle
-    global perform_cropping
-    global CropTopLeft, CropBottomRight
-    global CropAreaDefined
-
-    # Disable all buttons in main window
-    button_status_change_except(0, DISABLED)
-    win.update()
-
-    RectangleWindowTitle = CropWindowTitle
-
-    if select_rectangle_area():
-        CropAreaDefined = True
-        button_status_change_except(0, NORMAL)
-        # FFmpeg does not like odd dimensions
-        # Adjust (increasing BottomRight)in case of odd width/height
-        rectangle_bottom_right_list = list(RectangleBottomRight)
-        if (RectangleBottomRight[0] - RectangleTopLeft[0]) % 2 == 1:
-            rectangle_bottom_right_list[0] += 1
-        if (RectangleBottomRight[1] - RectangleTopLeft[1]) % 2 == 1:
-            rectangle_bottom_right_list[1] += 1
-        CropTopLeft = RectangleTopLeft
-        CropBottomRight = tuple(rectangle_bottom_right_list)
-        logging.debug("Crop area: (%i,%i) - (%i, %i)", CropTopLeft[0],
-                      CropTopLeft[1], CropBottomRight[0], CropBottomRight[1])
-    else:
-        CropAreaDefined = False
-        button_status_change_except(0, DISABLED)
-        perform_cropping.set(False)
-        perform_cropping.set(False)
-        generate_video_checkbox.config(state=NORMAL if ffmpeg_installed and
-                                       perform_cropping.get() else DISABLED)
-        CropTopLeft = (0, 0)
-        CropBottomRight = (0, 0)
-
-    project_config["CropRectangle"] = CropTopLeft, CropBottomRight
-    perform_cropping_checkbox.config(state=NORMAL if CropAreaDefined
-                                     else DISABLED)
-
-    # Enable all buttons in main window
-    button_status_change_except(0, NORMAL)
-    win.update()
+    if 'SourceDir' in general_config:
+        SourceDir = general_config["SourceDir"]
+        # If directory in configuration does not exist, set current working dir
+        if not os.path.isdir(SourceDir):
+            SourceDir = ""
+        folder_frame_source_dir.delete(0, 'end')
+        folder_frame_source_dir.insert('end', SourceDir)
+    if 'GeneralConfigDate' in general_config:
+        GeneralConfigDate = general_config["GeneralConfigDate"]
+    if 'VideoEncodingDoNotWarnAgain' in general_config:
+        video_encoding_do_not_warn_again.set(
+            general_config["VideoEncodingDoNotWarnAgain"])
 
 
-def determine_hole_height(img):
-    global film_hole_template, film_bw_template, film_wb_template
+def save_project_config():
+    global skip_frame_regeneration
+    global frames_to_encode_spinbox
+    global ffmpeg_preset, film_type
+    global StabilizeAreaDefined, film_hole_height
 
-    if film_type.get() == 'S8':
-        template_1 = film_bw_template
-        template_2 = film_wb_template
-        other_film_type = 'R8'
-    elif film_type.get() == 'R8':
-        template_1 = film_wb_template
-        template_2 = film_bw_template
-        other_film_type = 'S8'
-    search_img = get_image_left_stripe(img)
-    top_left_1 = match_template(template_1, search_img, 230)
-    top_left_2 = match_template(template_2, search_img, 230)
-    if (top_left_1[1] > top_left_2[1]):
-        if tk.messagebox.askyesno(
-                "Wrong film type detected",
-                "Current project is defined to handle " + film_type.get() +
-                " film type, however frames seem to be " + other_film_type + ".\r\n"
-                "Do you want to change it now?"):
-            film_type.set(other_film_type)
-            set_film_type()
-            top_left_aux = top_left_1
-            top_left_1 = top_left_2
-            top_left_2 = top_left_aux
-            return 0
-    logging.debug("Hole height: %i", top_left_2[1]-top_left_1[1])
-    return top_left_2[1]-top_left_1[1]
-
-def adjust_hole_pattern_size():
-    global film_hole_height, film_hole_template
-
-    ratio = 1
-    if film_type.get() == 'S8':
-        ratio = film_hole_height / S8_default_hole_height
-    elif film_type.get() == 'R8':
-        ratio = film_hole_height / R8_default_interhole_height
-    logging.debug("Hole pattern, ratio: %s, %.2f", pattern_filename, ratio)
-    film_hole_template = resize_image(film_hole_template, ratio*100)
-
-
-def set_film_type():
-    global film_type, expected_pattern_pos, pattern_filename, film_hole_template
-    global S8_default_hole_height, R8_default_interhole_height
-    if film_type.get() == 'S8':
-        pattern_filename = s8_pattern_filename
-        expected_pattern_pos = (6.5, 34)
-        film_hole_height = S8_default_hole_height
-    elif film_type.get() == 'R8':
-        pattern_filename = r8_pattern_filename
-        expected_pattern_pos = (9.6, 13.3)
-        film_hole_height = R8_default_interhole_height
-    film_hole_template = cv2.imread(pattern_filename, 0)
-
+    # Write project data upon exit
+    project_config["FramesToEncode"] = frames_to_encode_spinbox.get()
+    project_config["skip_frame_regeneration"] = skip_frame_regeneration.get()
+    project_config["FFmpegPreset"] = ffmpeg_preset.get()
+    project_config["ProjectConfigDate"] = str(datetime.now())
     project_config["FilmType"] = film_type.get()
-    win.update()
+    project_config["PerformCropping"] = perform_cropping.get()
+    if StabilizeAreaDefined:
+        project_config["HoleHeight"] = film_hole_height
+        project_config["PerformStabilization"] = perform_stabilization.get()
+    if ExpertMode:
+        project_config["FillBorders"] = fill_borders.get()
+        project_config["FillBordersThickness"] = fill_borders_thickness.get()
+        project_config["FillBordersMode"] = fill_borders_mode.get()
+
+    with open(project_config_filename, 'w+') as f:
+        json.dump(project_config, f)
 
 
-def button_status_change_except(except_button, button_status):
-    global source_folder_btn, target_folder_btn
-    global perform_stabilization_checkbox
-    global perform_cropping_checkbox, Crop_btn
-    global Go_btn
-    global Exit_btn
-
-    if except_button != source_folder_btn:
-        source_folder_btn.config(state=button_status)
-    if except_button != target_folder_btn:
-        target_folder_btn.config(state=button_status)
-    if except_button != perform_cropping_checkbox:
-        perform_cropping_checkbox.config(state=button_status)
-    # if except_button != Crop_btn:
-    #    Crop_btn.config(state=DISABLED if active else NORMAL)
-    if except_button != Go_btn:
-        Go_btn.config(state=button_status)
-    if except_button != Exit_btn:
-        Exit_btn.config(state=button_status)
-    if except_button != perform_stabilization_checkbox:
-        perform_stabilization_checkbox.config(state=button_status)
-
-    if not CropAreaDefined:
-        perform_cropping_checkbox.config(state=DISABLED)
-
-
-def widget_state_refresh():
-    global perform_cropping_checkbox, perform_cropping, CropAreaDefined
-    global CropTopLeft, CropBottomRight
-    global ffmpeg_installed, perform_cropping
-    global generate_video, generate_video_checkbox
-    global fill_borders, fill_borders_checkbox
-    global fill_borders_thickness_slider, fill_borders_mode_label
-    global fill_borders_mode_label_dropdown
-    global video_fps_dropdown, video_fps_label, video_filename_name
-    global ffmpeg_preset_rb1, ffmpeg_preset_rb2, ffmpeg_preset_rb3
+def load_project_config():
+    global project_config
+    global project_config_basename, project_config_filename
+    global CurrentFrame
+    global frame_slider
+    global VideoFps, video_fps_dropdown_selected
+    global frame_input_filename_pattern, FrameInputFilenamePattern
+    global start_from_current_frame
+    global skip_frame_regeneration
+    global generate_video
+    global CropTopLeft, CropBottomRight, perform_cropping
+    global StabilizeAreaDefined, film_hole_height
     global ExpertMode
 
-    if CropTopLeft != (0, 0) and CropBottomRight != (0, 0):
-        CropAreaDefined = True
-    perform_cropping_checkbox.config(
-        state=NORMAL if CropAreaDefined else DISABLED)
-    generate_video_checkbox.config(
-        state=NORMAL if ffmpeg_installed and perform_cropping.get()
-        else DISABLED)
-    video_fps_dropdown.config(
-        state=NORMAL if generate_video.get() else DISABLED)
-    video_fps_label.config(
-        state=NORMAL if generate_video.get() else DISABLED)
-    video_filename_name.config(
-        state=NORMAL if generate_video.get() else DISABLED)
-    ffmpeg_preset_rb1.config(
-        state=NORMAL if generate_video.get() else DISABLED)
-    ffmpeg_preset_rb2.config(
-        state=NORMAL if generate_video.get() else DISABLED)
-    ffmpeg_preset_rb3.config(
-        state=NORMAL if generate_video.get() else DISABLED)
+
+    project_config_filename = os.path.join(SourceDir, project_config_basename)
+    # Check if persisted project data file exist: If it does, load it
+    if not IgnoreConfig and os.path.isfile(project_config_filename):
+        persisted_data_file = open(project_config_filename)
+        project_config = json.load(persisted_data_file)
+        persisted_data_file.close()
+    else:   # No project config file. Set empty config to force defaults
+        project_config = {}
+
+    for item in project_config:
+        logging.info("%s=%s", item, str(project_config[item]))
+
+    if 'ProjectConfigDate' in project_config:
+        ProjectConfigDate = project_config["ProjectConfigDate"]
+    if 'TargetDir' in project_config:
+        TargetDir = project_config["TargetDir"]
+        # If directory in configuration does not exist, set current working dir
+        if not os.path.isdir(TargetDir):
+            TargetDir = ""
+        folder_frame_target_dir.delete(0, 'end')
+        folder_frame_target_dir.insert('end', TargetDir)
+    if 'CurrentFrame' in project_config:
+        CurrentFrame = project_config["CurrentFrame"]
+        CurrentFrame = max(CurrentFrame, 0)
+        frame_slider.set(CurrentFrame)
+    else:
+        CurrentFrame = 0
+        frame_slider.set(CurrentFrame)
+    if 'StartFromCurrentFrame' in project_config:
+        start_from_current_frame.set(project_config["StartFromCurrentFrame"])
+    else:
+        start_from_current_frame.set(False)
+    if 'FramesToEncode' in project_config:
+        frames_to_encode = project_config["FramesToEncode"]
+        # frames_to_encode_spinbox.set(frames_to_encode)
+        frames_to_encode_str.set(frames_to_encode)
+    else:
+        frames_to_encode = "All"
+        frames_to_encode_str.set(frames_to_encode)
+    if 'PerformCropping' in project_config:
+        perform_cropping.set(project_config["PerformCropping"])
+    else:
+        perform_cropping.set(False)
+    if 'CropRectangle' in project_config:
+        CropBottomRight = tuple(project_config["CropRectangle"][1])
+        CropTopLeft = tuple(project_config["CropRectangle"][0])
+    else:
+        CropBottomRight = (0, 0)
+        CropTopLeft = (0, 0)
+    if 'GenerateVideo' in project_config:
+        generate_video.set(project_config["GenerateVideo"])
+    else:
+        generate_video.set(False)
+    if 'skip_frame_regeneration' in project_config:
+        skip_frame_regeneration.set(project_config["skip_frame_regeneration"])
+    else:
+        skip_frame_regeneration.set(False)
+    if 'FilmType' in project_config:
+        film_type.set(project_config["FilmType"])
+        set_film_type()
+    if 'VideoFps' in project_config:
+        VideoFps = eval(project_config["VideoFps"])
+        video_fps_dropdown_selected.set(VideoFps)
+    else:
+        VideoFps = 18
+        video_fps_dropdown_selected.set(VideoFps)
+    if 'FrameInputFilenamePattern' in project_config:
+        FrameInputFilenamePattern = project_config["FrameInputFilenamePattern"]
+        frame_input_filename_pattern.delete(0, 'end')
+        frame_input_filename_pattern.insert('end',
+                                            FrameInputFilenamePattern)
+    else:
+        FrameInputFilenamePattern = "picture-*.jpg"
+        frame_input_filename_pattern.delete(0, 'end')
+        frame_input_filename_pattern.insert('end', FrameInputFilenamePattern)
+    if 'FFmpegPreset' in project_config:
+        ffmpeg_preset.set(project_config["FFmpegPreset"])
+    else:
+        ffmpeg_preset.set("veryfast")
+
+    if 'HoleHeight' in project_config:
+        film_hole_height = project_config["HoleHeight"]
+        StabilizeAreaDefined = True
+        perform_stabilization_checkbox.config(state=NORMAL)
+    else:
+        film_hole_height = 0
+        StabilizeAreaDefined = False
+        perform_stabilization_checkbox.config(state=DISABLED)
+
+    if 'PerformStabilization' in project_config:
+        perform_stabilization.set(project_config["PerformStabilization"])
+    else:
+        perform_stabilization.set(False)
+
     if ExpertMode:
-        fill_borders_checkbox.config(
-            state=NORMAL if generate_video.get() else DISABLED)
-        fill_borders_thickness_slider.config(
-            state=NORMAL if generate_video.get() else DISABLED)
-        fill_borders_mode_label.config(
-            state=NORMAL if generate_video.get() else DISABLED)
-        fill_borders_mode_label_dropdown.config(
-            state=NORMAL if generate_video.get() else DISABLED)
+        if 'FillBorders' in project_config:
+            fill_borders.set(project_config["FillBorders"])
+        else:
+            fill_borders.set(False)
+        if 'FillBordersThickness' in project_config:
+            fill_borders_thickness.set(project_config["FillBordersThickness"])
+        else:
+            fill_borders_thickness.set(5)
+
+        if 'FillBordersMode' in project_config:
+            fill_borders_mode.set(project_config["FillBordersMode"])
+        else:
+            fill_borders_mode.set('smear')
+
+    widget_state_refresh()
+
+    win.update()
 
 
-def match_template(template, img, thres):
-    w = template.shape[1]
-    h = template.shape[0]
-    if (w >= img.shape[1] or h >= img.shape[0]):
-        logging.debug("Template (%ix%i) bigger than image  (%ix%i)",
-                      w, h, img.shape[1], img.shape[0])
-        return (0, 0)
-    # convert img to grey
-    img_grey = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    img_bw = cv2.threshold(img_grey, thres, 255, cv2.THRESH_BINARY)[1]
-    res = cv2.matchTemplate(img_bw, template, cv2.TM_CCOEFF_NORMED)
-    # Best match
-    min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(res)
-    top_left = max_loc
-    if top_left[1] > 500:
-        logging.debug("Image out of bounds: (%i,%i)",
-                      top_left[0], top_left[1])
-    return top_left
+"""
+###############################
+User feedback support functions
+###############################
+"""
 
 
 def video_encoding_do_not_warn_again_selection():
@@ -528,6 +437,554 @@ def display_ffmpeg_result(ffmpeg_output):
     ffmpeg_result_sb.config(command=ffmpeg_label.yview)
 
 
+"""
+#######################
+File handling functions
+#######################
+"""
+
+
+def set_source_folder():
+    global SourceDir, CurrentFrame, frame_slider, Go_btn, cropping_btn
+    global first_absolute_frame
+
+    # Write project data before switching project
+    save_project_config()
+
+    SourceDir = tk.filedialog.askdirectory(
+        initialdir=SourceDir,
+        title="Select folder with captured images to process")
+
+    if not SourceDir:
+        return
+    elif TargetDir == SourceDir:
+        tk.messagebox.showerror(
+            "Error!",
+            "Source folder cannot be the same as target folder.")
+        return
+    else:
+        folder_frame_source_dir.delete(0, 'end')
+        folder_frame_source_dir.insert('end', SourceDir)
+
+    general_config["SourceDir"] = SourceDir
+    load_project_config()  # Needs SourceDir and first_absolute_frame defined
+    # Load matching file list from newly selected dir
+    get_current_dir_file_list()  # first_absolute_frame is set here
+
+    # Enable Start and Crop buttons, plus slider, once we have files to handle
+    cropping_btn.config(state=NORMAL)
+    frame_slider.config(state=NORMAL)
+    Go_btn.config(state=NORMAL)
+    frame_slider.set(CurrentFrame)
+    init_display()
+
+
+def set_target_folder():
+    global TargetDir
+    global folder_frame_target_dir
+
+    TargetDir = tk.filedialog.askdirectory(
+        initialdir=TargetDir,
+        title="Select folder where to store processed images/video")
+
+    if not TargetDir:
+        return
+    elif TargetDir == SourceDir:
+        tk.messagebox.showerror(
+            "Error!",
+            "Target folder cannot be the same as source folder.")
+        return
+    else:
+        folder_frame_target_dir.delete(0, 'end')
+        folder_frame_target_dir.insert('end', TargetDir)
+
+    project_config["TargetDir"] = TargetDir
+
+
+def set_frame_input_filename_pattern():
+    global FrameInputFilenamePattern, frame_input_filename_pattern
+
+    FrameInputFilenamePattern = frame_input_filename_pattern.get()
+    project_config["FrameInputFilenamePattern"] = FrameInputFilenamePattern
+    get_current_dir_file_list()
+    init_display()
+
+
+"""
+###############################
+UI support commands & functions
+###############################
+"""
+
+
+def button_status_change_except(except_button, button_status):
+    global source_folder_btn, target_folder_btn
+    global perform_stabilization_checkbox
+    global perform_cropping_checkbox, Crop_btn
+    global Go_btn
+    global Exit_btn
+
+    if except_button != source_folder_btn:
+        source_folder_btn.config(state=button_status)
+    if except_button != target_folder_btn:
+        target_folder_btn.config(state=button_status)
+    if except_button != perform_cropping_checkbox:
+        perform_cropping_checkbox.config(state=button_status)
+    # if except_button != Crop_btn:
+    #    Crop_btn.config(state=DISABLED if active else NORMAL)
+    if except_button != Go_btn:
+        Go_btn.config(state=button_status)
+    if except_button != Exit_btn:
+        Exit_btn.config(state=button_status)
+    if except_button != perform_stabilization_checkbox:
+        perform_stabilization_checkbox.config(state=button_status)
+
+    if not CropAreaDefined:
+        perform_cropping_checkbox.config(state=DISABLED)
+
+
+def widget_state_refresh():
+    global perform_cropping_checkbox, perform_cropping, CropAreaDefined
+    global CropTopLeft, CropBottomRight
+    global ffmpeg_installed, perform_cropping
+    global generate_video, generate_video_checkbox
+    global fill_borders, fill_borders_checkbox
+    global fill_borders_thickness_slider, fill_borders_mode_label
+    global fill_borders_mode_label_dropdown
+    global video_fps_dropdown, video_fps_label, video_filename_name
+    global ffmpeg_preset_rb1, ffmpeg_preset_rb2, ffmpeg_preset_rb3
+    global ExpertMode
+
+    if CropTopLeft != (0, 0) and CropBottomRight != (0, 0):
+        CropAreaDefined = True
+    perform_cropping_checkbox.config(
+        state=NORMAL if CropAreaDefined else DISABLED)
+    generate_video_checkbox.config(
+        state=NORMAL if ffmpeg_installed and perform_cropping.get()
+        else DISABLED)
+    video_fps_dropdown.config(
+        state=NORMAL if generate_video.get() else DISABLED)
+    video_fps_label.config(
+        state=NORMAL if generate_video.get() else DISABLED)
+    video_filename_name.config(
+        state=NORMAL if generate_video.get() else DISABLED)
+    ffmpeg_preset_rb1.config(
+        state=NORMAL if generate_video.get() else DISABLED)
+    ffmpeg_preset_rb2.config(
+        state=NORMAL if generate_video.get() else DISABLED)
+    ffmpeg_preset_rb3.config(
+        state=NORMAL if generate_video.get() else DISABLED)
+    if ExpertMode:
+        fill_borders_checkbox.config(
+            state=NORMAL if generate_video.get() else DISABLED)
+        fill_borders_thickness_slider.config(
+            state=NORMAL if generate_video.get() else DISABLED)
+        fill_borders_mode_label.config(
+            state=NORMAL if generate_video.get() else DISABLED)
+        fill_borders_mode_label_dropdown.config(
+            state=NORMAL if generate_video.get() else DISABLED)
+
+
+def perform_stabilization_selection():
+    global perform_stabilization
+    # Nothing to do here
+
+
+def perform_cropping_selection():
+    global perform_cropping, perform_cropping
+    global generate_video_checkbox
+    generate_video_checkbox.config(state=NORMAL if ffmpeg_installed
+                                   and perform_cropping.get() else DISABLED)
+
+
+def start_from_current_frame_selection():
+    global start_from_current_frame
+    project_config["StartFromCurrentFrame"] = start_from_current_frame.get()
+
+
+def frames_to_encode_selection(updown):
+    global frames_to_encode_spinbox, frames_to_encode_str
+    project_config["FramesToEncode"] = frames_to_encode_spinbox.get()
+    if project_config["FramesToEncode"] == '0':
+        if updown == 'up':
+            frames_to_encode_str.set('1')
+        else:
+            frames_to_encode_str.set('All')
+
+
+def fill_borders_selection():
+    global fill_borders
+    project_config["FillBorders"] = fill_borders.get()
+
+
+def fill_borders_set_mode(selected):
+    global fill_borders_mode
+
+    fill_borders_mode.set(selected)
+    project_config["FillBordersMode"] = fill_borders_mode.get()
+
+
+def fill_borders_set_thickness_scale(selected_thickness):
+    global fill_borders_thickness
+
+    fill_borders_thickness_slider.focus()
+    fill_borders_thickness.set(selected_thickness)
+    project_config["FillBordersThinkness"] = fill_borders_thickness.get()
+
+
+def generate_video_selection():
+    global generate_video
+    global video_fps_dropdown, video_fps_label, video_filename_name
+    global ffmpeg_preset_rb1, ffmpeg_preset_rb2, ffmpeg_preset_rb3
+
+    project_config["GenerateVideo"] = generate_video.get()
+    video_fps_dropdown.config(
+        state=NORMAL if generate_video.get() else DISABLED)
+    video_fps_label.config(
+        state=NORMAL if generate_video.get() else DISABLED)
+    video_filename_name.config(
+        state=NORMAL if generate_video.get() else DISABLED)
+    ffmpeg_preset_rb1.config(
+        state=NORMAL if generate_video.get() else DISABLED)
+    ffmpeg_preset_rb2.config(
+        state=NORMAL if generate_video.get() else DISABLED)
+    ffmpeg_preset_rb3.config(
+        state=NORMAL if generate_video.get() else DISABLED)
+    if ExpertMode:
+        fill_borders_checkbox.config(
+            state=NORMAL if generate_video.get() else DISABLED)
+        fill_borders_thickness_slider.config(
+            state=NORMAL if generate_video.get() else DISABLED)
+        fill_borders_mode_label.config(
+            state=NORMAL if generate_video.get() else DISABLED)
+        fill_borders_mode_label_dropdown.config(
+            state=NORMAL if generate_video.get() else DISABLED)
+
+
+def set_fps(selected):
+    global VideoFps
+
+    project_config["VideoFps"] = selected
+    VideoFps = eval(selected)
+
+
+def scale_display_update():
+    global win
+    global frame_scale_refresh_done, frame_scale_refresh_pending
+    global CurrentFrame
+
+    file = SourceDirFileList[CurrentFrame]
+    img = cv2.imread(file, cv2.IMREAD_UNCHANGED)
+    display_image(img)
+    frame_scale_refresh_done = True
+    if frame_scale_refresh_pending:
+        frame_scale_refresh_pending = False
+        win.after(100, scale_display_update)
+
+
+def select_scale_frame(selected_frame):
+    global win
+    global SourceDir
+    global CurrentFrame
+    global SourceDirFileList
+    global first_absolute_frame
+    global frame_scale_refresh_done, frame_scale_refresh_pending
+    global frame_slider
+
+    if not ConvertLoopRunning:  # Do not refresh during conversion loop
+        frame_slider.focus()
+        CurrentFrame = int(selected_frame)
+        project_config["CurrentFrame"] = CurrentFrame
+        frame_slider.config(label='Global:'+
+                            str(CurrentFrame+first_absolute_frame))
+        if frame_scale_refresh_done:
+            frame_scale_refresh_done = False
+            frame_scale_refresh_pending = False
+            win.after(5, scale_display_update)
+        else:
+            frame_scale_refresh_pending = True
+
+
+"""
+##############################
+Second level support functions
+##############################
+(Code below to draw a rectangle to select area to crop or find hole,
+adapted from various authors in Stack Overflow)
+"""
+
+
+def draw_rectangle(event, x, y, flags, param):
+    global work_image
+    global img_original
+    global rectangle_drawing
+    global ix, iy
+    global x_, y_
+    # Code posted by Ahsin Shabbir, same Stack overflow thread
+    global RectangleTopLeft, RectangleBottomRight
+    global preview_factor
+
+    if event == cv2.EVENT_LBUTTONDOWN:
+        if not rectangle_drawing:
+            work_image = np.copy(img_original)
+            x_, y_ = -10, -10
+            ix, iy = -10, -10
+        rectangle_drawing = True
+        ix, iy = x, y
+        x_, y_ = x, y
+    elif event == cv2.EVENT_MOUSEMOVE and rectangle_drawing:
+        copy = work_image.copy()
+        x_, y_ = x, y
+        cv2.rectangle(copy, (ix, iy), (x_, y_), (0, 255, 0), 1)
+        cv2.imshow(RectangleWindowTitle, copy)
+    elif event == cv2.EVENT_LBUTTONUP:
+        rectangle_drawing = False
+        cv2.rectangle(work_image, (ix, iy), (x, y), (0, 255, 0), 1)
+        # Update global variables with area
+        # Need to account for the fact area calculated with 50% reduced image
+        RectangleTopLeft = (max(0, round(min(ix, x)/preview_factor)),
+                            max(0, round(min(iy, y)/preview_factor)))
+        RectangleBottomRight = (min(img_original.shape[1], round(max(ix, x)/preview_factor)),
+                                min(img_original.shape[0], round(max(iy, y)/preview_factor)))
+        logging.debug("Original image: (%i, %i)", img_original.shape[1], img_original.shape[0])
+        logging.debug("Selected area: (%i, %i), (%i, %i)",
+                      RectangleTopLeft[0], RectangleTopLeft[1],
+                      RectangleBottomRight[0], RectangleBottomRight[1])
+
+
+def select_rectangle_area():
+    global work_image
+    global CurrentFrame, first_absolute_frame
+    global SourceDirFileList
+    global rectangle_drawing
+    global ix, iy
+    global x_, y_
+    global img_original
+    global preview_factor
+
+    retvalue = False
+    ix, iy = -1, -1
+    x_, y_ = 0, 0
+
+    file = SourceDirFileList[CurrentFrame]
+
+    # load the image, clone it, and setup the mouse callback function
+    work_image = cv2.imread(file, cv2.IMREAD_UNCHANGED)
+
+    # Scale hole template as required
+    # adjust_hole_pattern_size()
+    # Image is stabilized to have an accurate selection of crop area.
+    # This leads to some interesting situation...
+    # work_image = stabilize_image(work_image)
+    work_image = resize_image(work_image, 100*preview_factor)
+
+    # work_image = np.zeros((512,512,3), np.uint8)
+    img_original = np.copy(work_image)
+    cv2.namedWindow(RectangleWindowTitle)
+    cv2.setMouseCallback(RectangleWindowTitle, draw_rectangle)
+    while 1:
+        cv2.imshow(RectangleWindowTitle, work_image)
+        if not cv2.EVENT_MOUSEMOVE:
+            copy = work_image.copy()
+            cv2.rectangle(copy, (ix, iy), (x_, y_), (0, 255, 0), 1)
+            cv2.imshow(RectangleWindowTitle, copy)
+        k = cv2.waitKey(1) & 0xFF
+        if k == 13 and not rectangle_drawing:  # Enter: Confirm selection
+            retvalue = True
+            break
+        elif k == 27:  # Escape: Cancel selection
+            break
+    cv2.destroyAllWindows()
+    return retvalue
+
+
+def select_cropping_area():
+    global RectangleWindowTitle
+    global perform_cropping
+    global CropTopLeft, CropBottomRight
+    global CropAreaDefined
+
+    # Disable all buttons in main window
+    button_status_change_except(0, DISABLED)
+    win.update()
+
+    RectangleWindowTitle = CropWindowTitle
+
+    if select_rectangle_area():
+        CropAreaDefined = True
+        button_status_change_except(0, NORMAL)
+        # FFmpeg does not like odd dimensions
+        # Adjust (increasing BottomRight)in case of odd width/height
+        rectangle_bottom_right_list = list(RectangleBottomRight)
+        if (RectangleBottomRight[0] - RectangleTopLeft[0]) % 2 == 1:
+            rectangle_bottom_right_list[0] += 1
+        if (RectangleBottomRight[1] - RectangleTopLeft[1]) % 2 == 1:
+            rectangle_bottom_right_list[1] += 1
+        CropTopLeft = RectangleTopLeft
+        CropBottomRight = tuple(rectangle_bottom_right_list)
+        logging.debug("Crop area: (%i,%i) - (%i, %i)", CropTopLeft[0],
+                      CropTopLeft[1], CropBottomRight[0], CropBottomRight[1])
+    else:
+        CropAreaDefined = False
+        button_status_change_except(0, DISABLED)
+        perform_cropping.set(False)
+        perform_cropping.set(False)
+        generate_video_checkbox.config(state=NORMAL if ffmpeg_installed and
+                                       perform_cropping.get() else DISABLED)
+        CropTopLeft = (0, 0)
+        CropBottomRight = (0, 0)
+
+    project_config["CropRectangle"] = CropTopLeft, CropBottomRight
+    perform_cropping_checkbox.config(state=NORMAL if CropAreaDefined
+                                     else DISABLED)
+
+    # Enable all buttons in main window
+    button_status_change_except(0, NORMAL)
+    win.update()
+
+
+def select_hole_height():
+    global RectangleWindowTitle
+    global perform_stabilization, perform_stabilization_checkbox
+    global HoleSearchTopLeft, HoleSearchBottomRight
+    global StabilizeAreaDefined
+    global film_hole_height, film_hole_template, preview_factor
+
+    # Disable all buttons in main window
+    # button_status_change_except(0, DISABLED)
+    # win.update()
+
+    # load the image, find hole height
+    while True:
+        file = SourceDirFileList[CurrentFrame]
+        work_image = cv2.imread(file, cv2.IMREAD_UNCHANGED)
+        set_default_stabilization_values(work_image)
+        film_hole_height = determine_hole_height(work_image)
+        if (film_hole_height != 0):
+            break
+    if film_hole_height < 0:
+        film_hole_height = 0
+        StabilizeAreaDefined = False
+        perform_stabilization.set(False)
+        perform_stabilization_checkbox.config(state=DISABLED)
+    else:
+        StabilizeAreaDefined = True
+        perform_stabilization_checkbox.config(state=NORMAL)
+        adjust_hole_pattern_size()
+    win.update()
+
+
+def determine_hole_height(img):
+    global film_hole_template, film_bw_template, film_wb_template
+
+    if film_type.get() == 'S8':
+        template_1 = film_bw_template
+        template_2 = film_wb_template
+        other_film_type = 'R8'
+    elif film_type.get() == 'R8':
+        template_1 = film_wb_template
+        template_2 = film_bw_template
+        other_film_type = 'S8'
+    search_img = get_image_left_stripe(img)
+    top_left_1 = match_template(template_1, search_img, 230)
+    top_left_2 = match_template(template_2, search_img, 230)
+    if (top_left_1[1] > top_left_2[1]):
+        if tk.messagebox.askyesno(
+                "Wrong film type detected",
+                "Current project is defined to handle " + film_type.get() +
+                " film type, however frames seem to be " + other_film_type + ".\r\n"
+                "Do you want to change it now?"):
+            film_type.set(other_film_type)
+            set_film_type()
+            top_left_aux = top_left_1
+            top_left_1 = top_left_2
+            top_left_2 = top_left_aux
+            return 0
+    logging.debug("Hole height: %i", top_left_2[1]-top_left_1[1])
+    return top_left_2[1]-top_left_1[1]
+
+def adjust_hole_pattern_size():
+    global film_hole_height, film_hole_template
+
+    ratio = 1
+    if film_type.get() == 'S8':
+        ratio = film_hole_height / S8_default_hole_height
+    elif film_type.get() == 'R8':
+        ratio = film_hole_height / R8_default_interhole_height
+    logging.debug("Hole pattern, ratio: %s, %.2f", pattern_filename, ratio)
+    film_hole_template = resize_image(film_hole_template, ratio*100)
+
+
+def set_film_type():
+    global film_type, expected_pattern_pos, pattern_filename, film_hole_template
+    global S8_default_hole_height, R8_default_interhole_height
+    if film_type.get() == 'S8':
+        pattern_filename = s8_pattern_filename
+        expected_pattern_pos = (6.5, 34)
+        film_hole_height = S8_default_hole_height
+    elif film_type.get() == 'R8':
+        pattern_filename = r8_pattern_filename
+        expected_pattern_pos = (9.6, 13.3)
+        film_hole_height = R8_default_interhole_height
+    film_hole_template = cv2.imread(pattern_filename, 0)
+
+    project_config["FilmType"] = film_type.get()
+    win.update()
+
+
+def match_template(template, img, thres):
+    w = template.shape[1]
+    h = template.shape[0]
+    if (w >= img.shape[1] or h >= img.shape[0]):
+        logging.debug("Template (%ix%i) bigger than image  (%ix%i)",
+                      w, h, img.shape[1], img.shape[0])
+        return (0, 0)
+    # convert img to grey
+    img_grey = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    img_bw = cv2.threshold(img_grey, thres, 255, cv2.THRESH_BINARY)[1]
+    res = cv2.matchTemplate(img_bw, template, cv2.TM_CCOEFF_NORMED)
+    # Best match
+    min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(res)
+    top_left = max_loc
+    if top_left[1] > 500:
+        logging.debug("Image out of bounds: (%i,%i)",
+                      top_left[0], top_left[1])
+    return top_left
+
+
+"""
+###################################
+Support functions for core business
+###################################
+"""
+
+
+def display_image(img):
+    global PreviewWidth, PreviewHeight
+    global draw_capture_canvas, preview_border_frame
+    global perform_cropping
+
+    img = resize_image(img, round(PreviewRatio*100))
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    DisplayableImage = ImageTk.PhotoImage(Image.fromarray(img))
+
+    image_height = img.shape[0]
+    image_width = img.shape[1]
+    padding_x = 0
+    padding_y = 0
+    # Center only when cropping, otherwise image will shake
+    if perform_cropping.get():
+        if PreviewWidth > image_width:
+            padding_x = round((PreviewWidth - image_width) / 2)
+        if PreviewHeight > image_height:
+            padding_y = round((PreviewHeight - image_height) / 2)
+
+    draw_capture_canvas.create_image(padding_x, padding_y, anchor=NW, image=DisplayableImage)
+    draw_capture_canvas.image = DisplayableImage
+
+    win.update()
+
+
 def resize_image(img, percent):
     # Calculate the proportional size of original image
     width = int(img.shape[1] * percent / 100)
@@ -612,191 +1069,6 @@ def crop_image(img, top_left, botton_right):
     return img[Y_start:Y_end, X_start:X_end]
 
 
-def set_source_folder():
-    global SourceDir, CurrentFrame, frame_slider, Go_btn, cropping_btn
-    global first_absolute_frame
-
-    # Write project data before switching project
-    save_project_config()
-
-    SourceDir = tk.filedialog.askdirectory(
-        initialdir=SourceDir,
-        title="Select folder with captured images to process")
-
-    if not SourceDir:
-        return
-    elif TargetDir == SourceDir:
-        tk.messagebox.showerror(
-            "Error!",
-            "Source folder cannot be the same as target folder.")
-        return
-    else:
-        folder_frame_source_dir.delete(0, 'end')
-        folder_frame_source_dir.insert('end', SourceDir)
-
-    general_config["SourceDir"] = SourceDir
-    load_project_config()  # Needs SourceDir and first_absolute_frame defined
-    # Load matching file list from newly selected dir
-    get_current_dir_file_list()  # first_absolute_frame is set here
-
-    # Enable Start and Crop buttons, plus slider, once we have files to handle
-    cropping_btn.config(state=NORMAL)
-    frame_slider.config(state=NORMAL)
-    Go_btn.config(state=NORMAL)
-    frame_slider.set(CurrentFrame)
-    init_display()
-
-
-def set_target_folder():
-    global TargetDir
-    global folder_frame_target_dir
-
-    TargetDir = tk.filedialog.askdirectory(
-        initialdir=TargetDir,
-        title="Select folder where to store processed images/video")
-
-    if not TargetDir:
-        return
-    elif TargetDir == SourceDir:
-        tk.messagebox.showerror(
-            "Error!",
-            "Target folder cannot be the same as source folder.")
-        return
-    else:
-        folder_frame_target_dir.delete(0, 'end')
-        folder_frame_target_dir.insert('end', TargetDir)
-
-    project_config["TargetDir"] = TargetDir
-
-
-def set_frame_input_filename_pattern():
-    global FrameInputFilenamePattern, frame_input_filename_pattern
-
-    FrameInputFilenamePattern = frame_input_filename_pattern.get()
-    project_config["FrameInputFilenamePattern"] = FrameInputFilenamePattern
-    get_current_dir_file_list()
-    init_display()
-
-
-def perform_stabilization_selection():
-    global perform_stabilization
-    # Nothing to do here
-
-
-def perform_cropping_selection():
-    global perform_cropping, perform_cropping
-    global generate_video_checkbox
-    generate_video_checkbox.config(state=NORMAL if ffmpeg_installed
-                                   and perform_cropping.get() else DISABLED)
-
-
-def start_from_current_frame_selection():
-    global start_from_current_frame
-    project_config["StartFromCurrentFrame"] = start_from_current_frame.get()
-
-
-def frames_to_encode_selection(updown):
-    global frames_to_encode_spinbox, frames_to_encode_str
-    project_config["FramesToEncode"] = frames_to_encode_spinbox.get()
-    if project_config["FramesToEncode"] == '0':
-        if updown == 'up':
-            frames_to_encode_str.set('1')
-        else:
-            frames_to_encode_str.set('All')
-
-
-def fill_borders_selection():
-    global fill_borders
-    project_config["FillBorders"] = fill_borders.get()
-
-
-def set_fill_borders_mode(selected):
-    global fill_borders_mode
-
-    fill_borders_mode.set(selected)
-    project_config["FillBordersMode"] = fill_borders_mode.get()
-
-
-def select_scale_fill_borders_thickness(selected_thickness):
-    global fill_borders_thickness
-
-    fill_borders_thickness_slider.focus()
-    fill_borders_thickness.set(selected_thickness)
-    project_config["FillBordersThinkness"] = fill_borders_thickness.get()
-
-
-def generate_video_selection():
-    global generate_video
-    global video_fps_dropdown, video_fps_label, video_filename_name
-    global ffmpeg_preset_rb1, ffmpeg_preset_rb2, ffmpeg_preset_rb3
-
-    project_config["GenerateVideo"] = generate_video.get()
-    video_fps_dropdown.config(
-        state=NORMAL if generate_video.get() else DISABLED)
-    video_fps_label.config(
-        state=NORMAL if generate_video.get() else DISABLED)
-    video_filename_name.config(
-        state=NORMAL if generate_video.get() else DISABLED)
-    ffmpeg_preset_rb1.config(
-        state=NORMAL if generate_video.get() else DISABLED)
-    ffmpeg_preset_rb2.config(
-        state=NORMAL if generate_video.get() else DISABLED)
-    ffmpeg_preset_rb3.config(
-        state=NORMAL if generate_video.get() else DISABLED)
-    if ExpertMode:
-        fill_borders_checkbox.config(
-            state=NORMAL if generate_video.get() else DISABLED)
-        fill_borders_thickness_slider.config(
-            state=NORMAL if generate_video.get() else DISABLED)
-        fill_borders_mode_label.config(
-            state=NORMAL if generate_video.get() else DISABLED)
-        fill_borders_mode_label_dropdown.config(
-            state=NORMAL if generate_video.get() else DISABLED)
-
-
-def set_fps(selected):
-    global VideoFps
-
-    project_config["VideoFps"] = selected
-    VideoFps = eval(selected)
-
-
-def exit_app():  # Exit Application
-    global win
-
-    save_general_config()
-
-    save_project_config()
-
-    win.destroy()
-
-
-def display_image(img):
-    global PreviewWidth, PreviewHeight
-    global draw_capture_canvas, preview_border_frame
-    global perform_cropping
-
-    img = resize_image(img, round(PreviewRatio*100))
-    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    DisplayableImage = ImageTk.PhotoImage(Image.fromarray(img))
-
-    image_height = img.shape[0]
-    image_width = img.shape[1]
-    padding_x = 0
-    padding_y = 0
-    # Center only when cropping, otherwise image will shake
-    if perform_cropping.get():
-        if PreviewWidth > image_width:
-            padding_x = round((PreviewWidth - image_width) / 2)
-        if PreviewHeight > image_height:
-            padding_y = round((PreviewHeight - image_height) / 2)
-
-    draw_capture_canvas.create_image(padding_x, padding_y, anchor=NW, image=DisplayableImage)
-    draw_capture_canvas.image = DisplayableImage
-
-    win.update()
-
-
 def is_ffmpeg_installed():
     global ffmpeg_installed
 
@@ -810,6 +1082,39 @@ def is_ffmpeg_installed():
         logging.debug("ffmpeg is NOT installed.")
 
     return ffmpeg_installed
+
+
+def get_current_dir_file_list():
+    global SourceDir
+    global SourceDirFileList
+    global FrameInputFilenamePattern
+    global CurrentFrame, first_absolute_frame, last_absolute_frame
+    global frame_slider
+    global CurrentFrame
+
+    if not os.path.isdir(SourceDir):
+        return
+
+    SourceDirFileList = sorted(list(glob(os.path.join(
+        SourceDir,
+        FrameInputFilenamePattern))))
+    if len(SourceDirFileList) == 0:
+        tk.messagebox.showerror("Error!",
+                                "No files match pattern name. "
+                                "Please specify new one and try again")
+        return
+
+    CurrentFrame = 0
+    first_absolute_frame = int(
+        ''.join(list(filter(str.isdigit,
+                            os.path.basename(SourceDirFileList[0])))))
+    last_absolute_frame = first_absolute_frame + len(SourceDirFileList)-1
+    frame_slider.config(from_=0, to=len(SourceDirFileList)-1,
+                        label='Global:'+str(CurrentFrame+first_absolute_frame))
+
+    select_hole_height()
+
+    return len(SourceDirFileList)
 
 
 def valid_generated_frame_range():
@@ -830,6 +1135,27 @@ def valid_generated_frame_range():
                   file_count)
 
     return file_count == frames_to_encode
+
+
+def set_default_stabilization_values(img):
+    global HoleSearchTopLeft, HoleSearchBottomRight
+
+    # Initizalize default values for perforation search area,
+    # as they are relative to image size
+    # Get image dimensions first
+    width = img.shape[1]
+    height = img.shape[0]
+    # Default values are needed before the stabilization search area
+    # has been defined, therefore we initialized them here
+    HoleSearchTopLeft = (0, 0)
+    HoleSearchBottomRight = (round(width * 0.25), height)
+
+
+"""
+########################
+Core top level functions
+########################
+"""
 
 
 def start_convert():
@@ -1133,37 +1459,11 @@ def video_generation_phase():
     generation_exit()  # Restore all settings to normal
 
 
-def get_current_dir_file_list():
-    global SourceDir
-    global SourceDirFileList
-    global FrameInputFilenamePattern
-    global CurrentFrame, first_absolute_frame, last_absolute_frame
-    global frame_slider
-    global CurrentFrame
-
-    if not os.path.isdir(SourceDir):
-        return
-
-    SourceDirFileList = sorted(list(glob(os.path.join(
-        SourceDir,
-        FrameInputFilenamePattern))))
-    if len(SourceDirFileList) == 0:
-        tk.messagebox.showerror("Error!",
-                                "No files match pattern name. "
-                                "Please specify new one and try again")
-        return
-
-    CurrentFrame = 0
-    first_absolute_frame = int(
-        ''.join(list(filter(str.isdigit,
-                            os.path.basename(SourceDirFileList[0])))))
-    last_absolute_frame = first_absolute_frame + len(SourceDirFileList)-1
-    frame_slider.config(from_=0, to=len(SourceDirFileList)-1,
-                        label='Global:'+str(CurrentFrame+first_absolute_frame))
-
-    select_hole_height()
-
-    return len(SourceDirFileList)
+"""
+###############################
+Application top level functions
+###############################
+"""
 
 
 def init_display():
@@ -1197,251 +1497,6 @@ def init_display():
         PreviewRatio = PreviewHeight/image_height
 
     display_image(img)
-
-
-def set_default_stabilization_values(img):
-    global HoleSearchTopLeft, HoleSearchBottomRight
-
-    # Initizalize default values for perforation search area,
-    # as they are relative to image size
-    # Get image dimensions first
-    width = img.shape[1]
-    height = img.shape[0]
-    # Default values are needed before the stabilization search area
-    # has been defined, therefore we initialized them here
-    HoleSearchTopLeft = (0, 0)
-    HoleSearchBottomRight = (round(width * 0.25), height)
-
-
-def scale_display_update():
-    global win
-    global frame_scale_refresh_done, frame_scale_refresh_pending
-    global CurrentFrame
-
-    file = SourceDirFileList[CurrentFrame]
-    img = cv2.imread(file, cv2.IMREAD_UNCHANGED)
-    display_image(img)
-    frame_scale_refresh_done = True
-    if frame_scale_refresh_pending:
-        frame_scale_refresh_pending = False
-        win.after(100, scale_display_update)
-
-
-def select_scale_frame(selected_frame):
-    global win
-    global SourceDir
-    global CurrentFrame
-    global SourceDirFileList
-    global first_absolute_frame
-    global frame_scale_refresh_done, frame_scale_refresh_pending
-    global frame_slider
-
-    if not ConvertLoopRunning:  # Do not refresh during conversion loop
-        frame_slider.focus()
-        CurrentFrame = int(selected_frame)
-        project_config["CurrentFrame"] = CurrentFrame
-        frame_slider.config(label='Global:'+
-                            str(CurrentFrame+first_absolute_frame))
-        if frame_scale_refresh_done:
-            frame_scale_refresh_done = False
-            frame_scale_refresh_pending = False
-            win.after(5, scale_display_update)
-        else:
-            frame_scale_refresh_pending = True
-
-
-def save_general_config():
-    # Write config data upon exit
-    general_config["GeneralConfigDate"] = str(datetime.now())
-    with open(general_config_filename, 'w+') as f:
-        json.dump(general_config, f)
-
-
-def load_general_config():
-    global general_config
-    global general_config_filename
-    global LastSessionDate
-    global SourceDir, TargetDir
-    global folder_frame_source_dir, folder_frame_target_dir
-    global video_encoding_do_not_warn_again
-
-    # Check if persisted data file exist: If it does, load it
-    if not IgnoreConfig and os.path.isfile(general_config_filename):
-        persisted_data_file = open(general_config_filename)
-        general_config = json.load(persisted_data_file)
-        persisted_data_file.close()
-    else:   # No project config file. Set empty config to force defaults
-        general_config = {}
-
-    for item in general_config:
-        logging.info("%s=%s", item, str(general_config[item]))
-
-    if 'SourceDir' in general_config:
-        SourceDir = general_config["SourceDir"]
-        # If directory in configuration does not exist, set current working dir
-        if not os.path.isdir(SourceDir):
-            SourceDir = ""
-        folder_frame_source_dir.delete(0, 'end')
-        folder_frame_source_dir.insert('end', SourceDir)
-    if 'GeneralConfigDate' in general_config:
-        GeneralConfigDate = general_config["GeneralConfigDate"]
-    if 'VideoEncodingDoNotWarnAgain' in general_config:
-        video_encoding_do_not_warn_again.set(
-            general_config["VideoEncodingDoNotWarnAgain"])
-
-
-def save_project_config():
-    global skip_frame_regeneration
-    global frames_to_encode_spinbox
-    global ffmpeg_preset, film_type
-    global StabilizeAreaDefined, film_hole_height
-
-    # Write project data upon exit
-    project_config["FramesToEncode"] = frames_to_encode_spinbox.get()
-    project_config["skip_frame_regeneration"] = skip_frame_regeneration.get()
-    project_config["FFmpegPreset"] = ffmpeg_preset.get()
-    project_config["ProjectConfigDate"] = str(datetime.now())
-    project_config["FilmType"] = film_type.get()
-    project_config["PerformCropping"] = perform_cropping.get()
-    if StabilizeAreaDefined:
-        project_config["HoleHeight"] = film_hole_height
-        project_config["PerformStabilization"] = perform_stabilization.get()
-    if ExpertMode:
-        project_config["FillBorders"] = fill_borders.get()
-        project_config["FillBordersThickness"] = fill_borders_thickness.get()
-        project_config["FillBordersMode"] = fill_borders_mode.get()
-
-    with open(project_config_filename, 'w+') as f:
-        json.dump(project_config, f)
-
-
-def load_project_config():
-    global project_config
-    global project_config_basename, project_config_filename
-    global CurrentFrame
-    global frame_slider
-    global VideoFps, video_fps_dropdown_selected
-    global frame_input_filename_pattern, FrameInputFilenamePattern
-    global start_from_current_frame
-    global skip_frame_regeneration
-    global generate_video
-    global CropTopLeft, CropBottomRight, perform_cropping
-    global StabilizeAreaDefined, film_hole_height
-    global ExpertMode
-
-
-    project_config_filename = os.path.join(SourceDir, project_config_basename)
-    # Check if persisted project data file exist: If it does, load it
-    if not IgnoreConfig and os.path.isfile(project_config_filename):
-        persisted_data_file = open(project_config_filename)
-        project_config = json.load(persisted_data_file)
-        persisted_data_file.close()
-    else:   # No project config file. Set empty config to force defaults
-        project_config = {}
-
-    for item in project_config:
-        logging.info("%s=%s", item, str(project_config[item]))
-
-    if 'ProjectConfigDate' in project_config:
-        ProjectConfigDate = project_config["ProjectConfigDate"]
-    if 'TargetDir' in project_config:
-        TargetDir = project_config["TargetDir"]
-        # If directory in configuration does not exist, set current working dir
-        if not os.path.isdir(TargetDir):
-            TargetDir = ""
-        folder_frame_target_dir.delete(0, 'end')
-        folder_frame_target_dir.insert('end', TargetDir)
-    if 'CurrentFrame' in project_config:
-        CurrentFrame = project_config["CurrentFrame"]
-        CurrentFrame = max(CurrentFrame, 0)
-        frame_slider.set(CurrentFrame)
-    else:
-        CurrentFrame = 0
-        frame_slider.set(CurrentFrame)
-    if 'StartFromCurrentFrame' in project_config:
-        start_from_current_frame.set(project_config["StartFromCurrentFrame"])
-    else:
-        start_from_current_frame.set(False)
-    if 'FramesToEncode' in project_config:
-        frames_to_encode = project_config["FramesToEncode"]
-        # frames_to_encode_spinbox.set(frames_to_encode)
-        frames_to_encode_str.set(frames_to_encode)
-    else:
-        frames_to_encode = "All"
-        frames_to_encode_str.set(frames_to_encode)
-    if 'PerformCropping' in project_config:
-        perform_cropping.set(project_config["PerformCropping"])
-    else:
-        perform_cropping.set(False)
-    if 'CropRectangle' in project_config:
-        CropBottomRight = tuple(project_config["CropRectangle"][1])
-        CropTopLeft = tuple(project_config["CropRectangle"][0])
-    else:
-        CropBottomRight = (0, 0)
-        CropTopLeft = (0, 0)
-    if 'GenerateVideo' in project_config:
-        generate_video.set(project_config["GenerateVideo"])
-    else:
-        generate_video.set(False)
-    if 'skip_frame_regeneration' in project_config:
-        skip_frame_regeneration.set(project_config["skip_frame_regeneration"])
-    else:
-        skip_frame_regeneration.set(False)
-    if 'FilmType' in project_config:
-        film_type.set(project_config["FilmType"])
-        set_film_type()
-    if 'VideoFps' in project_config:
-        VideoFps = eval(project_config["VideoFps"])
-        video_fps_dropdown_selected.set(VideoFps)
-    else:
-        VideoFps = 18
-        video_fps_dropdown_selected.set(VideoFps)
-    if 'FrameInputFilenamePattern' in project_config:
-        FrameInputFilenamePattern = project_config["FrameInputFilenamePattern"]
-        frame_input_filename_pattern.delete(0, 'end')
-        frame_input_filename_pattern.insert('end',
-                                            FrameInputFilenamePattern)
-    else:
-        FrameInputFilenamePattern = "picture-*.jpg"
-        frame_input_filename_pattern.delete(0, 'end')
-        frame_input_filename_pattern.insert('end', FrameInputFilenamePattern)
-    if 'FFmpegPreset' in project_config:
-        ffmpeg_preset.set(project_config["FFmpegPreset"])
-    else:
-        ffmpeg_preset.set("veryfast")
-
-    if 'HoleHeight' in project_config:
-        film_hole_height = project_config["HoleHeight"]
-        StabilizeAreaDefined = True
-        perform_stabilization_checkbox.config(state=NORMAL)
-    else:
-        film_hole_height = 0
-        StabilizeAreaDefined = False
-        perform_stabilization_checkbox.config(state=DISABLED)
-
-    if 'PerformStabilization' in project_config:
-        perform_stabilization.set(project_config["PerformStabilization"])
-    else:
-        perform_stabilization.set(False)
-
-    if ExpertMode:
-        if 'FillBorders' in project_config:
-            fill_borders.set(project_config["FillBorders"])
-        else:
-            fill_borders.set(False)
-        if 'FillBordersThickness' in project_config:
-            fill_borders_thickness.set(project_config["FillBordersThickness"])
-        else:
-            fill_borders_thickness.set(5)
-
-        if 'FillBordersMode' in project_config:
-            fill_borders_mode.set(project_config["FillBordersMode"])
-        else:
-            fill_borders_mode.set('smear')
-
-    widget_state_refresh()
-
-    win.update()
 
 
 def afterscan_init():
@@ -1862,7 +1917,7 @@ def build_ui():
         fill_borders_thickness_slider = Scale(
             video_filters_frame, orient=HORIZONTAL, from_=5, to=50,
             variable=fill_borders_thickness,
-            command=select_scale_fill_borders_thickness,
+            command=fill_borders_set_thickness_scale,
             font=("Arial", 8), length=80)
         fill_borders_thickness_slider.grid(row=0, column=1, sticky=W)
         fill_borders_thickness_slider.config(state=DISABLED)
@@ -1890,11 +1945,18 @@ def build_ui():
             fill_borders_mode_frame,
             fill_borders_mode,
             *fill_borders_mode_list,
-            command=set_fill_borders_mode)
+            command=fill_borders_set_mode)
         fill_borders_mode_label_dropdown.pack(side=LEFT, anchor=E)
         fill_borders_mode_label_dropdown.config(state=DISABLED)
 
         video_row += 1
+
+
+def exit_app():  # Exit Application
+    global win
+    save_general_config()
+    save_project_config()
+    win.destroy()
 
 
 def main(argv):
