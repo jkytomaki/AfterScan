@@ -204,6 +204,7 @@ def save_project_config():
 
 
 def load_project_config():
+    global TargetDir
     global project_config
     global project_config_basename, project_config_filename
     global CurrentFrame
@@ -1282,7 +1283,7 @@ def frame_generation_loop():
                   img.shape[1], img.shape[0], CurrentFrame)
 
     if os.path.isdir(TargetDir):
-        target_file = os.path.join(TargetDir, os.path.basename(file))
+        target_file = os.path.join(TargetDir, FrameFilenameOutputPattern % (first_absolute_frame + CurrentFrame))
         cv2.imwrite(target_file, img)
 
     frame_slider.set(CurrentFrame)
