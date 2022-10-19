@@ -75,7 +75,7 @@ project_config = {
 }
 
 # Film hole search vars
-expected_pattern_pos = (6.5, 38)
+expected_pattern_pos = (6.5, 34)
 S8_default_hole_height = 344
 R8_default_interhole_height = 808
 pattern_bw_filename = os.path.join(script_dir, "Pattern_BW.jpg")
@@ -94,7 +94,7 @@ FrameCheckFilenameOutputPattern = "picture_out-*.jpg"  # Req. for ffmpeg gen.
 FrameInputFilenamePattern = "picture-*.jpg"
 SourceDirFileList = []
 
-#Flow control vars
+# Flow control vars
 ConvertLoopExitRequested = False
 ConvertLoopRunning = False
 
@@ -174,8 +174,6 @@ def load_general_config():
             SourceDir = ""
         folder_frame_source_dir.delete(0, 'end')
         folder_frame_source_dir.insert('end', SourceDir)
-    if 'GeneralConfigDate' in general_config:
-        GeneralConfigDate = general_config["GeneralConfigDate"]
     if 'VideoEncodingDoNotWarnAgain' in general_config:
         video_encoding_do_not_warn_again.set(
             general_config["VideoEncodingDoNotWarnAgain"])
@@ -220,7 +218,6 @@ def load_project_config():
     global StabilizeAreaDefined, film_hole_height
     global ExpertMode
 
-
     project_config_filename = os.path.join(SourceDir, project_config_basename)
     # Check if persisted project data file exist: If it does, load it
     if not IgnoreConfig and os.path.isfile(project_config_filename):
@@ -233,8 +230,6 @@ def load_project_config():
     for item in project_config:
         logging.info("%s=%s", item, str(project_config[item]))
 
-    if 'ProjectConfigDate' in project_config:
-        ProjectConfigDate = project_config["ProjectConfigDate"]
     if 'TargetDir' in project_config:
         TargetDir = project_config["TargetDir"]
         # If directory in configuration does not exist, set current working dir
@@ -280,7 +275,6 @@ def load_project_config():
         skip_frame_regeneration.set(False)
     if 'FilmType' in project_config:
         film_type.set(project_config["FilmType"])
-        set_film_type()
     if 'VideoFps' in project_config:
         VideoFps = eval(project_config["VideoFps"])
         video_fps_dropdown_selected.set(VideoFps)
@@ -722,7 +716,7 @@ def draw_rectangle(event, x, y, flags, param):
     global x_, y_
     # Code posted by Ahsin Shabbir, same Stack overflow thread
     global RectangleTopLeft, RectangleBottomRight
-    global preview_factor
+    global area_select_image_factor
 
     if event == cv2.EVENT_LBUTTONDOWN:
         if not rectangle_drawing:
@@ -742,10 +736,10 @@ def draw_rectangle(event, x, y, flags, param):
         cv2.rectangle(work_image, (ix, iy), (x, y), (0, 255, 0), 1)
         # Update global variables with area
         # Need to account for the fact area calculated with 50% reduced image
-        RectangleTopLeft = (max(0, round(min(ix, x)/preview_factor)),
-                            max(0, round(min(iy, y)/preview_factor)))
-        RectangleBottomRight = (min(img_original.shape[1], round(max(ix, x)/preview_factor)),
-                                min(img_original.shape[0], round(max(iy, y)/preview_factor)))
+        RectangleTopLeft = (max(0, round(min(ix, x)/area_select_image_factor)),
+                            max(0, round(min(iy, y)/area_select_image_factor)))
+        RectangleBottomRight = (min(img_original.shape[1], round(max(ix, x)/area_select_image_factor)),
+                                min(img_original.shape[0], round(max(iy, y)/area_select_image_factor)))
         logging.debug("Original image: (%i, %i)", img_original.shape[1], img_original.shape[0])
         logging.debug("Selected area: (%i, %i), (%i, %i)",
                       RectangleTopLeft[0], RectangleTopLeft[1],
@@ -760,7 +754,7 @@ def select_rectangle_area():
     global ix, iy
     global x_, y_
     global img_original
-    global preview_factor
+    global area_select_image_factor
 
     retvalue = False
     ix, iy = -1, -1
@@ -776,7 +770,7 @@ def select_rectangle_area():
     # Image is stabilized to have an accurate selection of crop area.
     # This leads to some interesting situation...
     # work_image = stabilize_image(work_image)
-    work_image = resize_image(work_image, 100*preview_factor)
+    work_image = resize_image(work_image, 100*area_select_image_factor)
 
     # work_image = np.zeros((512,512,3), np.uint8)
     img_original = np.copy(work_image)
@@ -843,25 +837,15 @@ def select_cropping_area():
     win.update()
 
 
-def select_hole_height():
+def select_hole_height(work_image):
     global RectangleWindowTitle
     global perform_stabilization, perform_stabilization_checkbox
     global HoleSearchTopLeft, HoleSearchBottomRight
     global StabilizeAreaDefined
-    global film_hole_height, film_hole_template, preview_factor
+    global film_hole_height, film_hole_template, area_select_image_factor
 
-    # Disable all buttons in main window
-    # button_status_change_except(0, DISABLED)
-    # win.update()
-
-    # load the image, find hole height
-    while True:
-        file = SourceDirFileList[CurrentFrame]
-        work_image = cv2.imread(file, cv2.IMREAD_UNCHANGED)
-        set_default_stabilization_values(work_image)
-        film_hole_height = determine_hole_height(work_image)
-        if (film_hole_height != 0):
-            break
+    # Find hole height
+    film_hole_height = determine_hole_height(work_image)
     if film_hole_height < 0:
         film_hole_height = 0
         StabilizeAreaDefined = False
@@ -877,14 +861,14 @@ def select_hole_height():
 def determine_hole_height(img):
     global film_hole_template, film_bw_template, film_wb_template
 
-    if film_type.get() == 'S8':
-        template_1 = film_bw_template
-        template_2 = film_wb_template
-        other_film_type = 'R8'
-    elif film_type.get() == 'R8':
+    if film_type.get() == 'R8':
         template_1 = film_wb_template
         template_2 = film_bw_template
         other_film_type = 'S8'
+    else:   # S8 by default
+        template_1 = film_bw_template
+        template_2 = film_wb_template
+        other_film_type = 'R8'
     search_img = get_image_left_stripe(img)
     top_left_1 = match_template(template_1, search_img, 230)
     top_left_2 = match_template(template_2, search_img, 230)
@@ -906,27 +890,32 @@ def determine_hole_height(img):
 def adjust_hole_pattern_size():
     global film_hole_height, film_hole_template
 
+    if film_hole_height <= 0:
+        return
+
     ratio = 1
     if film_type.get() == 'S8':
         ratio = film_hole_height / S8_default_hole_height
     elif film_type.get() == 'R8':
         ratio = film_hole_height / R8_default_interhole_height
-    logging.debug("Hole pattern, ratio: %s, %.2f", pattern_filename, ratio)
+    logging.debug("Hole pattern, ratio: %s, %.2f", os.path.basename(pattern_filename), ratio)
     film_hole_template = resize_image(film_hole_template, ratio*100)
 
 
 def set_film_type():
     global film_type, expected_pattern_pos, pattern_filename, film_hole_template
     global S8_default_hole_height, R8_default_interhole_height
+    global film_hole_height
     if film_type.get() == 'S8':
         pattern_filename = s8_pattern_filename
         expected_pattern_pos = (6.5, 34)
-        film_hole_height = S8_default_hole_height
     elif film_type.get() == 'R8':
         pattern_filename = r8_pattern_filename
         expected_pattern_pos = (9.6, 13.3)
-        film_hole_height = R8_default_interhole_height
     film_hole_template = cv2.imread(pattern_filename, 0)
+    adjust_hole_pattern_size()
+
+    logging.debug("Film type: %s, %s, %i", film_type.get(), os.path.basename(pattern_filename), film_hole_height)
 
     project_config["FilmType"] = film_type.get()
     win.update()
@@ -946,9 +935,6 @@ def match_template(template, img, thres):
     # Best match
     min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(res)
     top_left = max_loc
-    if top_left[1] > 500:
-        logging.debug("Image out of bounds: (%i,%i)",
-                      top_left[0], top_left[1])
     return top_left
 
 
@@ -1017,11 +1003,11 @@ def stabilize_image(img):
     width = img.shape[1]
     height = img.shape[0]
 
-    cropped_image = get_image_left_stripe(img)
+    left_stripe_image = get_image_left_stripe(img)
 
     # Search film hole pattern
     try:
-        top_left = match_template(film_hole_template, cropped_image, 230)
+        top_left = match_template(film_hole_template, left_stripe_image, 230)
         # The coordinates returned by match template are relative to the
         # cropped image. In order to calculate the correct values to provide
         # to the translation matrix, need to convert to absolute coordinates
@@ -1091,6 +1077,7 @@ def get_current_dir_file_list():
     global CurrentFrame, first_absolute_frame, last_absolute_frame
     global frame_slider
     global CurrentFrame
+    global area_select_image_factor, screen_height
 
     if not os.path.isdir(SourceDir):
         return
@@ -1112,7 +1099,14 @@ def get_current_dir_file_list():
     frame_slider.config(from_=0, to=len(SourceDirFileList)-1,
                         label='Global:'+str(CurrentFrame+first_absolute_frame))
 
-    select_hole_height()
+    work_image = cv2.imread(SourceDirFileList[CurrentFrame], cv2.IMREAD_UNCHANGED)
+    set_hole_search_area(work_image)
+    select_hole_height(work_image)
+    set_film_type()
+    # Select area window should be proportional to screen height
+    # Deduct 120 pixels (approximately) for taskbar + window title
+    area_select_image_factor = (screen_height - 200) / work_image.shape[0]
+    area_select_image_factor = min(1, area_select_image_factor)
 
     return len(SourceDirFileList)
 
@@ -1137,7 +1131,7 @@ def valid_generated_frame_range():
     return file_count == frames_to_encode
 
 
-def set_default_stabilization_values(img):
+def set_hole_search_area(img):
     global HoleSearchTopLeft, HoleSearchBottomRight
 
     # Initizalize default values for perforation search area,
@@ -1509,7 +1503,7 @@ def afterscan_init():
     global draw_capture_label
     global draw_capture_canvas
     global PreviewWidth, PreviewHeight
-    global preview_factor
+    global area_select_image_factor, screen_height
     global preview_border_frame
     global ExpertMode
 
@@ -1540,9 +1534,6 @@ def afterscan_init():
     else:
         PreviewWidth = 560
         PreviewHeight = 420
-    # Replace hardcoded preview_factor, make proportional to RPi image height
-    # Deduct 80 pixels (aproximately) for taskbar + window title
-    preview_factor = (screen_height - 80) / 1520
     app_width = PreviewWidth + 320 + 30
     app_height = PreviewHeight + 25
     if ExpertMode:
