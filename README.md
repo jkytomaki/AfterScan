@@ -9,6 +9,8 @@ Actions performed by this tool on the captured frames are:
 - Cropping
 - Video generation
 
+And that's about it. Other post-processing jobs (film cleanup, color correction) should be done with other tools to be found elsewhere.
+
 This tool relies in the following open source projects to achieve its objectives:
 * [Python](https://www.python.org/)
 * [OpenCV](https://opencv.org/)
