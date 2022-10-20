@@ -30,6 +30,9 @@ Sprocket holes in 8mm films are expected to be in a very precise location for ea
    - Filename: Name of the file where the video will be written. It will be stored in the target folder, together with the stabilized/cropped frames. If no name is supplied, the tool will automatically create one with a timestamp
    - FPS: Frames per second. For Super 8 this should be 18 and, I think, 16 in the case of R8
    - Quality/speed choice: Three options available, from high quality (slow) to Fast (low quality)
+   
+## Additional information
+You can find a description of the UI eolements in the [wiki](https://github.com/jareff-g/AfterScan/wiki/AfterScan-UI-description).
 
 
 
