@@ -183,8 +183,11 @@ def save_project_config():
     global frames_to_encode_spinbox
     global ffmpeg_preset, film_type
     global StabilizeAreaDefined, film_hole_height
+    global CurrentFrame
 
     # Write project data upon exit
+    project_config["CurrentFrame"] = CurrentFrame
+    project_config["FramesToEncode"] = frames_to_encode_spinbox.get()
     project_config["FramesToEncode"] = frames_to_encode_spinbox.get()
     project_config["skip_frame_regeneration"] = skip_frame_regeneration.get()
     project_config["FFmpegPreset"] = ffmpeg_preset.get()
@@ -207,8 +210,7 @@ def load_project_config():
     global TargetDir
     global project_config
     global project_config_basename, project_config_filename
-    global CurrentFrame
-    global frame_slider
+    global CurrentFrame, frame_slider
     global VideoFps, video_fps_dropdown_selected
     global frame_input_filename_pattern, FrameInputFilenamePattern
     global start_from_current_frame
@@ -1071,7 +1073,6 @@ def get_current_dir_file_list():
     global FrameInputFilenamePattern
     global CurrentFrame, first_absolute_frame, last_absolute_frame
     global frame_slider
-    global CurrentFrame
     global area_select_image_factor, screen_height
 
     if not os.path.isdir(SourceDir):
@@ -1086,7 +1087,6 @@ def get_current_dir_file_list():
                                 "Please specify new one and try again")
         return
 
-    CurrentFrame = 0
     first_absolute_frame = int(
         ''.join(list(filter(str.isdigit,
                             os.path.basename(SourceDirFileList[0])))))
@@ -1593,7 +1593,7 @@ def build_ui():
     global pattern_filename
     global frame_input_filename_pattern
     global FrameInputFilenamePattern
-    global frame_slider
+    global frame_slider, CurrentFrame
     global film_type, film_hole_template
 
     # Frame for standard widgets
@@ -1614,6 +1614,7 @@ def build_ui():
                          variable=frame_selected, command=select_scale_frame,
                          label='Global:', font=("Arial", 8))
     frame_slider.pack(side=BOTTOM, ipady=4)
+    frame_slider.set(CurrentFrame)
 
     # Application start button
     Go_btn = Button(regular_top_section_frame, text="Start", width=8, height=3,
@@ -1799,7 +1800,7 @@ def build_ui():
     # Drop down to select FPS
     # Dropdown menu options
     fps_list = [
-        "16",
+        "16.67",
         "18",
         "24",
         "25",
@@ -2049,6 +2050,8 @@ def main(argv):
         Go_btn.config(state=DISABLED)
         cropping_btn.config(state=DISABLED)
         frame_slider.config(state=DISABLED)
+    else:
+        frame_slider.set(CurrentFrame)
 
     init_display()
 
