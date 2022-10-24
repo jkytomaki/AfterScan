@@ -65,18 +65,23 @@ script_dir = os.path.dirname(script_dir)
 general_config_filename = os.path.join(script_dir, "AfterScan.json")
 project_config_basename = "AfterScan-project.json"
 project_config_filename = ""
-r8_pattern_filename = os.path.join(script_dir, "Pattern.R8.jpg")
-s8_pattern_filename = os.path.join(script_dir, "Pattern.S8.jpg")
-pattern_filename = s8_pattern_filename
+pattern_filename_r8 = os.path.join(script_dir, "Pattern.R8.jpg")
+pattern_filename_r8_alt = os.path.join(script_dir, "Pattern.R8-alt.jpg")
+pattern_filename_s8 = os.path.join(script_dir, "Pattern.S8.jpg")
+pattern_filename_s8_alt = os.path.join(script_dir, "Pattern.S8-alt.jpg")
+pattern_filename = pattern_filename_s8
+
 general_config = {
 }
 project_config = {
 }
 
 # Film hole search vars
-expected_pattern_pos = (6.5, 34)
-S8_default_hole_height = 344
-R8_default_interhole_height = 808
+expected_pattern_pos_s8 = (6.5, 34)
+expected_pattern_pos_r8 = (9.6, 13.3)
+expected_pattern_pos = expected_pattern_pos_s8
+default_hole_height_s8 = 344
+default_interhole_height_r8 = 808
 pattern_bw_filename = os.path.join(script_dir, "Pattern_BW.jpg")
 pattern_wb_filename = os.path.join(script_dir, "Pattern_WB.jpg")
 film_hole_height = 0
@@ -197,6 +202,7 @@ def save_project_config():
     if StabilizeAreaDefined:
         project_config["HoleHeight"] = film_hole_height
         project_config["PerformStabilization"] = perform_stabilization.get()
+        project_config["PerformStrongStabilization"] = perform_stabilization_strong.get()
     if ExpertMode:
         project_config["FillBorders"] = fill_borders.get()
         project_config["FillBordersThickness"] = fill_borders_thickness.get()
@@ -301,15 +307,22 @@ def load_project_config():
         film_hole_height = project_config["HoleHeight"]
         StabilizeAreaDefined = True
         perform_stabilization_checkbox.config(state=NORMAL)
+        perform_stabilization_strong_checkbox.config(state=NORMAL)
     else:
         film_hole_height = 0
         StabilizeAreaDefined = False
         perform_stabilization_checkbox.config(state=DISABLED)
+        perform_stabilization_strong_checkbox.config(state=DISABLED)
 
     if 'PerformStabilization' in project_config:
         perform_stabilization.set(project_config["PerformStabilization"])
     else:
         perform_stabilization.set(False)
+
+    if 'PerformStrongStabilization' in project_config:
+        perform_stabilization_strong.set(project_config["PerformStrongStabilization"])
+    else:
+        perform_stabilization_strong.set(False)
 
     if ExpertMode:
         if 'FillBorders' in project_config:
@@ -516,6 +529,7 @@ UI support commands & functions
 def button_status_change_except(except_button, button_status):
     global source_folder_btn, target_folder_btn
     global perform_stabilization_checkbox
+    global perform_stabilization_strong_checkbox
     global perform_cropping_checkbox, Crop_btn
     global Go_btn
     global Exit_btn
@@ -534,6 +548,8 @@ def button_status_change_except(except_button, button_status):
         Exit_btn.config(state=button_status)
     if except_button != perform_stabilization_checkbox:
         perform_stabilization_checkbox.config(state=button_status)
+    if except_button != perform_stabilization_strong_checkbox:
+        perform_stabilization_strong_checkbox.config(state=button_status)
 
     if not CropAreaDefined:
         perform_cropping_checkbox.config(state=DISABLED)
@@ -584,6 +600,21 @@ def widget_state_refresh():
 def perform_stabilization_selection():
     global perform_stabilization
     # Nothing to do here
+
+
+def perform_stabilization_strong_selection():
+    global perform_stabilization_strong
+    global film_type, pattern_filename
+    if perform_stabilization_strong.get():
+        if film_type.get() == 'R8':
+            pattern_filename = pattern_filename_r8_alt
+        else:
+            pattern_filename = pattern_filename_s8_alt
+    else:
+        if film_type.get() == 'R8':
+            pattern_filename = pattern_filename_r8
+        else:
+            pattern_filename = pattern_filename_s8
 
 
 def perform_cropping_selection():
@@ -804,15 +835,8 @@ def select_cropping_area():
     if select_rectangle_area():
         CropAreaDefined = True
         button_status_change_except(0, NORMAL)
-        # FFmpeg does not like odd dimensions
-        # Adjust (increasing BottomRight)in case of odd width/height
-        rectangle_bottom_right_list = list(RectangleBottomRight)
-        if (RectangleBottomRight[0] - RectangleTopLeft[0]) % 2 == 1:
-            rectangle_bottom_right_list[0] += 1
-        if (RectangleBottomRight[1] - RectangleTopLeft[1]) % 2 == 1:
-            rectangle_bottom_right_list[1] += 1
         CropTopLeft = RectangleTopLeft
-        CropBottomRight = tuple(rectangle_bottom_right_list)
+        CropBottomRight = RectangleBottomRight
         logging.debug("Crop area: (%i,%i) - (%i, %i)", CropTopLeft[0],
                       CropTopLeft[1], CropBottomRight[0], CropBottomRight[1])
     else:
@@ -837,6 +861,7 @@ def select_cropping_area():
 def select_hole_height(work_image):
     global RectangleWindowTitle
     global perform_stabilization, perform_stabilization_checkbox
+    global perform_stabilization_strong, perform_stabilization_strong_checkbox
     global HoleSearchTopLeft, HoleSearchBottomRight
     global StabilizeAreaDefined
     global film_hole_height, film_hole_template, area_select_image_factor
@@ -848,9 +873,12 @@ def select_hole_height(work_image):
         StabilizeAreaDefined = False
         perform_stabilization.set(False)
         perform_stabilization_checkbox.config(state=DISABLED)
+        perform_stabilization_strong.set(False)
+        perform_stabilization_strong_checkbox.config(state=DISABLED)
     else:
         StabilizeAreaDefined = True
         perform_stabilization_checkbox.config(state=NORMAL)
+        perform_stabilization_strong_checkbox.config(state=NORMAL)
         adjust_hole_pattern_size()
     win.update()
 
@@ -892,23 +920,29 @@ def adjust_hole_pattern_size():
 
     ratio = 1
     if film_type.get() == 'S8':
-        ratio = film_hole_height / S8_default_hole_height
+        ratio = film_hole_height / default_hole_height_s8
     elif film_type.get() == 'R8':
-        ratio = film_hole_height / R8_default_interhole_height
+        ratio = film_hole_height / default_interhole_height_r8
     logging.debug("Hole pattern, ratio: %s, %.2f", os.path.basename(pattern_filename), ratio)
     film_hole_template = resize_image(film_hole_template, ratio*100)
 
 
 def set_film_type():
     global film_type, expected_pattern_pos, pattern_filename, film_hole_template
-    global S8_default_hole_height, R8_default_interhole_height
+    global default_hole_height_s8, default_interhole_height_r8
     global film_hole_height
     if film_type.get() == 'S8':
-        pattern_filename = s8_pattern_filename
-        expected_pattern_pos = (6.5, 34)
+        if perform_stabilization_strong.get():
+            pattern_filename = pattern_filename_s8_alt
+        else:
+            pattern_filename = pattern_filename_s8
+        expected_pattern_pos = expected_pattern_pos_s8
     elif film_type.get() == 'R8':
-        pattern_filename = r8_pattern_filename
-        expected_pattern_pos = (9.6, 13.3)
+        if perform_stabilization_strong.get():
+            pattern_filename = pattern_filename_r8_alt
+        else:
+            pattern_filename = pattern_filename_r8
+        expected_pattern_pos = expected_pattern_pos_r8
     film_hole_template = cv2.imread(pattern_filename, 0)
     adjust_hole_pattern_size()
 
@@ -929,6 +963,17 @@ def match_template(template, img, thres):
     img_grey = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     img_bw = cv2.threshold(img_grey, thres, 255, cv2.THRESH_BINARY)[1]
     res = cv2.matchTemplate(img_bw, template, cv2.TM_CCOEFF_NORMED)
+    # Debug code starts
+    # cv2.namedWindow('Template')
+    # cv2.namedWindow('Image left strip')
+    # img_bw_s = resize_image(img_bw, 50)
+    # template_s = resize_image(template, 50)
+    # cv2.imshow('Template', template_s)
+    # cv2.imshow('Image left strip', img_bw_s)
+    # cv2.waitKey(0)
+    # cv2.destroyWindow('Image left strip')
+    # cv2.destroyWindow('Template')
+    # Debug code ends
     # Best match
     min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(res)
     top_left = max_loc
@@ -1017,6 +1062,13 @@ def stabilize_image(img):
 
         move_x = round((expected_pattern_pos[0] * width / 100)) - top_left[0]
         move_y = round((expected_pattern_pos[1] * height / 100)) - top_left[1]
+        # If shift is too big then ir might be due to holes not well
+        # recognized. In such case we do not shift
+        # if move_x > width * 0.05 or move_y > height * 0.3:
+        #     logging.debug("Skip frame stabilize, shift too big (%i, %i)",
+        #                   move_x, move_y)
+        #     return img
+
         logging.debug("Stabilizing frame: (%i,%i) to move (%i, %i)",
                       top_left[0], top_left[1], move_x, move_y)
 
@@ -1039,15 +1091,42 @@ def stabilize_image(img):
     return translated_image
 
 
+def even_image(img):
+    # Get image dimensions to check whether one dimension is odd
+    width = img.shape[1]
+    height = img.shape[0]
+
+    X_end = width
+    Y_end = height
+
+    # FFmpeg does not like odd dimensions
+    # Adjust (decreasing BottomRight)in case of odd width/height
+    if width % 2 == 1:
+        X_end -= 1
+    if height % 2 == 1:
+        Y_end -= 1
+    if X_end != 0 or Y_end != 0:
+        return img[0:Y_end, 0:X_end]
+    else:
+        return img
+
+
 def crop_image(img, top_left, botton_right):
     # Get image dimensions to perform image shift later
     width = img.shape[1]
     height = img.shape[0]
 
     Y_start = top_left[1]
-    Y_end = botton_right[1]
+    Y_end = min(botton_right[1], height)
     X_start = top_left[0]
-    X_end = botton_right[0]
+    X_end = min (botton_right[0], width)
+
+    # FFmpeg does not like odd dimensions
+    # Adjust (decreasing BottomRight)in case of odd width/height
+    if (X_end - X_start) % 2 == 1:
+        X_end -= 1
+    if (Y_end - Y_start) % 2 == 1:
+        Y_end -= 1
 
     return img[Y_start:Y_end, X_start:X_end]
 
@@ -1094,7 +1173,10 @@ def get_current_dir_file_list():
     frame_slider.config(from_=0, to=len(SourceDirFileList)-1,
                         label='Global:'+str(CurrentFrame+first_absolute_frame))
 
-    work_image = cv2.imread(SourceDirFileList[CurrentFrame], cv2.IMREAD_UNCHANGED)
+    # In order to determine hole height, no not take the first frame, as often
+    # it is not so good. Take a frame 10% ahead in the set
+    sample_frame = CurrentFrame + int((len(SourceDirFileList) - CurrentFrame) * 0.1)
+    work_image = cv2.imread(SourceDirFileList[sample_frame], cv2.IMREAD_UNCHANGED)
     set_hole_search_area(work_image)
     select_hole_height(work_image)
     set_film_type()
@@ -1239,7 +1321,8 @@ def generation_exit():
 
 
 def frame_generation_loop():
-    global perform_stabilization, perform_cropping
+    global perform_stabilization, perform_stabilization_strong
+    global perform_cropping
     global ConvertLoopExitRequested
     global save_bg, save_fg
     global Go_btn
@@ -1275,12 +1358,17 @@ def frame_generation_loop():
         img = stabilize_image(img)
     if perform_cropping.get():
         img = crop_image(img, CropTopLeft, CropBottomRight)
+    else:
+        img = even_image(img)
 
     display_image(img)
 
     logging.debug("Display image: %s, target size: (%i, %i), "
                   "CurrentFrame %i", os.path.basename(file),
                   img.shape[1], img.shape[0], CurrentFrame)
+    if img.shape[1] % 2 == 1 or img.shape[0] % 2 == 1:
+        logging.error("Target size, one odd dimension")
+        CurrentFrame = StartFrame + frames_to_encode - 1
 
     if os.path.isdir(TargetDir):
         target_file = os.path.join(TargetDir, FrameFilenameOutputPattern % (first_absolute_frame + CurrentFrame))
@@ -1581,6 +1669,7 @@ def build_ui():
     global save_bg, save_fg
     global source_folder_btn, target_folder_btn
     global perform_stabilization, perform_stabilization_checkbox
+    global perform_stabilization_strong, perform_stabilization_strong_checkbox
     global perform_cropping_checkbox, Crop_btn
     global Go_btn
     global Exit_btn
@@ -1727,6 +1816,15 @@ def build_ui():
     perform_stabilization_checkbox.grid(row=postprocessing_row, column=0,
                                         sticky=W)
     perform_stabilization_checkbox.config(state=DISABLED)
+
+    perform_stabilization_strong = tk.BooleanVar(value=False)
+    perform_stabilization_strong_checkbox = tk.Checkbutton(
+        postprocessing_frame, text='Stronger stabilize',
+        variable=perform_stabilization_strong, onvalue=True, offvalue=False, width=13,
+        command=perform_stabilization_strong_selection)
+    perform_stabilization_strong_checkbox.grid(row=postprocessing_row, column=1,
+                                               columnspan=2, sticky=W)
+    perform_stabilization_strong_checkbox.config(state=DISABLED)
     postprocessing_row += 1
 
     # Check box to do cropping or not
