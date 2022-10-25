@@ -466,7 +466,6 @@ def job_processing_loop():
             project_config = job_list[entry]['project'].copy()
             decode_project_config()
 
-            load_project_config()  # Needs SourceDir and first_absolute_frame defined
             # Load matching file list from newly selected dir
             get_current_dir_file_list()  # first_absolute_frame is set here
 
