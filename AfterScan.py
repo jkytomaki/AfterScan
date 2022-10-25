@@ -19,7 +19,7 @@ __author__ = 'Juan Remirez de Esparza'
 __copyright__ = "Copyright 2022, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
-__version__ = "1.4"
+__version__ = "1.5"
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
 __status__ = "Development"
@@ -65,6 +65,8 @@ script_dir = os.path.dirname(script_dir)
 general_config_filename = os.path.join(script_dir, "AfterScan.json")
 project_config_basename = "AfterScan-project.json"
 project_config_filename = ""
+project_config_from_file = True
+job_list_filename = os.path.join(script_dir, "AfterScan_job_list.json")
 pattern_filename_r8 = os.path.join(script_dir, "Pattern.R8.jpg")
 pattern_filename_r8_alt = os.path.join(script_dir, "Pattern.R8-alt.jpg")
 pattern_filename_s8 = os.path.join(script_dir, "Pattern.S8.jpg")
@@ -78,7 +80,7 @@ project_config = {
 
 # Film hole search vars
 expected_pattern_pos_s8 = (6.5, 34)
-expected_pattern_pos_r8 = (9.6, 13.3)
+expected_pattern_pos_r8 = (6.8, 15.5)   # used bo be 9.6, 13.3 before shortening height of R8 template
 expected_pattern_pos = expected_pattern_pos_s8
 default_hole_height_s8 = 344
 default_interhole_height_r8 = 808
@@ -101,6 +103,7 @@ SourceDirFileList = []
 # Flow control vars
 ConvertLoopExitRequested = False
 ConvertLoopRunning = False
+BatchJobRunning = False
 
 # preview dimensions (4/3 format) vars
 PreviewWidth = 700
@@ -118,6 +121,7 @@ StabilizeWindowTitle = "Select height of S8 hole, or R8 inter-hole space. " \
                        "Press Enter to confirm, Escape to cancel"
 RectangleWindowTitle = ""
 StabilizeAreaDefined = False
+StabilizationThreshold = 210.0
 CropAreaDefined = False
 RectangleTopLeft = (0, 0)
 RectangleBottomRight = (0, 0)
@@ -189,16 +193,21 @@ def save_project_config():
     global ffmpeg_preset, film_type
     global StabilizeAreaDefined, film_hole_height
     global CurrentFrame
+    global video_filename_name
 
+    # Do not save if current project comes from batch job
+    if not project_config_from_file:
+        return
     # Write project data upon exit
+    project_config["SourceDir"] = SourceDir
     project_config["CurrentFrame"] = CurrentFrame
-    project_config["FramesToEncode"] = frames_to_encode_spinbox.get()
     project_config["FramesToEncode"] = frames_to_encode_spinbox.get()
     project_config["skip_frame_regeneration"] = skip_frame_regeneration.get()
     project_config["FFmpegPreset"] = ffmpeg_preset.get()
     project_config["ProjectConfigDate"] = str(datetime.now())
     project_config["FilmType"] = film_type.get()
     project_config["PerformCropping"] = perform_cropping.get()
+    project_config["VideoFilename"] = video_filename_name.get()
     if StabilizeAreaDefined:
         project_config["HoleHeight"] = film_hole_height
         project_config["PerformStabilization"] = perform_stabilization.get()
@@ -213,18 +222,9 @@ def save_project_config():
 
 
 def load_project_config():
-    global TargetDir
-    global project_config
+    global SourceDir
+    global project_config, project_config_from_file
     global project_config_basename, project_config_filename
-    global CurrentFrame, frame_slider
-    global VideoFps, video_fps_dropdown_selected
-    global frame_input_filename_pattern, FrameInputFilenamePattern
-    global start_from_current_frame
-    global skip_frame_regeneration
-    global generate_video
-    global CropTopLeft, CropBottomRight, perform_cropping
-    global StabilizeAreaDefined, film_hole_height
-    global ExpertMode
 
     project_config_filename = os.path.join(SourceDir, project_config_basename)
     # Check if persisted project data file exist: If it does, load it
@@ -238,6 +238,34 @@ def load_project_config():
     for item in project_config:
         logging.info("%s=%s", item, str(project_config[item]))
 
+    # Allow to determine source of current project, to avoid
+    # saving it in case of batch processing
+    project_config_from_file = True
+
+    decode_project_config()
+
+
+def decode_project_config():        
+    global SourceDir, TargetDir
+    global project_config
+    global project_config_basename, project_config_filename
+    global CurrentFrame, frame_slider
+    global VideoFps, video_fps_dropdown_selected
+    global frame_input_filename_pattern, FrameInputFilenamePattern
+    global start_from_current_frame
+    global skip_frame_regeneration
+    global generate_video, video_filename_name
+    global CropTopLeft, CropBottomRight, perform_cropping
+    global StabilizeAreaDefined, film_hole_height
+    global ExpertMode
+
+    if 'SourceDir' in project_config:
+        SourceDir = project_config["SourceDir"]
+        # If directory in configuration does not exist, set current working dir
+        if not os.path.isdir(SourceDir):
+            SourceDir = ""
+        folder_frame_source_dir.delete(0, 'end')
+        folder_frame_source_dir.insert('end', SourceDir)
     if 'TargetDir' in project_config:
         TargetDir = project_config["TargetDir"]
         # If directory in configuration does not exist, set current working dir
@@ -263,6 +291,12 @@ def load_project_config():
     else:
         frames_to_encode = "All"
         frames_to_encode_str.set(frames_to_encode)
+    if 'StabilizationThreshold' in project_config:
+        StabilizationThreshold = project_config["StabilizationThreshold"]
+        stabilization_threshold_str.set(StabilizationThreshold)
+    else:
+        StabilizationThreshold = 210
+        stabilization_threshold_str.set(frames_to_encode)
     if 'PerformCropping' in project_config:
         perform_cropping.set(project_config["PerformCropping"])
     else:
@@ -273,31 +307,28 @@ def load_project_config():
     else:
         CropBottomRight = (0, 0)
         CropTopLeft = (0, 0)
+    perform_cropping_selection()
     if 'GenerateVideo' in project_config:
         generate_video.set(project_config["GenerateVideo"])
     else:
         generate_video.set(False)
+    generate_video_selection()
+    if 'VideoFilename' in project_config:
+        TargetVideoFilename = project_config["VideoFilename"]
+        video_filename_name.delete(0, 'end')
+        video_filename_name.insert('end', TargetVideoFilename)
+    else:
+        video_filename_name.delete(0, 'end')
     if 'skip_frame_regeneration' in project_config:
         skip_frame_regeneration.set(project_config["skip_frame_regeneration"])
     else:
         skip_frame_regeneration.set(False)
-    if 'FilmType' in project_config:
-        film_type.set(project_config["FilmType"])
-    if 'VideoFps' in project_config:
-        VideoFps = eval(project_config["VideoFps"])
-        video_fps_dropdown_selected.set(VideoFps)
-    else:
-        VideoFps = 18
-        video_fps_dropdown_selected.set(VideoFps)
     if 'FrameInputFilenamePattern' in project_config:
         FrameInputFilenamePattern = project_config["FrameInputFilenamePattern"]
-        frame_input_filename_pattern.delete(0, 'end')
-        frame_input_filename_pattern.insert('end',
-                                            FrameInputFilenamePattern)
     else:
         FrameInputFilenamePattern = "picture-*.jpg"
-        frame_input_filename_pattern.delete(0, 'end')
-        frame_input_filename_pattern.insert('end', FrameInputFilenamePattern)
+    frame_input_filename_pattern.delete(0, 'end')
+    frame_input_filename_pattern.insert('end', FrameInputFilenamePattern)
     if 'FFmpegPreset' in project_config:
         ffmpeg_preset.set(project_config["FFmpegPreset"])
     else:
@@ -319,10 +350,26 @@ def load_project_config():
     else:
         perform_stabilization.set(False)
 
+    # 'film_type' needs to be set before perform_stabilization_strong_selection
+    # which, in turn, will call 'set_film_type'
+    if 'FilmType' in project_config:
+        film_type.set(project_config["FilmType"])
+    else:
+        film_type.set('S8')
+
     if 'PerformStrongStabilization' in project_config:
         perform_stabilization_strong.set(project_config["PerformStrongStabilization"])
     else:
         perform_stabilization_strong.set(False)
+    perform_stabilization_strong_selection()
+
+    if 'VideoFps' in project_config:
+        VideoFps = eval(project_config["VideoFps"])
+        video_fps_dropdown_selected.set(VideoFps)
+    else:
+        VideoFps = 18
+        video_fps_dropdown_selected.set(VideoFps)
+    set_fps(str(VideoFps))
 
     if ExpertMode:
         if 'FillBorders' in project_config:
@@ -342,6 +389,94 @@ def load_project_config():
     widget_state_refresh()
 
     win.update()
+
+
+"""
+##########################
+Job list support functions
+##########################
+"""
+def job_list_add_current():
+    global job_list
+    global CurrentFrame, frames_to_encode
+    global project_config, video_filename_name
+    global job_list_listbox
+
+    entry_name = video_filename_name.get()
+    if entry_name == "":
+        entry_name = os.path.split(TargetDir)[1] + "_" + CurrentFrame + "-" + frames_to_encode
+    save_project_config()  # Make sure all current settings are in project_config
+    job_list[entry_name] = {'project': project_config.copy(), 'done': False}
+    job_list_listbox.insert('end', entry_name)
+
+
+def job_list_delete_selected():
+    global job_list
+    global job_list_listbox
+    selected = job_list_listbox.curselection()
+    job_list.pop(job_list_listbox.get(selected))
+    if selected != ():
+        job_list_listbox.delete(selected)
+
+
+def save_job_list():
+    global job_list, job_list_filename
+
+    with open(job_list_filename, 'w+') as f:
+        json.dump(job_list, f)
+
+
+def load_job_list():
+    global job_list, job_list_filename
+
+    if not IgnoreConfig and os.path.isfile(job_list_filename):
+        f = open(job_list_filename)
+        job_list = json.load(f)
+        for entry in job_list:
+            job_list_listbox.insert('end', entry)
+        f.close()
+    else:   # No project config file. Set empty config to force defaults
+        job_list = {}
+
+
+
+def start_processing_job_list():
+    global BatchJobRunning
+    BatchJobRunning = True
+    job_processing_loop()
+
+
+def job_processing_loop():
+    global job_list
+    global project_config
+    global CurrentJobEntry
+    global BatchJobRunning
+    global project_config_from_file
+
+    job_started = False
+    idx = 0
+    for entry in job_list:
+        if  job_list[entry]['done'] == False:
+            job_list_listbox.selection_set(idx)
+            CurrentJobEntry = entry
+            logging.info("Processing %s, starting from frame %i, %s frames",
+                         entry, job_list[entry]['project']['CurrentFrame'],
+                         job_list[entry]['project']['FramesToEncode'])
+            project_config_from_file = False
+            project_config = job_list[entry]['project'].copy()
+            decode_project_config()
+
+            load_project_config()  # Needs SourceDir and first_absolute_frame defined
+            # Load matching file list from newly selected dir
+            get_current_dir_file_list()  # first_absolute_frame is set here
+
+            start_convert()
+            job_started = True
+            break
+        job_list_listbox.selection_clear(idx)
+        idx += 1
+    if not job_started:
+        BatchJobRunning = False
 
 
 """
@@ -603,18 +738,21 @@ def perform_stabilization_selection():
 
 
 def perform_stabilization_strong_selection():
-    global perform_stabilization_strong
-    global film_type, pattern_filename
-    if perform_stabilization_strong.get():
-        if film_type.get() == 'R8':
-            pattern_filename = pattern_filename_r8_alt
-        else:
-            pattern_filename = pattern_filename_s8_alt
-    else:
-        if film_type.get() == 'R8':
-            pattern_filename = pattern_filename_r8
-        else:
-            pattern_filename = pattern_filename_s8
+    set_film_type()
+
+
+def stabilization_threshold_selection(updown):
+    global stabilization_threshold_spinbox, stabilization_threshold_str
+    global StabilizationThreshold
+    StabilizationThreshold = stabilization_threshold_spinbox.get()
+    project_config["StabilizationThreshold"] = StabilizationThreshold
+
+
+def stabilization_threshold_spinbox_focus_out(event):
+    global stabilization_threshold_spinbox, stabilization_threshold_str
+    global StabilizationThreshold
+    StabilizationThreshold = stabilization_threshold_spinbox.get()
+    project_config["StabilizationThreshold"] = StabilizationThreshold
 
 
 def perform_cropping_selection():
@@ -637,6 +775,11 @@ def frames_to_encode_selection(updown):
             frames_to_encode_str.set('1')
         else:
             frames_to_encode_str.set('All')
+
+
+def frames_to_encode_spinbox_focus_out(event):
+    global frames_to_encode_spinbox, frames_to_encode_str
+    project_config["FramesToEncode"] = frames_to_encode_spinbox.get()
 
 
 def fill_borders_selection():
@@ -699,9 +842,17 @@ def scale_display_update():
     global win
     global frame_scale_refresh_done, frame_scale_refresh_pending
     global CurrentFrame
+    global perform_stabilization, perform_cropping
+    global CropTopLeft, CropBottomRight
 
     file = SourceDirFileList[CurrentFrame]
     img = cv2.imread(file, cv2.IMREAD_UNCHANGED)
+    if perform_stabilization.get():
+        img = stabilize_image(img)
+    if perform_cropping.get():
+        img = crop_image(img, CropTopLeft, CropBottomRight)
+    else:
+        img = even_image(img)
     display_image(img)
     frame_scale_refresh_done = True
     if frame_scale_refresh_pending:
@@ -1041,6 +1192,7 @@ def stabilize_image(img):
     global SourceDirFileList, CurrentFrame
     global HoleSearchTopLeft, HoleSearchBottomRight
     global expected_pattern_pos, film_hole_template
+    global StabilizationThreshold
     # Get image dimensions to perform image shift later
     width = img.shape[1]
     height = img.shape[0]
@@ -1049,7 +1201,7 @@ def stabilize_image(img):
 
     # Search film hole pattern
     try:
-        top_left = match_template(film_hole_template, left_stripe_image, 230)
+        top_left = match_template(film_hole_template, left_stripe_image, float(StabilizationThreshold))
         # The coordinates returned by match template are relative to the
         # cropped image. In order to calculate the correct values to provide
         # to the translation matrix, need to convert to absolute coordinates
@@ -1219,7 +1371,7 @@ def set_hole_search_area(img):
     # Default values are needed before the stabilization search area
     # has been defined, therefore we initialized them here
     HoleSearchTopLeft = (0, 0)
-    HoleSearchBottomRight = (round(width * 0.25), height)
+    HoleSearchBottomRight = (round(width * 0.20), height)
 
 
 """
@@ -1286,8 +1438,10 @@ def start_convert():
             elif os.path.isfile(os.path.join(TargetDir, TargetVideoFilename)):
                 error_msg = (TargetVideoFilename + " already exist in target "
                              "folder. Overwrite?")
-                if not tk.messagebox.askyesno("Error!", error_msg):
-                    return
+                if not BatchJobRunning:
+                    if not tk.messagebox.askyesno("Error!", error_msg):
+                        generation_exit()
+                        return
         if generate_video.get() and not video_encoding_do_not_warn_again.get():
             tk.messagebox.showwarning(
                 "Video encoding warning",
@@ -1311,6 +1465,8 @@ def generation_exit():
     global ConvertLoopExitRequested
     global ConvertLoopRunning
     global Go_btn, save_bg, save_fg
+    global BatchJobRunning
+    global job_list, CurrentJobEntry
 
     ConvertLoopExitRequested = False  # Reset flags
     ConvertLoopRunning = False
@@ -1318,6 +1474,11 @@ def generation_exit():
     # Enable all buttons in main window
     button_status_change_except(0, NORMAL)
     win.update()
+
+    if BatchJobRunning:
+        job_list[CurrentJobEntry]['done'] = True
+        job_processing_loop()
+
 
 
 def frame_generation_loop():
@@ -1336,6 +1497,7 @@ def frame_generation_loop():
     global StartFrame, frames_to_encode
     global stop_event, stop_event_lock
     global FrameFilenameOutputPattern
+    global BatchJobRunning
 
     if CurrentFrame >= StartFrame + frames_to_encode:
         if generate_video.get():
@@ -1346,6 +1508,7 @@ def frame_generation_loop():
         return
 
     if ConvertLoopExitRequested:  # Stop button pressed
+        BatchJobRunning = False  # Cancel batch jobs if any
         generation_exit()
         return
 
@@ -1521,17 +1684,21 @@ def video_generation_phase():
 
         # And display results
         if ffmpeg_generation_succeeded:
-            tk.messagebox.showinfo(
-                "Video generation by ffmpeg has ended",
-                "\r\nVideo encoding has finalized successfully. "
-                "You can find your video in the target folder, "
-                "as stated below\r\n" +
-                os.path.join(TargetDir, TargetVideoFilename))
+            logging.info("Video generated OK: %s", os.path.join(TargetDir, TargetVideoFilename))
+            if not BatchJobRunning:
+                tk.messagebox.showinfo(
+                    "Video generation by ffmpeg has ended",
+                    "\r\nVideo encoding has finalized successfully. "
+                    "You can find your video in the target folder, "
+                    "as stated below\r\n" +
+                    os.path.join(TargetDir, TargetVideoFilename))
         else:
-            tk.messagebox.showinfo(
-                "FFMPEG encoding failed",
-                "\r\nVideo generation by FFMPEG has failed\r\nPlease "
-                "check the logs to determine what the problem was.")
+            logging.info("Video generation failed for %s", os.path.join(TargetDir, TargetVideoFilename))
+            if not BatchJobRunning:
+                tk.messagebox.showinfo(
+                    "FFMPEG encoding failed",
+                    "\r\nVideo generation by FFMPEG has failed\r\nPlease "
+                    "check the logs to determine what the problem was.")
 
     generation_exit()  # Restore all settings to normal
 
@@ -1613,10 +1780,10 @@ def afterscan_init():
     # Set dimensions of UI elements adapted to screen size
     if screen_height >= 1000:
         PreviewWidth = 700
-        PreviewHeight = 525
+        PreviewHeight = 560
     else:
         PreviewWidth = 560
-        PreviewHeight = 420
+        PreviewHeight = 560
     app_width = PreviewWidth + 320 + 30
     app_height = PreviewHeight + 25
     if ExpertMode:
@@ -1632,8 +1799,12 @@ def afterscan_init():
     win.update_idletasks()
 
     # Set default font size
-    default_font = tkfont.nametofont("TkDefaultFont")
-    default_font.configure(size=8)
+    #default_font = tkfont.nametofont("TkDefaultFont")
+    #default_font.configure(size=8)
+    # Method below is better
+    # Change the default Font that will affect in all the widgets
+    win.option_add("*font", "TkDefaultFont 8")
+    win.resizable(False, False)
 
     # Get Top window coordinates
     TopWinX = win.winfo_x()
@@ -1670,6 +1841,8 @@ def build_ui():
     global source_folder_btn, target_folder_btn
     global perform_stabilization, perform_stabilization_checkbox
     global perform_stabilization_strong, perform_stabilization_strong_checkbox
+    global stabilization_threshold_spinbox, stabilization_threshold_str
+    global StabilizationThreshold
     global perform_cropping_checkbox, Crop_btn
     global Go_btn
     global Exit_btn
@@ -1684,6 +1857,7 @@ def build_ui():
     global FrameInputFilenamePattern
     global frame_slider, CurrentFrame
     global film_type, film_hole_template
+    global job_list_listbox
 
     # Frame for standard widgets
     regular_frame = Frame(win, width=320, height=450)
@@ -1804,6 +1978,7 @@ def build_ui():
         command=(frames_to_encode_selection_aux, '%d'), width=8,
         textvariable=frames_to_encode_str, from_=0, to=50000)
     frames_to_encode_spinbox.grid(row=postprocessing_row, column=2, sticky=W)
+    frames_to_encode_spinbox.bind("<FocusOut>", frames_to_encode_spinbox_focus_out)
     frames_to_encode_selection('down')
     postprocessing_row += 1
 
@@ -1825,6 +2000,24 @@ def build_ui():
     perform_stabilization_strong_checkbox.grid(row=postprocessing_row, column=1,
                                                columnspan=2, sticky=W)
     perform_stabilization_strong_checkbox.config(state=DISABLED)
+    postprocessing_row += 1
+
+    # Spinbox to select stabilization threshold
+    stabilization_threshold_label = tk.Label(postprocessing_frame,
+                                      text='Stabilization threshold:',
+                                      width=20)
+    stabilization_threshold_label.grid(row=postprocessing_row, column=0,
+                                columnspan=2, sticky=W)
+    stabilization_threshold_str = tk.StringVar(value=str(StabilizationThreshold))
+    stabilization_threshold_selection_aux = postprocessing_frame.register(
+        stabilization_threshold_selection)
+    stabilization_threshold_spinbox = tk.Spinbox(
+        postprocessing_frame,
+        command=(stabilization_threshold_selection_aux, '%d'), width=8,
+        textvariable=stabilization_threshold_str, from_=0, to=255)
+    stabilization_threshold_spinbox.grid(row=postprocessing_row, column=2, sticky=W)
+    stabilization_threshold_spinbox.bind("<FocusOut>", stabilization_threshold_spinbox_focus_out)
+    stabilization_threshold_selection('down')
     postprocessing_row += 1
 
     # Check box to do cropping or not
@@ -1892,7 +2085,6 @@ def build_ui():
                              sticky=W)
     video_filename_name.delete(0, 'end')
     video_filename_name.insert('end', TargetVideoFilename)
-    video_filename_name.config(state=DISABLED)
     video_row += 1
 
     # Drop down to select FPS
@@ -1947,6 +2139,47 @@ def build_ui():
     ffmpeg_preset_rb3.config(state=DISABLED)
     ffmpeg_preset.set('medium')
     video_row += 1
+
+    # Define job list area
+    job_list_frame = LabelFrame(regular_frame,
+                             text='Job List',
+                             width=50, height=8)
+    job_list_frame.pack(side=TOP, padx=2, pady=2, anchor=W)
+    job_list_row = 0
+
+    # job listbox
+    job_list_listbox = Listbox(job_list_frame, width=30, height=5)
+    job_list_listbox.pack(side=LEFT, padx=2, pady=2)
+
+    # job listbox scrollbar
+    job_list_listbox_scrollbar = Scrollbar(job_list_frame, orient="vertical")
+    job_list_listbox_scrollbar.config(command=job_list_listbox.yview)
+    job_list_listbox_scrollbar.pack(side=LEFT, fill="y")
+
+    job_list_listbox.config(yscrollcommand=job_list_listbox_scrollbar.set)
+
+    # Define job list button area
+    job_list_btn_frame = Frame(job_list_frame,
+                             width=50, height=8)
+    job_list_btn_frame.pack(side=LEFT, padx=2, pady=2, anchor=W)
+
+    # Add job button
+    add_job_btn = Button(job_list_btn_frame, text="Add job", width=8, height=1,
+                    command=job_list_add_current, activebackground='green',
+                    activeforeground='white', wraplength=80)
+    add_job_btn.pack(side=TOP, padx=2, pady=2)
+
+    # Delete job button
+    delete_job_btn = Button(job_list_btn_frame, text="Delete job", width=8, height=1,
+                    command=job_list_delete_selected, activebackground='green',
+                    activeforeground='white', wraplength=80)
+    delete_job_btn.pack(side=TOP, padx=2, pady=2)
+
+    # Start processing job button
+    delete_job_btn = Button(job_list_btn_frame, text="Process jobs", width=8, height=1,
+                    command=start_processing_job_list, activebackground='green',
+                    activeforeground='white', wraplength=80)
+    delete_job_btn.pack(side=TOP, padx=2, pady=2)
 
     postprocessing_bottom_frame = Frame(video_frame, width=30)
     postprocessing_bottom_frame.grid(row=video_row, column=0)
@@ -2041,6 +2274,7 @@ def exit_app():  # Exit Application
     global win
     save_general_config()
     save_project_config()
+    save_job_list()
     win.destroy()
 
 
@@ -2056,10 +2290,12 @@ def main(argv):
     global video_encoding_do_not_warn_again, perform_stabilization
     global ui_init_done
     global IgnoreConfig
-
-
+    global job_list
 
     LoggingMode = "warning"
+
+    # Create job dictionary (maybe a list or queue?)
+    job_list = {}
 
     pattern_filenames = [pattern_filename, pattern_bw_filename, pattern_wb_filename]
     for filename in pattern_filenames:
@@ -2135,6 +2371,8 @@ def main(argv):
                                                project_config_basename)
 
     load_project_config()
+
+    load_job_list()
 
     get_current_dir_file_list()
 
