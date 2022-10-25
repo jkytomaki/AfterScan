@@ -68,9 +68,7 @@ project_config_filename = ""
 project_config_from_file = True
 job_list_filename = os.path.join(script_dir, "AfterScan_job_list.json")
 pattern_filename_r8 = os.path.join(script_dir, "Pattern.R8.jpg")
-pattern_filename_r8_alt = os.path.join(script_dir, "Pattern.R8-alt.jpg")
 pattern_filename_s8 = os.path.join(script_dir, "Pattern.S8.jpg")
-pattern_filename_s8_alt = os.path.join(script_dir, "Pattern.S8-alt.jpg")
 pattern_filename = pattern_filename_s8
 
 general_config = {
@@ -211,7 +209,6 @@ def save_project_config():
     if StabilizeAreaDefined:
         project_config["HoleHeight"] = film_hole_height
         project_config["PerformStabilization"] = perform_stabilization.get()
-        project_config["PerformStrongStabilization"] = perform_stabilization_strong.get()
     if ExpertMode:
         project_config["FillBorders"] = fill_borders.get()
         project_config["FillBordersThickness"] = fill_borders_thickness.get()
@@ -338,30 +335,20 @@ def decode_project_config():
         film_hole_height = project_config["HoleHeight"]
         StabilizeAreaDefined = True
         perform_stabilization_checkbox.config(state=NORMAL)
-        perform_stabilization_strong_checkbox.config(state=NORMAL)
     else:
         film_hole_height = 0
         StabilizeAreaDefined = False
         perform_stabilization_checkbox.config(state=DISABLED)
-        perform_stabilization_strong_checkbox.config(state=DISABLED)
 
     if 'PerformStabilization' in project_config:
         perform_stabilization.set(project_config["PerformStabilization"])
     else:
         perform_stabilization.set(False)
 
-    # 'film_type' needs to be set before perform_stabilization_strong_selection
-    # which, in turn, will call 'set_film_type'
     if 'FilmType' in project_config:
         film_type.set(project_config["FilmType"])
     else:
         film_type.set('S8')
-
-    if 'PerformStrongStabilization' in project_config:
-        perform_stabilization_strong.set(project_config["PerformStrongStabilization"])
-    else:
-        perform_stabilization_strong.set(False)
-    perform_stabilization_strong_selection()
 
     if 'VideoFps' in project_config:
         VideoFps = eval(project_config["VideoFps"])
@@ -663,7 +650,6 @@ UI support commands & functions
 def button_status_change_except(except_button, button_status):
     global source_folder_btn, target_folder_btn
     global perform_stabilization_checkbox
-    global perform_stabilization_strong_checkbox
     global perform_cropping_checkbox, Crop_btn
     global Go_btn
     global Exit_btn
@@ -682,8 +668,6 @@ def button_status_change_except(except_button, button_status):
         Exit_btn.config(state=button_status)
     if except_button != perform_stabilization_checkbox:
         perform_stabilization_checkbox.config(state=button_status)
-    if except_button != perform_stabilization_strong_checkbox:
-        perform_stabilization_strong_checkbox.config(state=button_status)
 
     if not CropAreaDefined:
         perform_cropping_checkbox.config(state=DISABLED)
@@ -734,10 +718,6 @@ def widget_state_refresh():
 def perform_stabilization_selection():
     global perform_stabilization
     # Nothing to do here
-
-
-def perform_stabilization_strong_selection():
-    set_film_type()
 
 
 def stabilization_threshold_selection(updown):
@@ -1011,7 +991,6 @@ def select_cropping_area():
 def select_hole_height(work_image):
     global RectangleWindowTitle
     global perform_stabilization, perform_stabilization_checkbox
-    global perform_stabilization_strong, perform_stabilization_strong_checkbox
     global HoleSearchTopLeft, HoleSearchBottomRight
     global StabilizeAreaDefined
     global film_hole_height, film_hole_template, area_select_image_factor
@@ -1023,12 +1002,9 @@ def select_hole_height(work_image):
         StabilizeAreaDefined = False
         perform_stabilization.set(False)
         perform_stabilization_checkbox.config(state=DISABLED)
-        perform_stabilization_strong.set(False)
-        perform_stabilization_strong_checkbox.config(state=DISABLED)
     else:
         StabilizeAreaDefined = True
         perform_stabilization_checkbox.config(state=NORMAL)
-        perform_stabilization_strong_checkbox.config(state=NORMAL)
         adjust_hole_pattern_size()
     win.update()
 
@@ -1082,16 +1058,10 @@ def set_film_type():
     global default_hole_height_s8, default_interhole_height_r8
     global film_hole_height
     if film_type.get() == 'S8':
-        if perform_stabilization_strong.get():
-            pattern_filename = pattern_filename_s8_alt
-        else:
-            pattern_filename = pattern_filename_s8
+        pattern_filename = pattern_filename_s8
         expected_pattern_pos = expected_pattern_pos_s8
     elif film_type.get() == 'R8':
-        if perform_stabilization_strong.get():
-            pattern_filename = pattern_filename_r8_alt
-        else:
-            pattern_filename = pattern_filename_r8
+        pattern_filename = pattern_filename_r8
         expected_pattern_pos = expected_pattern_pos_r8
     film_hole_template = cv2.imread(pattern_filename, 0)
     adjust_hole_pattern_size()
@@ -1481,7 +1451,7 @@ def generation_exit():
 
 
 def frame_generation_loop():
-    global perform_stabilization, perform_stabilization_strong
+    global perform_stabilization
     global perform_cropping
     global ConvertLoopExitRequested
     global save_bg, save_fg
@@ -1839,7 +1809,6 @@ def build_ui():
     global save_bg, save_fg
     global source_folder_btn, target_folder_btn
     global perform_stabilization, perform_stabilization_checkbox
-    global perform_stabilization_strong, perform_stabilization_strong_checkbox
     global stabilization_threshold_spinbox, stabilization_threshold_str
     global StabilizationThreshold
     global perform_cropping_checkbox, Crop_btn
@@ -1991,14 +1960,6 @@ def build_ui():
                                         sticky=W)
     perform_stabilization_checkbox.config(state=DISABLED)
 
-    perform_stabilization_strong = tk.BooleanVar(value=False)
-    perform_stabilization_strong_checkbox = tk.Checkbutton(
-        postprocessing_frame, text='Stronger stabilize',
-        variable=perform_stabilization_strong, onvalue=True, offvalue=False, width=13,
-        command=perform_stabilization_strong_selection)
-    perform_stabilization_strong_checkbox.grid(row=postprocessing_row, column=1,
-                                               columnspan=2, sticky=W)
-    perform_stabilization_strong_checkbox.config(state=DISABLED)
     postprocessing_row += 1
 
     # Spinbox to select stabilization threshold
