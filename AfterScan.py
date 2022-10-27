@@ -150,8 +150,9 @@ Configuration file support functions
 def save_general_config():
     # Write config data upon exit
     general_config["GeneralConfigDate"] = str(datetime.now())
-    with open(general_config_filename, 'w+') as f:
-        json.dump(general_config, f)
+    if not IgnoreConfig:
+        with open(general_config_filename, 'w+') as f:
+            json.dump(general_config, f)
 
 
 def load_general_config():
@@ -194,7 +195,7 @@ def save_project_config():
     global video_filename_name
 
     # Do not save if current project comes from batch job
-    if not project_config_from_file:
+    if not project_config_from_file or IgnoreConfig:
         return
     # Write project data upon exit
     project_config["SourceDir"] = SourceDir
@@ -409,8 +410,9 @@ def job_list_delete_selected():
 def save_job_list():
     global job_list, job_list_filename
 
-    with open(job_list_filename, 'w+') as f:
-        json.dump(job_list, f)
+    if not IgnoreConfig:
+        with open(job_list_filename, 'w+') as f:
+            json.dump(job_list, f)
 
 
 def load_job_list():
