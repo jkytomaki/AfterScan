@@ -48,6 +48,7 @@ from glob import glob
 import platform
 import threading
 import re
+from enum import Enum
 
 # Frame vars
 first_absolute_frame = 0
@@ -132,6 +133,7 @@ FfmpegBinName = ""
 ui_init_done = False
 IgnoreConfig = False
 global ffmpeg_installed
+ffmpeg_state = Enum('ffmpeg_state', ['Pending', 'Running', 'Completed'])
 
 # Miscellaneous vars
 global win
@@ -544,11 +546,11 @@ def display_ffmpeg_progress():
             if not line:
                 break
             else:
-                # logging.info(str(line))
                 # Now this is part of the tool functionality, so we display
                 # it using print, to avoid dependencies on log level
                 print(time.strftime("%H:%M:%S", time.localtime()) + " - " +
                       str(line)[:-1])
+                encoded_frame = str(line)[:-1].split()[1]
 
 
 def display_ffmpeg_result(ffmpeg_output):
@@ -692,8 +694,7 @@ def widget_state_refresh():
     perform_cropping_checkbox.config(
         state=NORMAL if CropAreaDefined else DISABLED)
     generate_video_checkbox.config(
-        state=NORMAL if ffmpeg_installed and perform_cropping.get()
-        else DISABLED)
+        state=NORMAL if ffmpeg_installed else DISABLED)
     video_fps_dropdown.config(
         state=NORMAL if generate_video.get() else DISABLED)
     video_fps_label.config(
@@ -719,7 +720,9 @@ def widget_state_refresh():
 
 def perform_stabilization_selection():
     global perform_stabilization
-    # Nothing to do here
+    stabilization_threshold_spinbox.config(
+        state=NORMAL if perform_stabilization.get() else DISABLED)
+        
 
 
 def stabilization_threshold_selection(updown):
@@ -739,8 +742,11 @@ def stabilization_threshold_spinbox_focus_out(event):
 def perform_cropping_selection():
     global perform_cropping, perform_cropping
     global generate_video_checkbox
+    global ui_init_done
     generate_video_checkbox.config(state=NORMAL if ffmpeg_installed
-                                   and perform_cropping.get() else DISABLED)
+                                   else DISABLED)
+    if ui_init_done:
+        scale_display_update()
 
 
 def start_from_current_frame_selection():
@@ -976,8 +982,8 @@ def select_cropping_area():
         button_status_change_except(0, DISABLED)
         perform_cropping.set(False)
         perform_cropping.set(False)
-        generate_video_checkbox.config(state=NORMAL if ffmpeg_installed and
-                                       perform_cropping.get() else DISABLED)
+        generate_video_checkbox.config(state=NORMAL if ffmpeg_installed
+                                       else DISABLED)
         CropTopLeft = (0, 0)
         CropBottomRight = (0, 0)
 
@@ -1140,7 +1146,6 @@ def resize_image(img, percent):
     width = int(img.shape[1] * percent / 100)
     height = int(img.shape[0] * percent / 100)
 
-    # dsize
     dsize = (width, height)
 
     # resize image
@@ -1185,12 +1190,6 @@ def stabilize_image(img):
 
         move_x = round((expected_pattern_pos[0] * width / 100)) - top_left[0]
         move_y = round((expected_pattern_pos[1] * height / 100)) - top_left[1]
-        # If shift is too big then ir might be due to holes not well
-        # recognized. In such case we do not shift
-        # if move_x > width * 0.05 or move_y > height * 0.3:
-        #     logging.debug("Skip frame stabilize, shift too big (%i, %i)",
-        #                   move_x, move_y)
-        #     return img
 
         logging.debug("Stabilizing frame: (%i,%i) to move (%i, %i)",
                       top_left[0], top_left[1], move_x, move_y)
@@ -1355,15 +1354,13 @@ Core top level functions
 def start_convert():
     global ConvertLoopExitRequested, ConvertLoopRunning
     global generate_video
-    global Exit_btn
     global video_writer
-    global pipe_ffmpeg
-    global cmd_ffmpeg
     global SourceDirFileList
     global TargetVideoFilename
     global CurrentFrame, StartFrame
     global start_from_current_frame
     global frames_to_encode
+    global ffmpeg_success, ffmpeg_encoding_status
 
     if ConvertLoopRunning:
         ConvertLoopExitRequested = True
@@ -1425,10 +1422,11 @@ def start_convert():
         ConvertLoopRunning = True
 
         if not skip_frame_regeneration.get():
-            # adjust_hole_pattern_size()
             win.after(1, frame_generation_loop)
         else:
-            win.after(1, video_generation_phase)
+            ffmpeg_success = False
+            ffmpeg_encoding_status = ffmpeg_state.Pending
+            win.after(1, video_generation_loop)
 
 
 def generation_exit():
@@ -1451,28 +1449,24 @@ def generation_exit():
         job_processing_loop()
 
 
-
 def frame_generation_loop():
-    global perform_stabilization
-    global perform_cropping
+    global perform_stabilization, perform_cropping
     global ConvertLoopExitRequested
-    global save_bg, save_fg
-    global Go_btn
-    global Exit_btn
     global CropTopLeft, CropBottomRight
     global TargetDir
-    global video_writer
-    global IsWindows
-    global TargetVideoFilename
     global CurrentFrame, first_absolute_frame
     global StartFrame, frames_to_encode
-    global stop_event, stop_event_lock
     global FrameFilenameOutputPattern
     global BatchJobRunning
+    global ffmpeg_success, ffmpeg_encoding_status
 
     if CurrentFrame >= StartFrame + frames_to_encode:
+        status_str = "Status: Frame generation OK"
+        app_status_label.config(text=status_str, fg='green')
         if generate_video.get():
-            win.after(1, video_generation_phase)
+            ffmpeg_success = False
+            ffmpeg_encoding_status = ffmpeg_state.Pending
+            win.after(1, video_generation_loop)
         else:
             generation_exit()
         CurrentFrame -= 1  # Prevent being out of range
@@ -1480,6 +1474,8 @@ def frame_generation_loop():
 
     if ConvertLoopExitRequested:  # Stop button pressed
         BatchJobRunning = False  # Cancel batch jobs if any
+        status_str = "Status: Cancelled by user"
+        app_status_label.config(text=status_str, fg='red')
         generation_exit()
         return
 
@@ -1502,6 +1498,8 @@ def frame_generation_loop():
                   img.shape[1], img.shape[0], CurrentFrame)
     if img.shape[1] % 2 == 1 or img.shape[0] % 2 == 1:
         logging.error("Target size, one odd dimension")
+        status_str = "Status: Frame %d - odd size" % CurrentFrame
+        app_status_label.config(text=status_str, fg='red')
         CurrentFrame = StartFrame + frames_to_encode - 1
 
     if os.path.isdir(TargetDir):
@@ -1509,6 +1507,8 @@ def frame_generation_loop():
         cv2.imwrite(target_file, img)
 
     frame_slider.set(CurrentFrame)
+    status_str = "Status: Generating frames %.1f%%" % ((CurrentFrame-StartFrame)*100/frames_to_encode)
+    app_status_label.config(text=status_str, fg='black')
 
     CurrentFrame += 1
     project_config["CurrentFrame"] = CurrentFrame
@@ -1516,146 +1516,179 @@ def frame_generation_loop():
     win.after(1, frame_generation_loop)
 
 
-def video_generation_phase():
-    global perform_stabilization
-    global ConvertLoopExitRequested
-    global save_bg, save_fg
-    global Go_btn
-    global Exit_btn
-    global CropTopLeft, CropBottomRight
+def call_ffmpeg():
     global TargetDir
-    global video_writer
-    global pipe_ffmpeg
     global cmd_ffmpeg
     global IsWindows
     global ffmpeg_preset
     global TargetVideoFilename
-    global CurrentFrame, StartFrame
-    global ffmpeg_out, ffmpeg_process
-    global stop_event, stop_event_lock
+    global StartFrame
+    global ffmpeg_process, ffmpeg_success
+    global ffmpeg_encoding_status
     global FrameFilenameOutputPattern
     global first_absolute_frame, frames_to_encode
 
-    # Check for special cases first
-    if frames_to_encode == 0:
-        tk.messagebox.showwarning(
-            "No frames match range to generate video",
-            "Video cannot be generated.\r\n"
-            "No frames in target folder match the specified range.\r\n"
-            "Please review your settings and try again.")
-    elif not valid_generated_frame_range():
-        tk.messagebox.showwarning(
-            "Frames missing",
-            "Video cannot be generated.\r\n"
-            "Not all frames in specified range exist in target folder to "
-            "allow video generation.\r\n"
-            "Please regenerate frames making sure option "
-            "\'Skip Frame regeneration\' is not selected, and try again.")
+    # Cannot call popen with a list in windows. Seems it was a bug
+    # already in 2018: https://bugs.python.org/issue32764
+    if IsWindows:
+        extra_input_options = ""
+        extra_output_options = ""
+        if frames_to_encode > 0:
+            extra_output_options += (' -frames:v' + str(frames_to_encode))
+        if ExpertMode and fill_borders.get():
+            extra_output_options += [
+                 '-filter_complex',
+                 '[0:v] fillborders='
+                 'left=' + str(fill_borders_thickness.get()) + ':'
+                 'right=' + str(fill_borders_thickness.get()) + ':'
+                 'top=' + str(fill_borders_thickness.get()) + ':'
+                 'bottom=' + str(fill_borders_thickness.get()) + ':'
+                 'mode=' + fill_borders_mode.get() + ' [v]',
+                 '-map', '[v]']
+        cmd_ffmpeg = (FfmpegBinName
+                      + ' -y'
+                      + '-f image2'
+                      + '-start_number ' + str(StartFrame +
+                                               first_absolute_frame)
+                      + ' -framerate ' + str(VideoFps)
+                      + extra_input_options
+                      + ' -i "'
+                      + os.path.join(TargetDir,
+                                     FrameFilenameOutputPattern)
+                      + '"'
+                      + extra_output_options
+                      + ' -an'
+                      + ' -vcodec libx264'
+                      + ' -preset ' + ffmpeg_preset.get()
+                      + ' -crf 18'
+                      + ' -aspect 4:3'
+                      + ' -pix_fmt yuv420p'
+                      + ' '
+                      + '"' + os.path.join(
+                          TargetDir,
+                          TargetVideoFilename) + '"')
+        logging.debug("Generated ffmpeg command: %s", cmd_ffmpeg)
+        ffmpeg_success = sp.call(cmd_ffmpeg) == 0
     else:
-        # Cannot interrupt while generating video (FFmpeg running)
-        Go_btn.config(state=DISABLED)
-        logging.debug(
-            "First filename in list: %s, extracted number: %s",
-            os.path.basename(SourceDirFileList[0]), first_absolute_frame)
-        stop_event = threading.Event()
-        stop_event_lock = threading.Lock()
+        extra_input_options = []
+        extra_output_options = []
+        if frames_to_encode > 0:
+            extra_output_options += ['-frames:v', str(frames_to_encode)]
+        if ExpertMode and fill_borders.get():
+            extra_output_options += [
+                 '-filter_complex',
+                 '[0:v] fillborders='
+                 'left=' + str(fill_borders_thickness.get()) + ':'
+                 'right=' + str(fill_borders_thickness.get()) + ':'
+                 'top=' + str(fill_borders_thickness.get()) + ':'
+                 'bottom=' + str(fill_borders_thickness.get()) + ':'
+                 'mode=' + fill_borders_mode.get() + ' [v]',
+                 '-map', '[v]']
+        cmd_ffmpeg = [FfmpegBinName,
+                      '-y',
+                      '-loglevel', 'error',
+                      '-stats',
+                      '-flush_packets', '1',
+                      '-f', 'image2',
+                      '-start_number', str(StartFrame +
+                                           first_absolute_frame),
+                      '-framerate', str(VideoFps),
+                      '-i',
+                      os.path.join(TargetDir,
+                                   FrameFilenameOutputPattern)]
+        cmd_ffmpeg.extend(extra_output_options)
+        cmd_ffmpeg.extend(
+            ['-an',  # no audio
+             '-vcodec', 'libx264',
+             '-preset', ffmpeg_preset.get(),
+             '-crf', '18',
+             '-pix_fmt', 'yuv420p',
+             os.path.join(TargetDir,
+                          TargetVideoFilename)])
 
-        ffmpeg_progress_thread = threading.Thread(
-            target=display_ffmpeg_progress)
-        ffmpeg_progress_thread.daemon = True
-        ffmpeg_progress_thread.start()
-        win.update()
+        logging.debug("Generated ffmpeg command: %s", cmd_ffmpeg)
+        ffmpeg_process = sp.Popen(cmd_ffmpeg, stderr=sp.STDOUT,
+                                  stdout=sp.PIPE,
+                                  universal_newlines=True)
+        ffmpeg_success = ffmpeg_process.wait() == 0
+    ffmpeg_encoding_status = ffmpeg_state.Completed
 
-        # Cannot call popen with a list in windows. Seems it was a bug
-        # already in 2018: https://bugs.python.org/issue32764
-        if IsWindows:
-            extra_input_options = ""
-            extra_output_options = ""
-            if frames_to_encode > 0:
-                extra_output_options += (' -frames:v' + str(frames_to_encode))
-            if ExpertMode and fill_borders.get():
-                extra_output_options += [
-                     '-filter_complex',
-                     '[0:v] fillborders='
-                     'left=' + str(fill_borders_thickness.get()) + ':'
-                     'right=' + str(fill_borders_thickness.get()) + ':'
-                     'top=' + str(fill_borders_thickness.get()) + ':'
-                     'bottom=' + str(fill_borders_thickness.get()) + ':'
-                     'mode=' + fill_borders_mode.get() + ' [v]',
-                     '-map', '[v]']
-            cmd_ffmpeg = (FfmpegBinName
-                          + ' -y'
-                          + '-f image2'
-                          + '-start_number ' + str(StartFrame +
-                                                   first_absolute_frame)
-                          + ' -framerate ' + str(VideoFps)
-                          + extra_input_options
-                          + ' -i "'
-                          + os.path.join(TargetDir,
-                                         FrameFilenameOutputPattern)
-                          + '"'
-                          + extra_output_options
-                          + ' -an'
-                          + ' -vcodec libx264'
-                          + ' -preset ' + ffmpeg_preset.get()
-                          + ' -crf 18'
-                          + ' -aspect 4:3'
-                          + ' -pix_fmt yuv420p'
-                          + ' '
-                          + '"' + os.path.join(
-                              TargetDir,
-                              TargetVideoFilename) + '"')
-            logging.debug("Generated ffmpeg command: %s", cmd_ffmpeg)
-            ffmpeg_generation_succeeded = sp.call(cmd_ffmpeg) == 0
+
+def video_generation_loop():
+    global Go_btn
+    global TargetDir
+    global TargetVideoFilename
+    global stop_event, stop_event_lock
+    global ffmpeg_success, ffmpeg_encoding_status
+    global ffmpeg_process
+    global frames_to_encode
+    global app_status_label
+
+    if ffmpeg_encoding_status == ffmpeg_state.Pending:
+        # Check for special cases first
+        if frames_to_encode == 0:
+            status_str = "Status: No frames to encode"
+            app_status_label.config(text=status_str, fg='red')
+            tk.messagebox.showwarning(
+                "No frames match range to generate video",
+                "Video cannot be generated.\r\n"
+                "No frames in target folder match the specified range.\r\n"
+                "Please review your settings and try again.")
+        elif not valid_generated_frame_range():
+            status_str = "Status: No frames to encode"
+            app_status_label.config(text=status_str, fg='red')
+            tk.messagebox.showwarning(
+                "Frames missing",
+                "Video cannot be generated.\r\n"
+                "Not all frames in specified range exist in target folder to "
+                "allow video generation.\r\n"
+                "Please regenerate frames making sure option "
+                "\'Skip Frame regeneration\' is not selected, and try again.")
         else:
-            extra_input_options = []
-            extra_output_options = []
-            if frames_to_encode > 0:
-                extra_output_options += ['-frames:v', str(frames_to_encode)]
-            if ExpertMode and fill_borders.get():
-                extra_output_options += [
-                     '-filter_complex',
-                     '[0:v] fillborders='
-                     'left=' + str(fill_borders_thickness.get()) + ':'
-                     'right=' + str(fill_borders_thickness.get()) + ':'
-                     'top=' + str(fill_borders_thickness.get()) + ':'
-                     'bottom=' + str(fill_borders_thickness.get()) + ':'
-                     'mode=' + fill_borders_mode.get() + ' [v]',
-                     '-map', '[v]']
-            cmd_ffmpeg = [FfmpegBinName,
-                          '-y',
-                          '-loglevel', 'error',
-                          '-stats',
-                          '-flush_packets', '1',
-                          '-f', 'image2',
-                          '-start_number', str(StartFrame +
-                                               first_absolute_frame),
-                          '-framerate', str(VideoFps),
-                          '-i',
-                          os.path.join(TargetDir,
-                                       FrameFilenameOutputPattern)]
-            cmd_ffmpeg.extend(extra_output_options)
-            cmd_ffmpeg.extend(
-                ['-an',  # no audio
-                 '-vcodec', 'libx264',
-                 '-preset', ffmpeg_preset.get(),
-                 '-crf', '18',
-                 '-pix_fmt', 'yuv420p',
-                 os.path.join(TargetDir,
-                              TargetVideoFilename)])
+            logging.debug(
+                "First filename in list: %s, extracted number: %s",
+                os.path.basename(SourceDirFileList[0]), first_absolute_frame)
+            stop_event = threading.Event()
+            stop_event_lock = threading.Lock()
 
-            logging.debug("Generated ffmpeg command: %s", cmd_ffmpeg)
-            ffmpeg_process = sp.Popen(cmd_ffmpeg, stderr=sp.STDOUT,
-                                      stdout=sp.PIPE,
-                                      universal_newlines=True)
-            ffmpeg_generation_succeeded = ffmpeg_process.wait() == 0
-
+            ffmpeg_success = False
+            ffmpeg_encoding_thread = threading.Thread(target=call_ffmpeg)
+            ffmpeg_encoding_thread.daemon = True
+            ffmpeg_encoding_thread.start()
+            win.update()
+            ffmpeg_encoding_status = ffmpeg_state.Running
+            win.after(200, video_generation_loop)
+    elif ffmpeg_encoding_status == ffmpeg_state.Running:
+        if ConvertLoopExitRequested:
+            ffmpeg_process.terminate()
+            logging.info("Video generation terminated by user for %s",
+                         os.path.join(TargetDir, TargetVideoFilename))
+            status_str = "Status: Cancelled by user"
+            app_status_label.config(text=status_str, fg='red')
+            tk.messagebox.showinfo(
+                "FFMPEG encoding interrupted by user",
+                "\r\nVideo generation by FFMPEG has been stopped by user "
+                "action.")
+            generation_exit()  # Restore all settings to normal
+        else:
+            line = ffmpeg_process.stdout.readline()
+            if line:
+                encoded_frame = int(str(line)[:-1].split()[1])
+                status_str = "Status: Generating video %.1f%%" % (encoded_frame*100/frames_to_encode)
+                app_status_label.config(text=status_str, fg='black')
+            win.after(200, video_generation_loop)
+    elif ffmpeg_encoding_status == ffmpeg_state.Completed:
+        status_str = "Status: Generating video 100%"
+        app_status_label.config(text=status_str, fg='black')
+        """
         stop_event.set()
         ffmpeg_progress_thread.join()
-
+        """
         # And display results
-        if ffmpeg_generation_succeeded:
+        if ffmpeg_success:
             logging.info("Video generated OK: %s", os.path.join(TargetDir, TargetVideoFilename))
+            status_str = "Status: Video generated OK"
+            app_status_label.config(text=status_str, fg='green')
             if not BatchJobRunning:
                 tk.messagebox.showinfo(
                     "Video generation by ffmpeg has ended",
@@ -1665,13 +1698,14 @@ def video_generation_phase():
                     os.path.join(TargetDir, TargetVideoFilename))
         else:
             logging.info("Video generation failed for %s", os.path.join(TargetDir, TargetVideoFilename))
+            status_str = "Status: Video generation failed"
+            app_status_label.config(text=status_str, fg='red')
             if not BatchJobRunning:
                 tk.messagebox.showinfo(
                     "FFMPEG encoding failed",
                     "\r\nVideo generation by FFMPEG has failed\r\nPlease "
                     "check the logs to determine what the problem was.")
-
-    generation_exit()  # Restore all settings to normal
+        generation_exit()  # Restore all settings to normal
 
 
 """
@@ -1711,7 +1745,7 @@ def init_display():
     else:
         PreviewRatio = PreviewHeight/image_height
 
-    display_image(img)
+    scale_display_update()
 
 
 def afterscan_init():
@@ -1754,11 +1788,11 @@ def afterscan_init():
         PreviewHeight = 560
     else:
         PreviewWidth = 560
-        PreviewHeight = 560
-    app_width = PreviewWidth + 320 + 30
-    app_height = PreviewHeight + 25
+        PreviewHeight = 440
+    app_width = PreviewWidth + 330 + 30
+    app_height = 600
     if ExpertMode:
-        app_height += 75
+        app_height += 0  # No need tto increase height for now
 
     win.title('AfterScan ' + __version__)  # setting title of the window
     win.geometry('1080x700')  # setting the size of the window
@@ -1770,9 +1804,6 @@ def afterscan_init():
     win.update_idletasks()
 
     # Set default font size
-    #default_font = tkfont.nametofont("TkDefaultFont")
-    #default_font.configure(size=8)
-    # Method below is better
     # Change the default Font that will affect in all the widgets
     win.option_add("*font", "TkDefaultFont 8")
     win.resizable(False, False)
@@ -1790,7 +1821,8 @@ def afterscan_init():
     # Also a label to draw images
     # draw_capture_label = tk.Label(preview_border_frame)
 
-    draw_capture_canvas = Canvas(preview_border_frame, bg='dark grey', width=PreviewWidth, height=PreviewHeight)
+    draw_capture_canvas = Canvas(preview_border_frame, bg='dark grey',
+                                 width=PreviewWidth, height=PreviewHeight)
     draw_capture_canvas.pack()
 
     logging.debug("AfterScan initialized")
@@ -1828,6 +1860,7 @@ def build_ui():
     global frame_slider, CurrentFrame
     global film_type, film_hole_template
     global job_list_listbox
+    global app_status_label
 
     # Frame for standard widgets
     regular_frame = Frame(win, width=320, height=450)
@@ -1835,31 +1868,39 @@ def build_ui():
 
     # Frame for top section of standard widgets
     regular_top_section_frame = Frame(regular_frame, width=50, height=50)
-    regular_top_section_frame.pack(side=TOP, padx=2, pady=2, anchor=W)
+    regular_top_section_frame.pack(side=TOP, padx=2, pady=2)
 
     # Create frame to display current frame and slider
     frame_frame = LabelFrame(regular_top_section_frame, text='Current frame',
-                               width=26, height=8)
-    frame_frame.pack(side=LEFT, padx=2, pady=0)
+                               width=35, height=10)
+    frame_frame.grid(row=0, column=0, sticky=W)
 
     frame_selected = IntVar()
     frame_slider = Scale(frame_frame, orient=HORIZONTAL, from_=0, to=0,
                          variable=frame_selected, command=select_scale_frame,
-                         label='Global:', font=("Arial", 8))
+                         length=120, label='Global:',
+                         highlightthickness=1, takefocus=1)
     frame_slider.pack(side=BOTTOM, ipady=4)
     frame_slider.set(CurrentFrame)
 
-    # Application start button
-    Go_btn = Button(regular_top_section_frame, text="Start", width=8, height=3,
-                    command=start_convert, activebackground='green',
-                    activeforeground='white', wraplength=80)
-    Go_btn.pack(side=LEFT, padx=2, pady=2)
+    # Application status label
+    app_status_label = Label(regular_top_section_frame, width=45, borderwidth=2,
+                             relief="groove", text='Status: Idle')
+    app_status_label.grid(row=1, column=0, columnspan=3, sticky=W,
+                          pady=5)
 
     # Application Exit button
-    Exit_btn = Button(regular_top_section_frame, text="Exit", width=6,
-                      height=3, command=exit_app, activebackground='red',
+    Exit_btn = Button(regular_top_section_frame, text="Exit", width=8,
+                      height=5, command=exit_app, activebackground='red',
                       activeforeground='white', wraplength=80)
-    Exit_btn.pack(side=LEFT, padx=2, pady=2)
+    Exit_btn.grid(row=0, column=1, sticky=W, padx=5)
+
+
+    # Application start button
+    Go_btn = Button(regular_top_section_frame, text="Start", width=10, height=5,
+                    command=start_convert, activebackground='green',
+                    activeforeground='white', wraplength=80)
+    Go_btn.grid(row=0, column=2, sticky=W)
 
     # Create frame to select source and target folders
     folder_frame = LabelFrame(regular_frame, text='Folder selection', width=50,
@@ -1869,25 +1910,23 @@ def build_ui():
     source_folder_frame = Frame(folder_frame)
     source_folder_frame.pack(side=TOP)
     folder_frame_source_dir = Entry(source_folder_frame, width=36,
-                                    borderwidth=1, font=("Arial", 8))
+                                    borderwidth=1)
     folder_frame_source_dir.pack(side=LEFT)
     source_folder_btn = Button(source_folder_frame, text='Source', width=6,
                                height=1, command=set_source_folder,
                                activebackground='green',
-                               activeforeground='white', wraplength=80,
-                               font=("Arial", 8))
+                               activeforeground='white', wraplength=80)
     source_folder_btn.pack(side=LEFT)
 
     target_folder_frame = Frame(folder_frame)
     target_folder_frame.pack(side=TOP)
     folder_frame_target_dir = Entry(target_folder_frame, width=36,
-                                    borderwidth=1, font=("Arial", 8))
+                                    borderwidth=1)
     folder_frame_target_dir.pack(side=LEFT)
     target_folder_btn = Button(target_folder_frame, text='Target', width=6,
                                height=1, command=set_target_folder,
                                activebackground='green',
-                               activeforeground='white', wraplength=80,
-                               font=("Arial", 8))
+                               activeforeground='white', wraplength=80)
     target_folder_btn.pack(side=LEFT)
 
     save_bg = source_folder_btn['bg']
@@ -1899,12 +1938,10 @@ def build_ui():
     frame_filename_pattern_frame = Frame(folder_frame)
     frame_filename_pattern_frame.pack(side=TOP)
     frame_filename_pattern_label = Label(frame_filename_pattern_frame,
-                                         text='Frame input filename pattern:',
-                                         font=("Arial", 8))
+                                         text='Frame input filename pattern:')
     frame_filename_pattern_label.pack(side=LEFT, anchor=W)
     frame_input_filename_pattern = Entry(frame_filename_pattern_frame,
-                                         width=16, borderwidth=1,
-                                         font=("Arial", 8))
+                                         width=16, borderwidth=1)
     frame_input_filename_pattern.pack(side=LEFT, anchor=W)
     frame_input_filename_pattern.delete(0, 'end')
     frame_input_filename_pattern.insert('end', FrameInputFilenamePattern)
@@ -1914,14 +1951,14 @@ def build_ui():
         command=set_frame_input_filename_pattern,
         activebackground='green',
         activeforeground='white',
-        wraplength=80, font=("Arial", 8))
+        wraplength=80)
     frame_filename_pattern_btn.pack(side=LEFT)
 
     # Define post-processing area
     postprocessing_frame = LabelFrame(regular_frame,
                                       text='Frame post-processing',
-                                      width=50, height=8)
-    postprocessing_frame.pack(side=TOP, padx=2, pady=2, anchor=W)
+                                      width=40, height=8)
+    postprocessing_frame.pack(side=TOP, padx=2, pady=2)
     postprocessing_row = 0
 
     # Check box to select start from current frame
@@ -1929,15 +1966,15 @@ def build_ui():
     start_from_current_frame_checkbox = tk.Checkbutton(
         postprocessing_frame, text='Start from current frame',
         variable=start_from_current_frame, onvalue=True, offvalue=False,
-        command=start_from_current_frame_selection, width=20)
+        command=start_from_current_frame_selection, width=18)
     start_from_current_frame_checkbox.grid(row=postprocessing_row, column=0,
-                                           columnspan=2, sticky=W)
+                                           columnspan=3, sticky=W)
     postprocessing_row += 1
 
     # Spinbox to select number of frames to process
     frames_to_encode_label = tk.Label(postprocessing_frame,
-                                      text='Number of frames to encode:',
-                                      width=25)
+                                      text='Frames to encode:',
+                                      width=16)
     frames_to_encode_label.grid(row=postprocessing_row, column=0,
                                 columnspan=2, sticky=W)
     frames_to_encode_str = tk.StringVar(value=str(frames_to_encode))
@@ -1955,21 +1992,14 @@ def build_ui():
     # Check box to do stabilization or not
     perform_stabilization = tk.BooleanVar(value=False)
     perform_stabilization_checkbox = tk.Checkbutton(
-        postprocessing_frame, text='Stabilize',
-        variable=perform_stabilization, onvalue=True, offvalue=False, width=7,
+        postprocessing_frame, text='Stabilize threshold',
+        variable=perform_stabilization, onvalue=True, offvalue=False, width=15,
         command=perform_stabilization_selection)
     perform_stabilization_checkbox.grid(row=postprocessing_row, column=0,
-                                        sticky=W)
+                                        columnspan=2, sticky=W)
     perform_stabilization_checkbox.config(state=DISABLED)
 
-    postprocessing_row += 1
-
     # Spinbox to select stabilization threshold
-    stabilization_threshold_label = tk.Label(postprocessing_frame,
-                                      text='Stabilization threshold:',
-                                      width=20)
-    stabilization_threshold_label.grid(row=postprocessing_row, column=0,
-                                columnspan=2, sticky=W)
     stabilization_threshold_str = tk.StringVar(value=str(StabilizationThreshold))
     stabilization_threshold_selection_aux = postprocessing_frame.register(
         stabilization_threshold_selection)
@@ -1990,10 +2020,10 @@ def build_ui():
         width=4)
     perform_cropping_checkbox.grid(row=postprocessing_row, column=0, sticky=W)
     perform_cropping_checkbox.config(state=DISABLED)
-    cropping_btn = Button(postprocessing_frame, text='Image crop area',
-                          width=24, height=1, command=select_cropping_area,
+    cropping_btn = Button(postprocessing_frame, text='Define crop area',
+                          width=18, height=1, command=select_cropping_area,
                           activebackground='green', activeforeground='white',
-                          wraplength=120, font=("Arial", 8))
+                          wraplength=120)
     cropping_btn.grid(row=postprocessing_row, column=1, columnspan=2, sticky=W)
     postprocessing_row += 1
 
@@ -2023,8 +2053,8 @@ def build_ui():
                                              command=generate_video_selection,
                                              width=5)
     generate_video_checkbox.grid(row=video_row, column=0, sticky=W)
-    generate_video_checkbox.config(state=NORMAL if ffmpeg_installed and
-                                   perform_cropping.get() else DISABLED)
+    generate_video_checkbox.config(state=NORMAL if ffmpeg_installed
+                                   else DISABLED)
     # Check box to skip frame regeneration
     skip_frame_regeneration = tk.BooleanVar(value=False)
     skip_frame_regeneration_cb = tk.Checkbutton(
@@ -2038,11 +2068,9 @@ def build_ui():
     video_row += 1
 
     # Video filename
-    video_filename_label = Label(video_frame, text='Video filename:',
-                                 font=("Arial", 8))
+    video_filename_label = Label(video_frame, text='Video filename:')
     video_filename_label.grid(row=video_row, column=0, sticky=W)
-    video_filename_name = Entry(video_frame, width=32, borderwidth=1,
-                                font=("Arial", 8))
+    video_filename_name = Entry(video_frame, width=32, borderwidth=1)
     video_filename_name.grid(row=video_row, column=1, columnspan=2,
                              sticky=W)
     video_filename_name.delete(0, 'end')
@@ -2077,6 +2105,7 @@ def build_ui():
     video_fps_dropdown = OptionMenu(video_fps_frame,
                                     video_fps_dropdown_selected, *fps_list,
                                     command=set_fps)
+    video_fps_dropdown.config(takefocus=1)
     video_fps_dropdown.pack(side=LEFT, anchor=E)
     video_fps_dropdown.config(state=DISABLED)
 
@@ -2146,35 +2175,10 @@ def build_ui():
     postprocessing_bottom_frame = Frame(video_frame, width=30)
     postprocessing_bottom_frame.grid(row=video_row, column=0)
 
-    # Set focus tab order
-    AfterScan_widgets = [frame_slider,
-                         Go_btn,
-                         Exit_btn,
-                         folder_frame_source_dir,
-                         source_folder_btn,
-                         folder_frame_target_dir,
-                         target_folder_btn,
-                         frame_input_filename_pattern,
-                         frame_filename_pattern_btn,
-                         start_from_current_frame_checkbox,
-                         frames_to_encode_spinbox,
-                         perform_cropping_checkbox,
-                         cropping_btn,
-                         generate_video_checkbox,
-                         skip_frame_regeneration_cb,
-                         video_filename_name,
-                         video_fps_dropdown,
-                         ffmpeg_preset_rb1,
-                         ffmpeg_preset_rb2,
-                         ffmpeg_preset_rb3]
-    for aw in AfterScan_widgets:
-        aw.lift()
-    frame_slider.focus()
-
     if ExpertMode:
         # Frame for expert widgets
-        expert_frame = Frame(win, width=900, height=100)
-        expert_frame.grid(row=1, column=0, padx=5, pady=5, sticky=W)
+        expert_frame = Frame(win, width=900, height=150)
+        expert_frame.grid(row=1, column=0, padx=5, pady=5, sticky=NW)
 
         # Video filters area
         video_filters_frame = LabelFrame(expert_frame, text='Video Filters Area',
@@ -2197,8 +2201,7 @@ def build_ui():
         fill_borders_thickness_slider = Scale(
             video_filters_frame, orient=HORIZONTAL, from_=5, to=50,
             variable=fill_borders_thickness,
-            command=fill_borders_set_thickness_scale,
-            font=("Arial", 8), length=80)
+            command=fill_borders_set_thickness_scale, length=80)
         fill_borders_thickness_slider.grid(row=0, column=1, sticky=W)
         fill_borders_thickness_slider.config(state=DISABLED)
         # Fill border mode
