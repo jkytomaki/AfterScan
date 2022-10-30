@@ -108,6 +108,7 @@ BatchJobRunning = False
 PreviewWidth = 700
 PreviewHeight = 525
 PreviewRatio = 1  # Defined globally for homogeneity, to be calculated once per project
+SmallSize = False
 
 # Crop area rectangle drawing vars
 ref_point = []
@@ -252,7 +253,7 @@ def decode_project_config():
     global CurrentFrame, frame_slider
     global VideoFps, video_fps_dropdown_selected
     global frame_input_filename_pattern, FrameInputFilenamePattern
-    global start_from_current_frame
+    global start_from_current_frame, frames_to_encode
     global skip_frame_regeneration
     global generate_video, video_filename_name
     global CropTopLeft, CropBottomRight, perform_cropping
@@ -285,9 +286,12 @@ def decode_project_config():
     else:
         start_from_current_frame.set(False)
     if 'FramesToEncode' in project_config:
-        frames_to_encode = project_config["FramesToEncode"]
+        frames_to_encode_str.set(project_config["FramesToEncode"])
+        if frames_to_encode_str.get() == 'All':
+            frames_to_encode = 0
+        else:
+            frames_to_encode = int(frames_to_encode_str.get())
         # frames_to_encode_spinbox.set(frames_to_encode)
-        frames_to_encode_str.set(frames_to_encode)
     else:
         frames_to_encode = "All"
         frames_to_encode_str.set(frames_to_encode)
@@ -391,13 +395,43 @@ def job_list_add_current():
     global CurrentFrame, frames_to_encode
     global project_config, video_filename_name
     global job_list_listbox
+    global start_from_current_frame, SourceDirFileList
 
     entry_name = video_filename_name.get()
     if entry_name == "":
-        entry_name = os.path.split(TargetDir)[1] + "_" + CurrentFrame + "-" + frames_to_encode
-    save_project_config()  # Make sure all current settings are in project_config
-    job_list[entry_name] = {'project': project_config.copy(), 'done': False}
-    job_list_listbox.insert('end', entry_name)
+        entry_name = os.path.split(SourceDir)[1]
+    if film_type.get() == 'S8':
+        entry_name = entry_name + ", S8"
+    else:
+        entry_name = entry_name + ", R8"
+    entry_name = entry_name + ", frames "
+    if start_from_current_frame.get():
+        entry_name = entry_name + str(CurrentFrame)
+    else:
+        entry_name = entry_name + "0"
+    entry_name = entry_name + " to "
+    if frames_to_encode > 0:
+        entry_name = entry_name + str(frames_to_encode)
+    else:
+        entry_name = entry_name + str(len(SourceDirFileList))
+    if generate_video.get():
+        if ffmpeg_preset.get() == 'veryslow':
+            entry_name = entry_name + ", HQ video"
+        elif ffmpeg_preset.get() == 'veryfast':
+            entry_name = entry_name + ", Low Q. video"
+        else:
+            entry_name = entry_name + ", medium Q. video"
+    else:
+        entry_name = entry_name + ", no video"
+    if entry_name in job_list:
+        tk.messagebox.showerror(
+            "Error: Job already exists",
+            "A job named " + entry_name + " exists already in the job list. "
+            "Please delete existing job or rename this one before retrying.")
+    else:
+        save_project_config()  # Make sure all current settings are in project_config
+        job_list[entry_name] = {'project': project_config.copy(), 'done': False}
+        job_list_listbox.insert('end', entry_name)
 
 
 def job_list_delete_selected():
@@ -635,15 +669,6 @@ def set_target_folder():
     project_config["TargetDir"] = TargetDir
 
 
-def set_frame_input_filename_pattern():
-    global FrameInputFilenamePattern, frame_input_filename_pattern
-
-    FrameInputFilenamePattern = frame_input_filename_pattern.get()
-    project_config["FrameInputFilenamePattern"] = FrameInputFilenamePattern
-    get_current_dir_file_list()
-    init_display()
-
-
 """
 ###############################
 UI support commands & functions
@@ -718,6 +743,16 @@ def widget_state_refresh():
             state=NORMAL if generate_video.get() else DISABLED)
 
 
+def frame_input_filename_pattern_focus_out(event):
+    global FrameInputFilenamePattern, frame_input_filename_pattern
+
+    FrameInputFilenamePattern = frame_input_filename_pattern.get()
+    project_config["FrameInputFilenamePattern"] = FrameInputFilenamePattern
+    get_current_dir_file_list()
+    init_display()
+
+
+
 def perform_stabilization_selection():
     global perform_stabilization
     stabilization_threshold_spinbox.config(
@@ -755,8 +790,9 @@ def start_from_current_frame_selection():
 
 
 def frames_to_encode_selection(updown):
-    global frames_to_encode_spinbox, frames_to_encode_str
+    global frames_to_encode_spinbox, frames_to_encode_str, frames_to_encode
     project_config["FramesToEncode"] = frames_to_encode_spinbox.get()
+    frames_to_encode = int(frames_to_encode_str.get())
     if project_config["FramesToEncode"] == '0':
         if updown == 'up':
             frames_to_encode_str.set('1')
@@ -1117,7 +1153,7 @@ Support functions for core business
 
 def display_image(img):
     global PreviewWidth, PreviewHeight
-    global draw_capture_canvas, preview_border_frame
+    global draw_capture_canvas, left_area_frame
     global perform_cropping
 
     img = resize_image(img, round(PreviewRatio*100))
@@ -1385,7 +1421,7 @@ def start_convert():
                 "encode) does not match any frame.\r\n"
                 "Please review your settings and try again.")
             return
-        Go_btn.config(text="Stop", bg='red', fg='white', relief=SUNKEN)
+        Go_btn.config(text="Stop", bg='red', fg='white')
         # Disable all buttons in main window
         button_status_change_except(Go_btn, DISABLED)
         win.update()
@@ -1439,7 +1475,7 @@ def generation_exit():
 
     ConvertLoopExitRequested = False  # Reset flags
     ConvertLoopRunning = False
-    Go_btn.config(text="Start", bg=save_bg, fg=save_fg, relief=RAISED)
+    Go_btn.config(text="Start", bg=save_bg, fg=save_fg)
     # Enable all buttons in main window
     button_status_change_except(0, NORMAL)
     win.update()
@@ -1755,12 +1791,9 @@ def afterscan_init():
     global WinInitDone
     global SourceDir
     global LogLevel
-    global draw_capture_label
-    global draw_capture_canvas
     global PreviewWidth, PreviewHeight
     global screen_height
-    global preview_border_frame
-    global ExpertMode
+    global ExpertMode, SmallSize
 
     # Initialize logging
     log_path = os.path.dirname(__file__)
@@ -1787,12 +1820,15 @@ def afterscan_init():
         PreviewWidth = 700
         PreviewHeight = 560
     else:
-        PreviewWidth = 560
-        PreviewHeight = 440
-    app_width = PreviewWidth + 330 + 30
-    app_height = 600
+        PreviewWidth = 620
+        PreviewHeight = 460
+    app_width = PreviewWidth + 370 + 30
+    app_height = 630
     if ExpertMode:
         app_height += 0  # No need tto increase height for now
+    if SmallSize:
+        app_width -= 80
+        app_height -= 60
 
     win.title('AfterScan ' + __version__)  # setting title of the window
     win.geometry('1080x700')  # setting the size of the window
@@ -1805,7 +1841,10 @@ def afterscan_init():
 
     # Set default font size
     # Change the default Font that will affect in all the widgets
-    win.option_add("*font", "TkDefaultFont 8")
+    if SmallSize:
+        win.option_add("*font", "TkDefaultFont 8")
+    else:
+        win.option_add("*font", "TkDefaultFont 10")
     win.resizable(False, False)
 
     # Get Top window coordinates
@@ -1813,17 +1852,6 @@ def afterscan_init():
     TopWinY = win.winfo_y()
 
     WinInitDone = True
-
-    # Create a frame to add a border to the preview
-    preview_border_frame = Frame(win, width=PreviewWidth, height=PreviewHeight,
-                                 bg='dark grey')
-    preview_border_frame.grid(row=0, column=0, padx=5, pady=5, sticky=N)
-    # Also a label to draw images
-    # draw_capture_label = tk.Label(preview_border_frame)
-
-    draw_capture_canvas = Canvas(preview_border_frame, bg='dark grey',
-                                 width=PreviewWidth, height=PreviewHeight)
-    draw_capture_canvas.pack()
 
     logging.debug("AfterScan initialized")
 
@@ -1861,13 +1889,25 @@ def build_ui():
     global film_type, film_hole_template
     global job_list_listbox
     global app_status_label
+    global PreviewWidth, PreviewHeight
+    global left_area_frame
+    global draw_capture_canvas
+
+    # Create a frame to add a border to the preview
+    left_area_frame = Frame(win)
+    #left_area_frame.grid(row=0, column=0, padx=5, pady=5, sticky=N)
+    left_area_frame.pack(side=LEFT, padx=5, pady=5, anchor=N)
+    draw_capture_canvas = Canvas(left_area_frame, bg='dark grey',
+                                 width=PreviewWidth, height=PreviewHeight)
+    draw_capture_canvas.pack(side=TOP, anchor=N)
 
     # Frame for standard widgets
-    regular_frame = Frame(win, width=320, height=450)
-    regular_frame.grid(row=0, column=1, rowspan=2, padx=5, pady=5, sticky=N)
+    right_area_frame = Frame(win, width=320, height=450)
+    #right_area_frame.grid(row=0, column=1, rowspan=2, padx=5, pady=5, sticky=N)
+    right_area_frame.pack(side=LEFT, padx=5, pady=5, anchor=N)
 
     # Frame for top section of standard widgets
-    regular_top_section_frame = Frame(regular_frame, width=50, height=50)
+    regular_top_section_frame = Frame(right_area_frame, width=50, height=50)
     regular_top_section_frame.pack(side=TOP, padx=2, pady=2)
 
     # Create frame to display current frame and slider
@@ -1884,26 +1924,27 @@ def build_ui():
     frame_slider.set(CurrentFrame)
 
     # Application status label
-    app_status_label = Label(regular_top_section_frame, width=45, borderwidth=2,
-                             relief="groove", text='Status: Idle')
+    app_status_label = Label(regular_top_section_frame, width=46, borderwidth=2,
+                             relief="groove", text='Status: Idle',
+                             highlightthickness=1)
     app_status_label.grid(row=1, column=0, columnspan=3, sticky=W,
                           pady=5)
 
     # Application Exit button
-    Exit_btn = Button(regular_top_section_frame, text="Exit", width=8,
+    Exit_btn = Button(regular_top_section_frame, text="Exit", width=10,
                       height=5, command=exit_app, activebackground='red',
                       activeforeground='white', wraplength=80)
     Exit_btn.grid(row=0, column=1, sticky=W, padx=5)
 
 
     # Application start button
-    Go_btn = Button(regular_top_section_frame, text="Start", width=10, height=5,
+    Go_btn = Button(regular_top_section_frame, text="Start", width=12, height=5,
                     command=start_convert, activebackground='green',
                     activeforeground='white', wraplength=80)
     Go_btn.grid(row=0, column=2, sticky=W)
 
     # Create frame to select source and target folders
-    folder_frame = LabelFrame(regular_frame, text='Folder selection', width=50,
+    folder_frame = LabelFrame(right_area_frame, text='Folder selection', width=50,
                               height=8)
     folder_frame.pack(side=TOP, padx=2, pady=2, anchor=W)
 
@@ -1936,26 +1977,19 @@ def build_ui():
     folder_bottom_frame.pack(side=BOTTOM, ipady=2)
 
     frame_filename_pattern_frame = Frame(folder_frame)
-    frame_filename_pattern_frame.pack(side=TOP)
+    frame_filename_pattern_frame.pack(side=TOP, anchor=W)
     frame_filename_pattern_label = Label(frame_filename_pattern_frame,
                                          text='Frame input filename pattern:')
     frame_filename_pattern_label.pack(side=LEFT, anchor=W)
     frame_input_filename_pattern = Entry(frame_filename_pattern_frame,
-                                         width=16, borderwidth=1)
+                                         width=20, borderwidth=1)
+    frame_input_filename_pattern.bind("<FocusOut>", frame_input_filename_pattern_focus_out)
     frame_input_filename_pattern.pack(side=LEFT, anchor=W)
     frame_input_filename_pattern.delete(0, 'end')
     frame_input_filename_pattern.insert('end', FrameInputFilenamePattern)
-    frame_filename_pattern_btn = Button(
-        frame_filename_pattern_frame,
-        text='Set', width=2, height=1,
-        command=set_frame_input_filename_pattern,
-        activebackground='green',
-        activeforeground='white',
-        wraplength=80)
-    frame_filename_pattern_btn.pack(side=LEFT)
 
     # Define post-processing area
-    postprocessing_frame = LabelFrame(regular_frame,
+    postprocessing_frame = LabelFrame(right_area_frame,
                                       text='Frame post-processing',
                                       width=40, height=8)
     postprocessing_frame.pack(side=TOP, padx=2, pady=2)
@@ -1966,7 +2000,7 @@ def build_ui():
     start_from_current_frame_checkbox = tk.Checkbutton(
         postprocessing_frame, text='Start from current frame',
         variable=start_from_current_frame, onvalue=True, offvalue=False,
-        command=start_from_current_frame_selection, width=18)
+        command=start_from_current_frame_selection, width=20)
     start_from_current_frame_checkbox.grid(row=postprocessing_row, column=0,
                                            columnspan=3, sticky=W)
     postprocessing_row += 1
@@ -2038,10 +2072,10 @@ def build_ui():
     film_type.set('S8')
 
     # Define video generating area
-    video_frame = LabelFrame(regular_frame,
+    video_frame = LabelFrame(right_area_frame,
                              text='Video generation',
                              width=50, height=8)
-    video_frame.pack(side=TOP, padx=2, pady=2, anchor=W)
+    video_frame.pack(side=TOP, padx=2, pady=2)
     video_row = 0
 
     # Check box to generate video or not
@@ -2070,7 +2104,7 @@ def build_ui():
     # Video filename
     video_filename_label = Label(video_frame, text='Video filename:')
     video_filename_label.grid(row=video_row, column=0, sticky=W)
-    video_filename_name = Entry(video_frame, width=32, borderwidth=1)
+    video_filename_name = Entry(video_frame, width=26, borderwidth=1)
     video_filename_name.grid(row=video_row, column=1, columnspan=2,
                              sticky=W)
     video_filename_name.delete(0, 'end')
@@ -2132,15 +2166,15 @@ def build_ui():
     video_row += 1
 
     # Define job list area
-    job_list_frame = LabelFrame(regular_frame,
+    job_list_frame = LabelFrame(left_area_frame,
                              text='Job List',
                              width=50, height=8)
     job_list_frame.pack(side=TOP, padx=2, pady=2, anchor=W)
     job_list_row = 0
 
     # job listbox
-    job_list_listbox = Listbox(job_list_frame, width=30, height=5)
-    job_list_listbox.pack(side=LEFT, padx=2, pady=2)
+    job_list_listbox = Listbox(job_list_frame, width=50, height=5)
+    job_list_listbox.pack(side=LEFT, padx=5, pady=2)
 
     # job listbox scrollbar
     job_list_listbox_scrollbar = Scrollbar(job_list_frame, orient="vertical")
@@ -2155,21 +2189,21 @@ def build_ui():
     job_list_btn_frame.pack(side=LEFT, padx=2, pady=2, anchor=W)
 
     # Add job button
-    add_job_btn = Button(job_list_btn_frame, text="Add job", width=8, height=1,
+    add_job_btn = Button(job_list_btn_frame, text="Add job", width=12, height=1,
                     command=job_list_add_current, activebackground='green',
-                    activeforeground='white', wraplength=80)
+                    activeforeground='white', wraplength=100)
     add_job_btn.pack(side=TOP, padx=2, pady=2)
 
     # Delete job button
-    delete_job_btn = Button(job_list_btn_frame, text="Delete job", width=8, height=1,
+    delete_job_btn = Button(job_list_btn_frame, text="Delete job", width=12, height=1,
                     command=job_list_delete_selected, activebackground='green',
-                    activeforeground='white', wraplength=80)
+                    activeforeground='white', wraplength=100)
     delete_job_btn.pack(side=TOP, padx=2, pady=2)
 
     # Start processing job button
-    delete_job_btn = Button(job_list_btn_frame, text="Process jobs", width=8, height=1,
+    delete_job_btn = Button(job_list_btn_frame, text="Process jobs", width=12, height=1,
                     command=start_processing_job_list, activebackground='green',
-                    activeforeground='white', wraplength=80)
+                    activeforeground='white', wraplength=100)
     delete_job_btn.pack(side=TOP, padx=2, pady=2)
 
     postprocessing_bottom_frame = Frame(video_frame, width=30)
@@ -2177,13 +2211,13 @@ def build_ui():
 
     if ExpertMode:
         # Frame for expert widgets
-        expert_frame = Frame(win, width=900, height=150)
-        expert_frame.grid(row=1, column=0, padx=5, pady=5, sticky=NW)
+        #expert_frame = Frame(win, width=900, height=150)
+        #expert_frame.grid(row=1, column=0, padx=5, pady=5, sticky=NW)
 
         # Video filters area
-        video_filters_frame = LabelFrame(expert_frame, text='Video Filters Area',
-                                     width=26, height=8, font=("Arial", 7))
-        video_filters_frame.pack(side=LEFT, anchor=N)
+        video_filters_frame = LabelFrame(right_area_frame, text='Video Filters Area',
+                                     width=26, height=8)
+        video_filters_frame.pack(side=TOP)
 
         # Check box - Fill borders
         fill_borders = tk.BooleanVar(value=False)
@@ -2256,6 +2290,7 @@ def main(argv):
     global ui_init_done
     global IgnoreConfig
     global job_list
+    global SmallSize
 
     LoggingMode = "warning"
 
@@ -2276,13 +2311,15 @@ def main(argv):
     film_bw_template =  cv2.imread(pattern_bw_filename, 0)
     film_wb_template =  cv2.imread(pattern_wb_filename, 0)
 
-    opts, args = getopt.getopt(argv, "hiel:")
+    opts, args = getopt.getopt(argv, "shiel:")
 
     for opt, arg in opts:
         if opt == '-l':
             LoggingMode = arg
         elif opt == '-e':
             ExpertMode = True
+        elif opt == '-s':
+            SmallSize = True
         elif opt == '-i':
             IgnoreConfig = True
         elif opt == '-h':
@@ -2291,6 +2328,7 @@ def main(argv):
             print("      <log mode> = [DEBUG|INFO|WARNING|ERROR]")
             print("  -e             Enable expert mode")
             print("  -i             Ignore existing config")
+            print("  -s             Smaller font")
             exit()
 
     LogLevel = getattr(logging, LoggingMode.upper(), None)
