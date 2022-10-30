@@ -419,14 +419,14 @@ def job_list_add_current():
             entry_name = entry_name + ", medium Q. video"
     else:
         entry_name = entry_name + ", no video"
-    if ('job', entry_name) in job_list:
+    if entry_name in job_list:
         tk.messagebox.showerror(
             "Error: Job already exists",
             "A job named " + entry_name + " exists already in the job list. "
             "Please delete existing job or rename this one before retrying.")
     else:
         save_project_config()  # Make sure all current settings are in project_config
-        job_list[('job', entry_name)] = {'project': project_config.copy(), 'done': False}
+        job_list[entry_name] = {'project': project_config.copy(), 'done': False}
         job_list_listbox.insert('end', entry_name)
 
 
@@ -477,14 +477,14 @@ def job_processing_loop():
     job_started = False
     idx = 0
     for entry in job_list:
-        if  job_list[('job', entry)]['done'] == False:
+        if  job_list[entry]['done'] == False:
             job_list_listbox.selection_set(idx)
             CurrentJobEntry = entry
             logging.info("Processing %s, starting from frame %i, %s frames",
-                         entry, job_list[('job', entry)]['project']['CurrentFrame'],
-                         job_list[('job', entry)]['project']['FramesToEncode'])
+                         entry, job_list[entry]['project']['CurrentFrame'],
+                         job_list[entry]['project']['FramesToEncode'])
             project_config_from_file = False
-            project_config = job_list[('job', entry)]['project'].copy()
+            project_config = job_list[entry]['project'].copy()
             decode_project_config()
 
             # Load matching file list from newly selected dir
@@ -1415,7 +1415,7 @@ def generation_exit():
     win.update()
 
     if BatchJobRunning:
-        job_list[('job', CurrentJobEntry)]['done'] = True
+        job_list[CurrentJobEntry]['done'] = True
         job_processing_loop()
 
 
