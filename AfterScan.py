@@ -64,6 +64,7 @@ global work_image, base_image, original_image
 script_dir = os.path.realpath(sys.argv[0])
 script_dir = os.path.dirname(script_dir)
 general_config_filename = os.path.join(script_dir, "AfterScan.json")
+project_settings_filename = os.path.join(script_dir, "AfterScan-projects.json")
 project_config_basename = "AfterScan-project.json"
 project_config_filename = ""
 project_config_from_file = True
@@ -141,6 +142,7 @@ global win
 ExpertMode = False
 IsWindows = False
 IsLinux = False
+IsMac = False
 
 
 """
@@ -163,7 +165,6 @@ def load_general_config():
     global general_config_filename
     global LastSessionDate
     global SourceDir, TargetDir
-    global folder_frame_source_dir, folder_frame_target_dir
 
     # Check if persisted data file exist: If it does, load it
     if not IgnoreConfig and os.path.isfile(general_config_filename):
@@ -181,8 +182,37 @@ def load_general_config():
         # If directory in configuration does not exist, set current working dir
         if not os.path.isdir(SourceDir):
             SourceDir = ""
-        folder_frame_source_dir.delete(0, 'end')
-        folder_frame_source_dir.insert('end', SourceDir)
+    if 'FfmpegBinName' in general_config:
+        FfmpegBinName = general_config["FfmpegBinName"]
+
+
+def update_project_settings():
+    global project_settings
+    global SourceDir
+    if SourceDir in project_settings:
+        project_settings.update({SourceDir: project_config.copy()})
+    elif SourceDir != '':
+        project_settings[project_config["SourceDir"]] = project_config.copy()
+
+
+def save_project_settings():
+    global project_settings, project_settings_filename
+
+    if not IgnoreConfig:
+        with open(project_settings_filename, 'w+') as f:
+            print(project_settings)
+            json.dump(project_settings, f)
+
+
+def load_project_settings():
+    global project_settings, project_settings_filename
+
+    if not IgnoreConfig and os.path.isfile(project_settings_filename):
+        f = open(project_settings_filename)
+        project_settings = json.load(f)
+        f.close()
+    else:   # No project settings file. Set empty config to force defaults
+        project_settings = {}
 
 
 def save_project_config():
@@ -214,9 +244,12 @@ def save_project_config():
         project_config["FillBordersThickness"] = fill_borders_thickness.get()
         project_config["FillBordersMode"] = fill_borders_mode.get()
 
-    with open(project_config_filename, 'w+') as f:
-        json.dump(project_config, f)
+    # No longer saving to dedicated file, all project settings in common file now
+    # with open(project_config_filename, 'w+') as f:
+    #     json.dump(project_config, f)
 
+    update_project_settings()
+    save_project_settings()
 
 def load_project_config():
     global SourceDir
@@ -225,12 +258,21 @@ def load_project_config():
 
     project_config_filename = os.path.join(SourceDir, project_config_basename)
     # Check if persisted project data file exist: If it does, load it
-    if not IgnoreConfig and os.path.isfile(project_config_filename):
-        persisted_data_file = open(project_config_filename)
-        project_config = json.load(persisted_data_file)
-        persisted_data_file.close()
-    else:   # No project config file. Set empty config to force defaults
+    if IgnoreConfig:
         project_config = {}
+    else:
+        print(SourceDir)
+        print(project_settings)
+        if SourceDir in project_settings:
+            logging.debug("Loading project config from consolidated project settings")
+            project_config = project_settings[SourceDir].copy()
+        elif os.path.isfile(project_config_filename):
+            logging.debug("Loading project config from dedicated project config file")
+            persisted_data_file = open(project_config_filename)
+            project_config = json.load(persisted_data_file)
+            persisted_data_file.close()
+        else:  # No project config file. Set empty config to force defaults
+            project_config = {}
 
     for item in project_config:
         logging.info("%s=%s", item, str(project_config[item]))
@@ -456,7 +498,7 @@ def load_job_list():
         for entry in job_list:
             job_list_listbox.insert('end', entry)
         f.close()
-    else:   # No project config file. Set empty config to force defaults
+    else:   # No job list file. Set empty config to force defaults
         job_list = {}
 
 
@@ -693,6 +735,12 @@ def frame_input_filename_pattern_focus_out(event):
     get_current_dir_file_list()
     init_display()
 
+
+def custom_ffmpeg_path_focus_out(event):
+    global custom_ffmpeg_path, FfmpegBinName
+
+    FfmpegBinName = custom_ffmpeg_path.get()
+    general_config["FfmpegBinName"] = FfmpegBinName
 
 
 def perform_stabilization_selection():
@@ -1498,89 +1546,47 @@ def call_ffmpeg():
     global FrameFilenameOutputPattern
     global first_absolute_frame, frames_to_encode
 
-    # Cannot call popen with a list in windows. Seems it was a bug
-    # already in 2018: https://bugs.python.org/issue32764
-    if IsWindows:
-        extra_input_options = ""
-        extra_output_options = ""
-        if frames_to_encode > 0:
-            extra_output_options += (' -frames:v' + str(frames_to_encode))
-        if ExpertMode and fill_borders.get():
-            extra_output_options += [
-                 '-filter_complex',
-                 '[0:v] fillborders='
-                 'left=' + str(fill_borders_thickness.get()) + ':'
-                 'right=' + str(fill_borders_thickness.get()) + ':'
-                 'top=' + str(fill_borders_thickness.get()) + ':'
-                 'bottom=' + str(fill_borders_thickness.get()) + ':'
-                 'mode=' + fill_borders_mode.get() + ' [v]',
-                 '-map', '[v]']
-        cmd_ffmpeg = (FfmpegBinName
-                      + ' -y'
-                      + '-f image2'
-                      + '-start_number ' + str(StartFrame +
-                                               first_absolute_frame)
-                      + ' -framerate ' + str(VideoFps)
-                      + extra_input_options
-                      + ' -i "'
-                      + os.path.join(TargetDir,
-                                     FrameFilenameOutputPattern)
-                      + '"'
-                      + extra_output_options
-                      + ' -an'
-                      + ' -vcodec libx264'
-                      + ' -preset ' + ffmpeg_preset.get()
-                      + ' -crf 18'
-                      + ' -aspect 4:3'
-                      + ' -pix_fmt yuv420p'
-                      + ' '
-                      + '"' + os.path.join(
-                          TargetDir,
-                          TargetVideoFilename) + '"')
-        logging.debug("Generated ffmpeg command: %s", cmd_ffmpeg)
-        ffmpeg_success = sp.call(cmd_ffmpeg) == 0
-    else:
-        extra_input_options = []
-        extra_output_options = []
-        if frames_to_encode > 0:
-            extra_output_options += ['-frames:v', str(frames_to_encode)]
-        if ExpertMode and fill_borders.get():
-            extra_output_options += [
-                 '-filter_complex',
-                 '[0:v] fillborders='
-                 'left=' + str(fill_borders_thickness.get()) + ':'
-                 'right=' + str(fill_borders_thickness.get()) + ':'
-                 'top=' + str(fill_borders_thickness.get()) + ':'
-                 'bottom=' + str(fill_borders_thickness.get()) + ':'
-                 'mode=' + fill_borders_mode.get() + ' [v]',
-                 '-map', '[v]']
-        cmd_ffmpeg = [FfmpegBinName,
-                      '-y',
-                      '-loglevel', 'error',
-                      '-stats',
-                      '-flush_packets', '1',
-                      '-f', 'image2',
-                      '-start_number', str(StartFrame +
-                                           first_absolute_frame),
-                      '-framerate', str(VideoFps),
-                      '-i',
-                      os.path.join(TargetDir,
-                                   FrameFilenameOutputPattern)]
-        cmd_ffmpeg.extend(extra_output_options)
-        cmd_ffmpeg.extend(
-            ['-an',  # no audio
-             '-vcodec', 'libx264',
-             '-preset', ffmpeg_preset.get(),
-             '-crf', '18',
-             '-pix_fmt', 'yuv420p',
-             os.path.join(TargetDir,
-                          TargetVideoFilename)])
+    extra_input_options = []
+    extra_output_options = []
+    if frames_to_encode > 0:
+        extra_output_options += ['-frames:v', str(frames_to_encode)]
+    if ExpertMode and fill_borders.get():
+        extra_output_options += [
+             '-filter_complex',
+             '[0:v] fillborders='
+             'left=' + str(fill_borders_thickness.get()) + ':'
+             'right=' + str(fill_borders_thickness.get()) + ':'
+             'top=' + str(fill_borders_thickness.get()) + ':'
+             'bottom=' + str(fill_borders_thickness.get()) + ':'
+             'mode=' + fill_borders_mode.get() + ' [v]',
+             '-map', '[v]']
+    cmd_ffmpeg = [FfmpegBinName,
+                  '-y',
+                  '-loglevel', 'error',
+                  '-stats',
+                  '-flush_packets', '1',
+                  '-f', 'image2',
+                  '-start_number', str(StartFrame +
+                                       first_absolute_frame),
+                  '-framerate', str(VideoFps),
+                  '-i',
+                  os.path.join(TargetDir,
+                               FrameFilenameOutputPattern)]
+    cmd_ffmpeg.extend(extra_output_options)
+    cmd_ffmpeg.extend(
+        ['-an',  # no audio
+         '-vcodec', 'libx264',
+         '-preset', ffmpeg_preset.get(),
+         '-crf', '18',
+         '-pix_fmt', 'yuv420p',
+         os.path.join(TargetDir,
+                      TargetVideoFilename)])
 
-        logging.debug("Generated ffmpeg command: %s", cmd_ffmpeg)
-        ffmpeg_process = sp.Popen(cmd_ffmpeg, stderr=sp.STDOUT,
-                                  stdout=sp.PIPE,
-                                  universal_newlines=True)
-        ffmpeg_success = ffmpeg_process.wait() == 0
+    logging.debug("Generated ffmpeg command: %s", cmd_ffmpeg)
+    ffmpeg_process = sp.Popen(cmd_ffmpeg, stderr=sp.STDOUT,
+                              stdout=sp.PIPE,
+                              universal_newlines=True)
+    ffmpeg_success = ffmpeg_process.wait() == 0
     ffmpeg_encoding_status = ffmpeg_state.Completed
 
 
@@ -1757,7 +1763,7 @@ def afterscan_init():
         PreviewWidth = 620
         PreviewHeight = 460
     app_width = PreviewWidth + 370 + 30
-    app_height = 630
+    app_height = PreviewHeight + 170
     if ExpertMode:
         app_height += 0  # No need tto increase height for now
     if SmallSize:
@@ -1826,6 +1832,7 @@ def build_ui():
     global PreviewWidth, PreviewHeight
     global left_area_frame
     global draw_capture_canvas
+    global custom_ffmpeg_path
 
     # Create a frame to add a border to the preview
     left_area_frame = Frame(win)
@@ -1887,6 +1894,9 @@ def build_ui():
     folder_frame_source_dir = Entry(source_folder_frame, width=36,
                                     borderwidth=1)
     folder_frame_source_dir.pack(side=LEFT)
+    folder_frame_source_dir.delete(0, 'end')
+    folder_frame_source_dir.insert('end', SourceDir)
+
     source_folder_btn = Button(source_folder_frame, text='Source', width=6,
                                height=1, command=set_source_folder,
                                activebackground='green',
@@ -2148,6 +2158,16 @@ def build_ui():
         #expert_frame = Frame(win, width=900, height=150)
         #expert_frame.grid(row=1, column=0, padx=5, pady=5, sticky=NW)
 
+        # Custom ffmpeg path
+        custom_ffmpeg_path_frame = LabelFrame(right_area_frame, text='Custom FFMpeg path',
+                                     width=26, height=8)
+        custom_ffmpeg_path_frame.pack(side=TOP)
+        custom_ffmpeg_path = Entry(right_area_frame, width=26, borderwidth=1)
+        custom_ffmpeg_path.pack()
+        custom_ffmpeg_path.delete(0, 'end')
+        custom_ffmpeg_path.insert('end', FfmpegBinName)
+        custom_ffmpeg_path.bind("<FocusOut>", custom_ffmpeg_path_focus_out)
+
         # Video filters area
         video_filters_frame = LabelFrame(right_area_frame, text='Video Filters Area',
                                      width=26, height=8)
@@ -2216,19 +2236,23 @@ def main(argv):
     global film_hole_template, film_bw_template, film_wb_template
     global ExpertMode
     global FfmpegBinName
-    global IsWindows, IsLinux
+    global IsWindows, IsLinux, IsMac
     global pattern_filename
     global project_config_filename, project_config_basename
     global perform_stabilization
     global ui_init_done
     global IgnoreConfig
     global job_list
+    global project_settings
     global SmallSize
 
     LoggingMode = "warning"
 
-    # Create job dictionary (maybe a list or queue?)
+    # Create job dictionary
     job_list = {}
+
+    # Create project setttings dictionary
+    project_settings = {}
 
     pattern_filenames = [pattern_filename, pattern_bw_filename, pattern_wb_filename]
     for filename in pattern_filenames:
@@ -2270,6 +2294,8 @@ def main(argv):
 
     afterscan_init()
 
+    load_general_config()
+
     ffmpeg_installed = False
     if platform.system() == 'Windows':
         IsWindows = True
@@ -2277,6 +2303,10 @@ def main(argv):
         AltFfmpegBinName = 'ffmpeg.exe'
     elif platform.system() == 'Linux':
         IsLinux = True
+        FfmpegBinName = 'ffmpeg'
+        AltFfmpegBinName = 'ffmpeg'
+    elif platform.system() == 'Darwin':
+        IsMac = True
         FfmpegBinName = 'ffmpeg'
         AltFfmpegBinName = 'ffmpeg'
 
@@ -2296,12 +2326,11 @@ def main(argv):
 
     build_ui()
 
-    load_general_config()
-
     if SourceDir is not None:
         project_config_filename = os.path.join(SourceDir,
                                                project_config_basename)
-
+    load_project_settings()
+    
     load_project_config()
 
     load_job_list()
