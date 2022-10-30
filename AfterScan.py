@@ -164,7 +164,6 @@ def load_general_config():
     global LastSessionDate
     global SourceDir, TargetDir
     global folder_frame_source_dir, folder_frame_target_dir
-    global video_encoding_do_not_warn_again
 
     # Check if persisted data file exist: If it does, load it
     if not IgnoreConfig and os.path.isfile(general_config_filename):
@@ -184,9 +183,6 @@ def load_general_config():
             SourceDir = ""
         folder_frame_source_dir.delete(0, 'end')
         folder_frame_source_dir.insert('end', SourceDir)
-    if 'VideoEncodingDoNotWarnAgain' in general_config:
-        video_encoding_do_not_warn_again.set(
-            general_config["VideoEncodingDoNotWarnAgain"])
 
 
 def save_project_config():
@@ -423,14 +419,14 @@ def job_list_add_current():
             entry_name = entry_name + ", medium Q. video"
     else:
         entry_name = entry_name + ", no video"
-    if entry_name in job_list:
+    if ('job', entry_name) in job_list:
         tk.messagebox.showerror(
             "Error: Job already exists",
             "A job named " + entry_name + " exists already in the job list. "
             "Please delete existing job or rename this one before retrying.")
     else:
         save_project_config()  # Make sure all current settings are in project_config
-        job_list[entry_name] = {'project': project_config.copy(), 'done': False}
+        job_list[('job', entry_name)] = {'project': project_config.copy(), 'done': False}
         job_list_listbox.insert('end', entry_name)
 
 
@@ -481,14 +477,14 @@ def job_processing_loop():
     job_started = False
     idx = 0
     for entry in job_list:
-        if  job_list[entry]['done'] == False:
+        if  job_list[('job', entry)]['done'] == False:
             job_list_listbox.selection_set(idx)
             CurrentJobEntry = entry
             logging.info("Processing %s, starting from frame %i, %s frames",
-                         entry, job_list[entry]['project']['CurrentFrame'],
-                         job_list[entry]['project']['FramesToEncode'])
+                         entry, job_list[('job', entry)]['project']['CurrentFrame'],
+                         job_list[('job', entry)]['project']['FramesToEncode'])
             project_config_from_file = False
-            project_config = job_list[entry]['project'].copy()
+            project_config = job_list[('job', entry)]['project'].copy()
             decode_project_config()
 
             # Load matching file list from newly selected dir
@@ -510,60 +506,6 @@ User feedback support functions
 """
 
 
-def video_encoding_do_not_warn_again_selection():
-    global video_encoding_do_not_warn_again
-    global warn_again_from_toplevel
-
-    general_config["VideoEncodingDoNotWarnAgain"] = \
-        video_encoding_do_not_warn_again.get()
-
-
-def close_video_encoding_warning():
-    global video_encoding_warning
-
-    video_encoding_warning.destroy()
-    video_encoding_warning.quit()
-
-
-def video_encoding_warning():
-    global win
-    global video_encoding_warning
-    global video_encoding_do_not_warn_again
-    global warn_again_from_toplevel
-
-    if video_encoding_do_not_warn_again.get():
-        return
-
-    warn_again_from_toplevel = tk.BooleanVar()
-    video_encoding_warning = Toplevel(win)
-    video_encoding_warning.title('*** Video generation warning ***')
-    video_encoding_warning.geometry('500x300')
-    video_encoding_warning.geometry('+250+250')
-    video_encoding_label = Label(
-        video_encoding_warning,
-        text='\rThis utility uses FFmpeg to generate video from S8/R8 frames '
-        'produced by a film scanner.\r\nFFmpeg is invoked in a synchronous '
-        'manner from this application, so it is not posible (or better, I '
-        'haven\'t found the way) to display video encoding progress '
-        'information in the UI in a nice way.\r\nTherefore, as a workaround, '
-        'output from FFmpeg is redirected to the console, in order to provide '
-        'feedback on the encoding process, that in most cases will be quite '
-        'long.', wraplength=450, justify=LEFT)
-    video_encoding_btn = Button(video_encoding_warning, text="OK", width=2,
-                                height=1, command=close_video_encoding_warning)
-    video_encoding_checkbox = tk.Checkbutton(
-        video_encoding_warning, text='Do not show this warning again',
-        height=1, variable=video_encoding_do_not_warn_again, onvalue=True,
-        offvalue=False, command=video_encoding_do_not_warn_again_selection)
-
-    video_encoding_label.pack(side=TOP)
-    video_encoding_btn.pack(side=TOP, pady=10)
-    video_encoding_checkbox.pack(side=TOP)
-
-    video_encoding_warning.mainloop()
-
-
-# ***********************************************************
 def display_ffmpeg_progress():
     global win
     global ffmpeg_process
@@ -1446,14 +1388,6 @@ def start_convert():
                     if not tk.messagebox.askyesno("Error!", error_msg):
                         generation_exit()
                         return
-        if generate_video.get() and not video_encoding_do_not_warn_again.get():
-            tk.messagebox.showwarning(
-                "Video encoding warning",
-                "\r\nVideo encoding progress is NOT displayed in the user "
-                "interface, only at the end of the encoding (which can take "
-                "hours for long films). \r\n"
-                "Please check in the console if required, progress reported "
-                "by FFmpeg is displayed there. ")
 
         ConvertLoopRunning = True
 
@@ -1481,7 +1415,7 @@ def generation_exit():
     win.update()
 
     if BatchJobRunning:
-        job_list[CurrentJobEntry]['done'] = True
+        job_list[('job', CurrentJobEntry)]['done'] = True
         job_processing_loop()
 
 
@@ -2280,13 +2214,12 @@ def exit_app():  # Exit Application
 def main(argv):
     global LogLevel, LoggingMode
     global film_hole_template, film_bw_template, film_wb_template
-    global video_encoding_do_not_warn_again
     global ExpertMode
     global FfmpegBinName
     global IsWindows, IsLinux
     global pattern_filename
     global project_config_filename, project_config_basename
-    global video_encoding_do_not_warn_again, perform_stabilization
+    global perform_stabilization
     global ui_init_done
     global IgnoreConfig
     global job_list
@@ -2361,10 +2294,6 @@ def main(argv):
             "Frame stabilization and cropping will still work, "
             "video generation will not")
 
-    # Init some variables here
-    # video_encoding_do_not_warn_again is required by config read
-    video_encoding_do_not_warn_again = tk.BooleanVar(value=False)
-
     build_ui()
 
     load_general_config()
@@ -2381,10 +2310,7 @@ def main(argv):
 
     ui_init_done = True
 
-    # Display video encoding warning if not previously declined
-    if not video_encoding_do_not_warn_again.get():
-        video_encoding_warning()
-    # Disable a few items that shoul dbe not operational withous source folder
+    # Disable a few items that should be not operational without source folder
     if len(SourceDir) == 0:
         Go_btn.config(state=DISABLED)
         cropping_btn.config(state=DISABLED)
