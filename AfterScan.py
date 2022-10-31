@@ -75,8 +75,12 @@ pattern_filename = pattern_filename_s8
 
 general_config = {
 }
-project_config = {
+default_project_config = {
+    'FrameInputFilenamePattern': 'picture-*.jpg',
+    'FilmType': 'S8'
 }
+project_config = default_project_config.copy()
+
 
 # Film hole search vars
 expected_pattern_pos_s8 = (6.5, 34)
@@ -97,8 +101,8 @@ SourceDir = ""
 TargetDir = ""
 FrameFilenameOutputPattern = "picture_out-%05d.jpg"
 FrameCheckFilenameOutputPattern = "picture_out-*.jpg"  # Req. for ffmpeg gen.
-FrameInputFilenamePattern = "picture-*.jpg"
 SourceDirFileList = []
+global film_type
 
 # Flow control vars
 ConvertLoopExitRequested = False
@@ -122,7 +126,7 @@ StabilizeWindowTitle = "Select height of S8 hole, or R8 inter-hole space. " \
                        "Press Enter to confirm, Escape to cancel"
 RectangleWindowTitle = ""
 StabilizeAreaDefined = False
-StabilizationThreshold = 210.0
+StabilizationThreshold = 240.0
 CropAreaDefined = False
 RectangleTopLeft = (0, 0)
 RectangleBottomRight = (0, 0)
@@ -218,7 +222,7 @@ def load_project_settings():
 def save_project_config():
     global skip_frame_regeneration
     global frames_to_encode_spinbox
-    global ffmpeg_preset, film_type
+    global ffmpeg_preset
     global StabilizeAreaDefined, film_hole_height
     global CurrentFrame
     global video_filename_name
@@ -233,7 +237,6 @@ def save_project_config():
     project_config["skip_frame_regeneration"] = skip_frame_regeneration.get()
     project_config["FFmpegPreset"] = ffmpeg_preset.get()
     project_config["ProjectConfigDate"] = str(datetime.now())
-    project_config["FilmType"] = film_type.get()
     project_config["PerformCropping"] = perform_cropping.get()
     project_config["VideoFilename"] = video_filename_name.get()
     if StabilizeAreaDefined:
@@ -255,24 +258,22 @@ def load_project_config():
     global SourceDir
     global project_config, project_config_from_file
     global project_config_basename, project_config_filename
+    global project_settings
 
     project_config_filename = os.path.join(SourceDir, project_config_basename)
     # Check if persisted project data file exist: If it does, load it
-    if IgnoreConfig:
-        project_config = {}
-    else:
-        print(SourceDir)
-        print(project_settings)
+    project_config = default_project_config.copy()  # set default config
+    if not IgnoreConfig:
         if SourceDir in project_settings:
             logging.debug("Loading project config from consolidated project settings")
-            project_config = project_settings[SourceDir].copy()
+            project_config |= project_settings[SourceDir].copy()
         elif os.path.isfile(project_config_filename):
             logging.debug("Loading project config from dedicated project config file")
             persisted_data_file = open(project_config_filename)
-            project_config = json.load(persisted_data_file)
+            project_config |= json.load(persisted_data_file)
             persisted_data_file.close()
         else:  # No project config file. Set empty config to force defaults
-            project_config = {}
+            project_config = default_project_config.copy()
 
     for item in project_config:
         logging.info("%s=%s", item, str(project_config[item]))
@@ -281,8 +282,6 @@ def load_project_config():
     # saving it in case of batch processing
     project_config_from_file = True
 
-    decode_project_config()
-
 
 def decode_project_config():        
     global SourceDir, TargetDir
@@ -290,13 +289,14 @@ def decode_project_config():
     global project_config_basename, project_config_filename
     global CurrentFrame, frame_slider
     global VideoFps, video_fps_dropdown_selected
-    global frame_input_filename_pattern, FrameInputFilenamePattern
+    global frame_input_filename_pattern
     global start_from_current_frame, frames_to_encode
     global skip_frame_regeneration
     global generate_video, video_filename_name
     global CropTopLeft, CropBottomRight, perform_cropping
-    global StabilizeAreaDefined, film_hole_height
+    global StabilizeAreaDefined, film_hole_height, film_type
     global ExpertMode
+    global StabilizationThreshold
 
     if 'SourceDir' in project_config:
         SourceDir = project_config["SourceDir"]
@@ -333,12 +333,18 @@ def decode_project_config():
     else:
         frames_to_encode = "All"
         frames_to_encode_str.set(frames_to_encode)
+
+    if not 'FilmType' in project_config:
+        project_config["FilmType"] = 'S8'
+    film_type.set(project_config["FilmType"])
+    set_film_type()
+
     if 'StabilizationThreshold' in project_config:
         StabilizationThreshold = project_config["StabilizationThreshold"]
         stabilization_threshold_str.set(StabilizationThreshold)
     else:
-        StabilizationThreshold = 210
-        stabilization_threshold_str.set(frames_to_encode)
+        StabilizationThreshold = 240
+        stabilization_threshold_str.set(StabilizationThreshold)
     if 'PerformCropping' in project_config:
         perform_cropping.set(project_config["PerformCropping"])
     else:
@@ -365,12 +371,10 @@ def decode_project_config():
         skip_frame_regeneration.set(project_config["skip_frame_regeneration"])
     else:
         skip_frame_regeneration.set(False)
-    if 'FrameInputFilenamePattern' in project_config:
-        FrameInputFilenamePattern = project_config["FrameInputFilenamePattern"]
-    else:
-        FrameInputFilenamePattern = "picture-*.jpg"
+    if not 'FrameInputFilenamePattern' in project_config:
+        project_config["FrameInputFilenamePattern"] = "picture-*.jpg"
     frame_input_filename_pattern.delete(0, 'end')
-    frame_input_filename_pattern.insert('end', FrameInputFilenamePattern)
+    frame_input_filename_pattern.insert('end', project_config["FrameInputFilenamePattern"])
     if 'FFmpegPreset' in project_config:
         ffmpeg_preset.set(project_config["FFmpegPreset"])
     else:
@@ -389,11 +393,6 @@ def decode_project_config():
         perform_stabilization.set(project_config["PerformStabilization"])
     else:
         perform_stabilization.set(False)
-
-    if 'FilmType' in project_config:
-        film_type.set(project_config["FilmType"])
-    else:
-        film_type.set('S8')
 
     if 'VideoFps' in project_config:
         VideoFps = eval(project_config["VideoFps"])
@@ -438,10 +437,10 @@ def job_list_add_current():
     entry_name = video_filename_name.get()
     if entry_name == "":
         entry_name = os.path.split(SourceDir)[1]
-    if film_type.get() == 'S8':
-        entry_name = entry_name + ", S8"
-    else:
+    if project_config["FilmType"] == 'R8':
         entry_name = entry_name + ", R8"
+    else:
+        entry_name = entry_name + ", S8"
     entry_name = entry_name + ", frames "
     if start_from_current_frame.get():
         entry_name = entry_name + str(CurrentFrame)
@@ -619,9 +618,13 @@ def set_source_folder():
         folder_frame_source_dir.insert('end', SourceDir)
 
     general_config["SourceDir"] = SourceDir
-    load_project_config()  # Needs SourceDir and first_absolute_frame defined
+
+    load_project_config()  # Needs SourceDir defined
+
     # Load matching file list from newly selected dir
     get_current_dir_file_list()  # first_absolute_frame is set here
+
+    decode_project_config()  # Needs first_absolute_frame defined
 
     # Enable Start and Crop buttons, plus slider, once we have files to handle
     cropping_btn.config(state=NORMAL)
@@ -728,10 +731,9 @@ def widget_state_refresh():
 
 
 def frame_input_filename_pattern_focus_out(event):
-    global FrameInputFilenamePattern, frame_input_filename_pattern
+    global frame_input_filename_pattern
 
-    FrameInputFilenamePattern = frame_input_filename_pattern.get()
-    project_config["FrameInputFilenamePattern"] = FrameInputFilenamePattern
+    project_config["FrameInputFilenamePattern"] = frame_input_filename_pattern.get()
     get_current_dir_file_list()
     init_display()
 
@@ -739,8 +741,14 @@ def frame_input_filename_pattern_focus_out(event):
 def custom_ffmpeg_path_focus_out(event):
     global custom_ffmpeg_path, FfmpegBinName
 
-    FfmpegBinName = custom_ffmpeg_path.get()
-    general_config["FfmpegBinName"] = FfmpegBinName
+    if not os.path.isfile(custom_ffmpeg_path.get()):
+        tk.messagebox.showerror("Error!",
+                                "Provided FFMpeg path does not exist.")
+        custom_ffmpeg_path.delete(0, 'end')
+        custom_ffmpeg_path.insert('end', FfmpegBinName)
+    else:
+        FfmpegBinName = custom_ffmpeg_path.get()
+        general_config["FfmpegBinName"] = FfmpegBinName
 
 
 def perform_stabilization_selection():
@@ -857,7 +865,10 @@ def scale_display_update():
     global CurrentFrame
     global perform_stabilization, perform_cropping
     global CropTopLeft, CropBottomRight
+    global SourceDirFileList
 
+    if CurrentFrame >= len(SourceDirFileList):
+        return
     file = SourceDirFileList[CurrentFrame]
     img = cv2.imread(file, cv2.IMREAD_UNCHANGED)
     if perform_stabilization.get():
@@ -950,6 +961,9 @@ def select_rectangle_area():
     global ix, iy
     global x_, y_
     global area_select_image_factor
+
+    if CurrentFrame >= len(SourceDirFileList):
+        return False
 
     retvalue = False
     ix, iy = -1, -1
@@ -1046,7 +1060,7 @@ def select_hole_height(work_image):
 def determine_hole_height(img):
     global film_hole_template, film_bw_template, film_wb_template
 
-    if film_type.get() == 'R8':
+    if project_config["FilmType"] == 'R8':
         template_1 = film_wb_template
         template_2 = film_bw_template
         other_film_type = 'S8'
@@ -1057,13 +1071,14 @@ def determine_hole_height(img):
     search_img = get_image_left_stripe(img)
     top_left_1 = match_template(template_1, search_img, 230)
     top_left_2 = match_template(template_2, search_img, 230)
-    if (top_left_1[1] > top_left_2[1]):
+    if top_left_1[1] > top_left_2[1]:
         if tk.messagebox.askyesno(
                 "Wrong film type detected",
-                "Current project is defined to handle " + film_type.get() +
+                "Current project is defined to handle " + project_config["FilmType"] +
                 " film type, however frames seem to be " + other_film_type + ".\r\n"
                 "Do you want to change it now?"):
             film_type.set(other_film_type)
+            project_config["FilmType"] = other_film_type
             set_film_type()
             top_left_aux = top_left_1
             top_left_1 = top_left_2
@@ -1079,9 +1094,9 @@ def adjust_hole_pattern_size():
         return
 
     ratio = 1
-    if film_type.get() == 'S8':
+    if project_config["FilmType"] == 'S8':
         ratio = film_hole_height / default_hole_height_s8
-    elif film_type.get() == 'R8':
+    elif project_config["FilmType"] == 'R8':
         ratio = film_hole_height / default_interhole_height_r8
     logging.debug("Hole pattern, ratio: %s, %.2f", os.path.basename(pattern_filename), ratio)
     film_hole_template = resize_image(film_hole_template, ratio*100)
@@ -1091,18 +1106,19 @@ def set_film_type():
     global film_type, expected_pattern_pos, pattern_filename, film_hole_template
     global default_hole_height_s8, default_interhole_height_r8
     global film_hole_height
-    if film_type.get() == 'S8':
+    if project_config["FilmType"] == 'S8':
         pattern_filename = pattern_filename_s8
         expected_pattern_pos = expected_pattern_pos_s8
-    elif film_type.get() == 'R8':
+    elif project_config["FilmType"] == 'R8':
         pattern_filename = pattern_filename_r8
         expected_pattern_pos = expected_pattern_pos_r8
+
+    film_type.set(project_config["FilmType"])
     film_hole_template = cv2.imread(pattern_filename, 0)
     adjust_hole_pattern_size()
 
-    logging.debug("Film type: %s, %s, %i", film_type.get(), os.path.basename(pattern_filename), film_hole_height)
+    logging.debug("Film type: %s, %s, %i", project_config["FilmType"], os.path.basename(pattern_filename), film_hole_height)
 
-    project_config["FilmType"] = film_type.get()
     win.update()
 
 
@@ -1165,6 +1181,11 @@ def display_image(img):
     draw_capture_canvas.image = DisplayableImage
 
     win.update()
+
+
+def clear_image():
+    global draw_capture_canvas
+    draw_capture_canvas.delete('all')
 
 
 def resize_image(img, percent):
@@ -1296,22 +1317,25 @@ def is_ffmpeg_installed():
 
 def get_current_dir_file_list():
     global SourceDir
+    global project_config
     global SourceDirFileList
-    global FrameInputFilenamePattern
     global CurrentFrame, first_absolute_frame, last_absolute_frame
     global frame_slider
     global area_select_image_factor, screen_height
+    global folder_frame_target_dir
 
     if not os.path.isdir(SourceDir):
         return
 
     SourceDirFileList = sorted(list(glob(os.path.join(
         SourceDir,
-        FrameInputFilenamePattern))))
+        project_config["FrameInputFilenamePattern"]))))
     if len(SourceDirFileList) == 0:
         tk.messagebox.showerror("Error!",
                                 "No files match pattern name. "
                                 "Please specify new one and try again")
+        clear_image()
+        folder_frame_target_dir.delete(0, 'end')
         return
 
     first_absolute_frame = int(
@@ -1477,6 +1501,9 @@ def frame_generation_loop():
     global FrameFilenameOutputPattern
     global BatchJobRunning
     global ffmpeg_success, ffmpeg_encoding_status
+
+    if CurrentFrame >= len(SourceDirFileList):  # Should not happen at this point, but...
+        return
 
     if CurrentFrame >= StartFrame + frames_to_encode:
         status_str = "Status: Frame generation OK"
@@ -1824,7 +1851,6 @@ def build_ui():
     global ExpertMode
     global pattern_filename
     global frame_input_filename_pattern
-    global FrameInputFilenamePattern
     global frame_slider, CurrentFrame
     global film_type, film_hole_template
     global job_list_listbox
@@ -1833,6 +1859,7 @@ def build_ui():
     global left_area_frame
     global draw_capture_canvas
     global custom_ffmpeg_path
+    global project_config
 
     # Create a frame to add a border to the preview
     left_area_frame = Frame(win)
@@ -1930,7 +1957,7 @@ def build_ui():
     frame_input_filename_pattern.bind("<FocusOut>", frame_input_filename_pattern_focus_out)
     frame_input_filename_pattern.pack(side=LEFT, anchor=W)
     frame_input_filename_pattern.delete(0, 'end')
-    frame_input_filename_pattern.insert('end', FrameInputFilenamePattern)
+    frame_input_filename_pattern.insert('end', project_config["FrameInputFilenamePattern"])
 
     # Define post-processing area
     postprocessing_frame = LabelFrame(right_area_frame,
@@ -2013,7 +2040,7 @@ def build_ui():
     film_type_R8_rb = Radiobutton(postprocessing_frame, text="Regular 8", command=set_film_type,
                                   variable=film_type, value='R8')
     film_type_R8_rb.grid(row=postprocessing_row, column=1, sticky=W)
-    film_type.set('S8')
+    film_type.set(project_config["FilmType"])
 
     # Define video generating area
     video_frame = LabelFrame(right_area_frame,
@@ -2162,7 +2189,7 @@ def build_ui():
         custom_ffmpeg_path_frame = LabelFrame(right_area_frame, text='Custom FFMpeg path',
                                      width=26, height=8)
         custom_ffmpeg_path_frame.pack(side=TOP)
-        custom_ffmpeg_path = Entry(right_area_frame, width=26, borderwidth=1)
+        custom_ffmpeg_path = Entry(custom_ffmpeg_path_frame, width=26, borderwidth=1)
         custom_ffmpeg_path.pack()
         custom_ffmpeg_path.delete(0, 'end')
         custom_ffmpeg_path.insert('end', FfmpegBinName)
@@ -2332,6 +2359,7 @@ def main(argv):
     load_project_settings()
     
     load_project_config()
+    decode_project_config()
 
     load_job_list()
 
