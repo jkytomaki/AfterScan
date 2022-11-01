@@ -1579,7 +1579,6 @@ def frame_generation_loop():
 def call_ffmpeg():
     global TargetDir
     global cmd_ffmpeg
-    global IsWindows
     global ffmpeg_preset
     global TargetVideoFilename
     global StartFrame
@@ -2345,14 +2344,21 @@ def main(argv):
         IsWindows = True
         FfmpegBinName = 'C:\\ffmpeg\\bin\\ffmpeg.exe'
         AltFfmpegBinName = 'ffmpeg.exe'
+        logging.debug("Detected Windows OS")
     elif platform.system() == 'Linux':
         IsLinux = True
         FfmpegBinName = 'ffmpeg'
         AltFfmpegBinName = 'ffmpeg'
+        logging.debug("Detected Linux OS")
     elif platform.system() == 'Darwin':
         IsMac = True
         FfmpegBinName = 'ffmpeg'
         AltFfmpegBinName = 'ffmpeg'
+        logging.debug("Detected Darwin (MacOS) OS")
+    else:
+        FfmpegBinName = 'ffmpeg'
+        AltFfmpegBinName = 'ffmpeg'
+        logging.debug("OS not recognized: " + platform.system())
 
     if is_ffmpeg_installed():
         ffmpeg_installed = True
