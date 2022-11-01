@@ -148,7 +148,25 @@ IsWindows = False
 IsLinux = False
 IsMac = False
 
+"""
+#################
+Utility functions
+#################
+"""
 
+
+# Define a function for
+# identifying a Digit
+def is_a_number(string):
+    # Make a regular expression
+    # for identifying a digit
+    regex = '^[0-9]+$'
+    # pass the regular expression
+    # and the string in search() method
+    if (re.search(regex, string)):
+        return True
+    else:
+        return False
 """
 ####################################
 Configuration file support functions
@@ -1502,9 +1520,6 @@ def frame_generation_loop():
     global BatchJobRunning
     global ffmpeg_success, ffmpeg_encoding_status
 
-    if CurrentFrame >= len(SourceDirFileList):  # Should not happen at this point, but...
-        return
-
     if CurrentFrame >= StartFrame + frames_to_encode:
         status_str = "Status: Frame generation OK"
         app_status_label.config(text=status_str, fg='green')
@@ -1676,9 +1691,11 @@ def video_generation_loop():
         else:
             line = ffmpeg_process.stdout.readline()
             if line:
-                encoded_frame = int(str(line)[:-1].split()[1])
-                status_str = "Status: Generating video %.1f%%" % (encoded_frame*100/frames_to_encode)
-                app_status_label.config(text=status_str, fg='black')
+                frame_str = str(line)[:-1].split()[1]
+                if is_a_number(frame_str): # Sometimes ffmpeg output might be corrupted on the way
+                    encoded_frame = int(frame_str)
+                    status_str = "Status: Generating video %.1f%%" % (encoded_frame*100/frames_to_encode)
+                    app_status_label.config(text=status_str, fg='black')
             win.after(200, video_generation_loop)
     elif ffmpeg_encoding_status == ffmpeg_state.Completed:
         status_str = "Status: Generating video 100%"
