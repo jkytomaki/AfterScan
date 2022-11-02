@@ -211,6 +211,7 @@ def load_general_config():
 def update_project_settings():
     global project_settings
     global SourceDir
+    # SourceDir is the key for each project config inside the global project settings
     if SourceDir in project_settings:
         project_settings.update({SourceDir: project_config.copy()})
     elif SourceDir != '':
@@ -222,7 +223,7 @@ def save_project_settings():
 
     if not IgnoreConfig:
         with open(project_settings_filename, 'w+') as f:
-            print(project_settings)
+            logging.debug(project_settings)
             json.dump(project_settings, f)
 
 
@@ -456,20 +457,19 @@ def job_list_add_current():
     if entry_name == "":
         entry_name = os.path.split(SourceDir)[1]
     if project_config["FilmType"] == 'R8':
-        entry_name = entry_name + ", R8"
+        entry_name = entry_name + ", R8, "
     else:
-        entry_name = entry_name + ", S8"
-    entry_name = entry_name + ", frames "
-    if start_from_current_frame.get():
-        entry_name = entry_name + str(CurrentFrame)
-    else:
-        entry_name = entry_name + "0"
-    entry_name = entry_name + " to "
+        entry_name = entry_name + ", S8, "
     if frames_to_encode > 0:
         entry_name = entry_name + str(frames_to_encode)
     else:
         entry_name = entry_name + str(len(SourceDirFileList))
-    if generate_video.get():
+    entry_name = entry_name + " frames from frame "
+    if start_from_current_frame.get():
+        entry_name = entry_name + str(CurrentFrame)
+    else:
+        entry_name = entry_name + "0"
+    if project_config["GenerateVideo"]:
         if ffmpeg_preset.get() == 'veryslow':
             entry_name = entry_name + ", HQ video"
         elif ffmpeg_preset.get() == 'veryfast':
@@ -521,8 +521,9 @@ def load_job_list():
 
 
 def start_processing_job_list():
-    global BatchJobRunning
+    global BatchJobRunning, start_batch_btn
     BatchJobRunning = True
+    button_status_change_except(start_batch_btn, DISABLED)
     job_processing_loop()
 
 
@@ -556,6 +557,7 @@ def job_processing_loop():
         idx += 1
     if not job_started:
         BatchJobRunning = False
+        generation_exit()
 
 
 """
@@ -705,6 +707,13 @@ def button_status_change_except(except_button, button_status):
 
     if not CropAreaDefined:
         perform_cropping_checkbox.config(state=DISABLED)
+    if ExpertMode:
+        if except_button != start_batch_btn:
+            start_batch_btn.config(state=button_status)
+        if except_button != add_job_btn:
+            add_job_btn.config(state=button_status)
+        if except_button != delete_job_btn:
+            delete_job_btn.config(state=button_status)
 
 
 def widget_state_refresh():
@@ -759,9 +768,9 @@ def frame_input_filename_pattern_focus_out(event):
 def custom_ffmpeg_path_focus_out(event):
     global custom_ffmpeg_path, FfmpegBinName
 
-    if not os.path.isfile(custom_ffmpeg_path.get()):
+    if not is_ffmpeg_installed():
         tk.messagebox.showerror("Error!",
-                                "Provided FFMpeg path does not exist.")
+                                "Provided FFMpeg path is invalid.")
         custom_ffmpeg_path.delete(0, 'end')
         custom_ffmpeg_path.insert('end', FfmpegBinName)
     else:
@@ -773,6 +782,7 @@ def perform_stabilization_selection():
     global perform_stabilization
     stabilization_threshold_spinbox.config(
         state=NORMAL if perform_stabilization.get() else DISABLED)
+    project_config["PerformStabilization"] = perform_stabilization.get()
         
 
 
@@ -796,6 +806,7 @@ def perform_cropping_selection():
     global ui_init_done
     generate_video_checkbox.config(state=NORMAL if ffmpeg_installed
                                    else DISABLED)
+    project_config["PerformCropping"] = perform_cropping.get()
     if ui_init_done:
         scale_display_update()
 
@@ -817,8 +828,9 @@ def frames_to_encode_selection(updown):
 
 
 def frames_to_encode_spinbox_focus_out(event):
-    global frames_to_encode_spinbox, frames_to_encode_str
+    global frames_to_encode_spinbox, frames_to_encode_str, frames_to_encode
     project_config["FramesToEncode"] = frames_to_encode_spinbox.get()
+    frames_to_encode = int(project_config["FramesToEncode"])
 
 
 def fill_borders_selection():
@@ -1201,6 +1213,22 @@ def display_image(img):
     win.update()
 
 
+def display_image_by_frame_number(frame_number):
+    global StartFrame
+    # Get current file
+    file = SourceDirFileList[StartFrame + frame_number]
+    # read image
+    img = cv2.imread(file, cv2.IMREAD_UNCHANGED)
+
+    if project_config["PerformStabilization"]:
+        img = stabilize_image(img)
+    if project_config["PerformCropping"]:
+        img = crop_image(img, CropTopLeft, CropBottomRight)
+    else:
+        img = even_image(img)
+
+    display_image(img)
+
 def clear_image():
     global draw_capture_canvas
     draw_capture_canvas.delete('all')
@@ -1453,12 +1481,17 @@ def start_convert():
                 "encode) does not match any frame.\r\n"
                 "Please review your settings and try again.")
             return
-        Go_btn.config(text="Stop", bg='red', fg='white')
-        # Disable all buttons in main window
-        button_status_change_except(Go_btn, DISABLED)
+        if BatchJobRunning:
+            start_batch_btn.config(text="Stop batch", bg='red', fg='white')
+            # Disable all buttons in main window
+            button_status_change_except(start_batch_btn, DISABLED)
+        else:
+            Go_btn.config(text="Stop", bg='red', fg='white')
+            # Disable all buttons in main window
+            button_status_change_except(Go_btn, DISABLED)
         win.update()
 
-        if generate_video.get():
+        if project_config["GenerateVideo"]:
             TargetVideoFilename = video_filename_name.get()
             name, ext = os.path.splitext(TargetVideoFilename)
             if TargetVideoFilename == "":   # Assign default if no filename
@@ -1499,7 +1532,11 @@ def generation_exit():
 
     ConvertLoopExitRequested = False  # Reset flags
     ConvertLoopRunning = False
-    Go_btn.config(text="Start", bg=save_bg, fg=save_fg)
+    if BatchJobRunning:
+        BatchJobRunning = False  # Cancel batch jobs if any
+        start_batch_btn.config(text="Start batch", bg=save_bg, fg=save_fg)
+    else:
+        Go_btn.config(text="Start", bg=save_bg, fg=save_fg)
     # Enable all buttons in main window
     button_status_change_except(0, NORMAL)
     win.update()
@@ -1533,7 +1570,6 @@ def frame_generation_loop():
         return
 
     if ConvertLoopExitRequested:  # Stop button pressed
-        BatchJobRunning = False  # Cancel batch jobs if any
         status_str = "Status: Cancelled by user"
         app_status_label.config(text=status_str, fg='red')
         generation_exit()
@@ -1687,14 +1723,16 @@ def video_generation_loop():
                 "\r\nVideo generation by FFMPEG has been stopped by user "
                 "action.")
             generation_exit()  # Restore all settings to normal
+            os.remove(os.path.join(TargetDir, TargetVideoFilename))
         else:
             line = ffmpeg_process.stdout.readline()
             if line:
                 frame_str = str(line)[:-1].split()[1]
-                if is_a_number(frame_str): # Sometimes ffmpeg output might be corrupted on the way
+                if is_a_number(frame_str):  # Sometimes ffmpeg output might be corrupted on the way
                     encoded_frame = int(frame_str)
                     status_str = "Status: Generating video %.1f%%" % (encoded_frame*100/frames_to_encode)
                     app_status_label.config(text=status_str, fg='black')
+                    display_image_by_frame_number(encoded_frame)
             win.after(200, video_generation_loop)
     elif ffmpeg_encoding_status == ffmpeg_state.Completed:
         status_str = "Status: Generating video 100%"
@@ -1876,6 +1914,7 @@ def build_ui():
     global draw_capture_canvas
     global custom_ffmpeg_path
     global project_config
+    global start_batch_btn, add_job_btn, delete_job_btn
 
     # Create a frame to add a border to the preview
     left_area_frame = Frame(win)
@@ -1970,7 +2009,7 @@ def build_ui():
     frame_filename_pattern_label.pack(side=LEFT, anchor=W)
     frame_input_filename_pattern = Entry(frame_filename_pattern_frame,
                                          width=20, borderwidth=1)
-    frame_input_filename_pattern.bind("<FocusOut>", frame_input_filename_pattern_focus_out)
+    frame_input_filename_pattern.bind("<KeyRelease>", frame_input_filename_pattern_focus_out)
     frame_input_filename_pattern.pack(side=LEFT, anchor=W)
     frame_input_filename_pattern.delete(0, 'end')
     frame_input_filename_pattern.insert('end', project_config["FrameInputFilenamePattern"])
@@ -2006,7 +2045,7 @@ def build_ui():
         command=(frames_to_encode_selection_aux, '%d'), width=8,
         textvariable=frames_to_encode_str, from_=0, to=50000)
     frames_to_encode_spinbox.grid(row=postprocessing_row, column=2, sticky=W)
-    frames_to_encode_spinbox.bind("<FocusOut>", frames_to_encode_spinbox_focus_out)
+    frames_to_encode_spinbox.bind("<KeyRelease>", frames_to_encode_spinbox_focus_out)
     frames_to_encode_selection('down')
     postprocessing_row += 1
 
@@ -2029,7 +2068,7 @@ def build_ui():
         command=(stabilization_threshold_selection_aux, '%d'), width=8,
         textvariable=stabilization_threshold_str, from_=0, to=255)
     stabilization_threshold_spinbox.grid(row=postprocessing_row, column=2, sticky=W)
-    stabilization_threshold_spinbox.bind("<FocusOut>", stabilization_threshold_spinbox_focus_out)
+    stabilization_threshold_spinbox.bind("<KeyRelease>", stabilization_threshold_spinbox_focus_out)
     stabilization_threshold_selection('down')
     postprocessing_row += 1
 
@@ -2101,6 +2140,7 @@ def build_ui():
     # Drop down to select FPS
     # Dropdown menu options
     fps_list = [
+        "16",
         "16.67",
         "18",
         "24",
@@ -2161,19 +2201,23 @@ def build_ui():
 
     # job listbox
     job_list_listbox = Listbox(job_list_frame, width=50, height=5)
-    job_list_listbox.pack(side=LEFT, padx=5, pady=2)
+    job_list_listbox.grid(column=0, row=0, padx=5, pady=2)
 
-    # job listbox scrollbar
-    job_list_listbox_scrollbar = Scrollbar(job_list_frame, orient="vertical")
-    job_list_listbox_scrollbar.config(command=job_list_listbox.yview)
-    job_list_listbox_scrollbar.pack(side=LEFT, fill="y")
+    # job listbox scrollbars
+    job_list_listbox_scrollbar_y = Scrollbar(job_list_frame, orient="vertical")
+    job_list_listbox_scrollbar_y.config(command=job_list_listbox.yview)
+    job_list_listbox_scrollbar_y.grid(row=0, column=1, sticky=NS)
+    job_list_listbox_scrollbar_x = Scrollbar(job_list_frame, orient="horizontal")
+    job_list_listbox_scrollbar_x.config(command=job_list_listbox.xview)
+    job_list_listbox_scrollbar_x.grid(row=1, column=0, columnspan=1, sticky=EW)
 
-    job_list_listbox.config(yscrollcommand=job_list_listbox_scrollbar.set)
+    job_list_listbox.config(xscrollcommand=job_list_listbox_scrollbar_x.set)
+    job_list_listbox.config(yscrollcommand=job_list_listbox_scrollbar_y.set)
 
     # Define job list button area
     job_list_btn_frame = Frame(job_list_frame,
                              width=50, height=8)
-    job_list_btn_frame.pack(side=LEFT, padx=2, pady=2, anchor=W)
+    job_list_btn_frame.grid(row=0, column=2, padx=2, pady=2, sticky=W)
 
     # Add job button
     add_job_btn = Button(job_list_btn_frame, text="Add job", width=12, height=1,
@@ -2188,10 +2232,10 @@ def build_ui():
     delete_job_btn.pack(side=TOP, padx=2, pady=2)
 
     # Start processing job button
-    delete_job_btn = Button(job_list_btn_frame, text="Process jobs", width=12, height=1,
+    start_batch_btn = Button(job_list_btn_frame, text="Start batch", width=12, height=1,
                     command=start_processing_job_list, activebackground='green',
                     activeforeground='white', wraplength=100)
-    delete_job_btn.pack(side=TOP, padx=2, pady=2)
+    start_batch_btn.pack(side=TOP, padx=2, pady=2)
 
     postprocessing_bottom_frame = Frame(video_frame, width=30)
     postprocessing_bottom_frame.grid(row=video_row, column=0)
@@ -2209,7 +2253,7 @@ def build_ui():
         custom_ffmpeg_path.pack()
         custom_ffmpeg_path.delete(0, 'end')
         custom_ffmpeg_path.insert('end', FfmpegBinName)
-        custom_ffmpeg_path.bind("<FocusOut>", custom_ffmpeg_path_focus_out)
+        custom_ffmpeg_path.bind("<KeyRelease>", custom_ffmpeg_path_focus_out)
 
         # Video filters area
         video_filters_frame = LabelFrame(right_area_frame, text='Video Filters Area',
