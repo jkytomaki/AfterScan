@@ -467,6 +467,7 @@ def decode_project_config():
         resolution_dropdown_selected.set(project_config["VideoResolution"])
     else:
         resolution_dropdown_selected.set('Unchanged')
+        project_config["VideoResolution"] = 'Unchanged'
 
 
     if ExpertMode:
@@ -604,7 +605,8 @@ def job_processing_loop():
         job_list_listbox.selection_clear(idx)
         idx += 1
     if not job_started:
-        BatchJobRunning = False
+        BatchJobRunning = False  # Cancel batch jobs if any
+        start_batch_btn.config(text="Start batch", bg=save_bg, fg=save_fg)
         generation_exit()
 
 
@@ -1595,10 +1597,7 @@ def generation_exit():
 
     ConvertLoopExitRequested = False  # Reset flags
     ConvertLoopRunning = False
-    if BatchJobRunning:
-        BatchJobRunning = False  # Cancel batch jobs if any
-        start_batch_btn.config(text="Start batch", bg=save_bg, fg=save_fg)
-    else:
+    if not BatchJobRunning:
         Go_btn.config(text="Start", bg=save_bg, fg=save_fg)
     # Enable all buttons in main window
     button_status_change_except(0, NORMAL)
