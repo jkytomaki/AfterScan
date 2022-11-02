@@ -72,13 +72,31 @@ job_list_filename = os.path.join(script_dir, "AfterScan_job_list.json")
 pattern_filename_r8 = os.path.join(script_dir, "Pattern.R8.jpg")
 pattern_filename_s8 = os.path.join(script_dir, "Pattern.S8.jpg")
 pattern_filename = pattern_filename_s8
+default_project_config = {
+    "SourceDir": "",
+    "TargetDir": "",
+    "FrameInputFilenamePattern": "picture-*.jpg",
+    "FilmType": "S8",
+    "PerformCropping": False,
+    "GenerateVideo": False,
+    "VideoFps": "18",
+    "VideoResolution": "Unchanged",
+    "CurrentFrame": 0,
+    "StartFromCurrentFrame": False,
+    "FramesToEncode": "All",
+    "StabilizationThreshold": "240",
+    "PerformStabilization": False,
+    "skip_frame_regeneration": False,
+    "FFmpegPreset": "veryslow",
+    "VideoFilename": "",
+    "FillBorders": False,
+    "FillBordersThickness": 5,
+    "FillBordersMode": "smear"
+}
 
 general_config = {
 }
-default_project_config = {
-    'FrameInputFilenamePattern': 'picture-*.jpg',
-    'FilmType': 'S8'
-}
+
 project_config = default_project_config.copy()
 
 
@@ -270,14 +288,14 @@ def save_project_settings():
 
 
 def load_project_settings():
-    global project_settings, project_settings_filename
+    global project_settings, project_settings_filename, default_project_config
 
     if not IgnoreConfig and os.path.isfile(project_settings_filename):
         f = open(project_settings_filename)
         project_settings = json.load(f)
         f.close()
     else:   # No project settings file. Set empty config to force defaults
-        project_settings = {}
+        project_settings = default_project_config.copy()
 
 
 def save_project_config():
@@ -320,6 +338,7 @@ def load_project_config():
     global project_config, project_config_from_file
     global project_config_basename, project_config_filename
     global project_settings
+    global default_project_config
 
     project_config_filename = os.path.join(SourceDir, project_config_basename)
     # Check if persisted project data file exist: If it does, load it
@@ -335,6 +354,7 @@ def load_project_config():
             persisted_data_file.close()
         else:  # No project config file. Set empty config to force defaults
             project_config = default_project_config.copy()
+            project_config['SourceDir'] = SourceDir
 
     for item in project_config:
         logging.info("%s=%s", item, str(project_config[item]))
@@ -2081,7 +2101,7 @@ def build_ui():
     frame_filename_pattern_label.pack(side=LEFT, anchor=W)
     frame_input_filename_pattern = Entry(frame_filename_pattern_frame,
                                          width=20, borderwidth=1)
-    frame_input_filename_pattern.bind("<KeyRelease>", frame_input_filename_pattern_focus_out)
+    frame_input_filename_pattern.bind("<FocusOut>", frame_input_filename_pattern_focus_out)
     frame_input_filename_pattern.pack(side=LEFT, anchor=W)
     frame_input_filename_pattern.delete(0, 'end')
     frame_input_filename_pattern.insert('end', project_config["FrameInputFilenamePattern"])
@@ -2117,7 +2137,7 @@ def build_ui():
         command=(frames_to_encode_selection_aux, '%d'), width=8,
         textvariable=frames_to_encode_str, from_=0, to=50000)
     frames_to_encode_spinbox.grid(row=postprocessing_row, column=2, sticky=W)
-    frames_to_encode_spinbox.bind("<KeyRelease>", frames_to_encode_spinbox_focus_out)
+    frames_to_encode_spinbox.bind("<FocusOut>", frames_to_encode_spinbox_focus_out)
     frames_to_encode_selection('down')
     postprocessing_row += 1
 
@@ -2140,7 +2160,7 @@ def build_ui():
         command=(stabilization_threshold_selection_aux, '%d'), width=8,
         textvariable=stabilization_threshold_str, from_=0, to=255)
     stabilization_threshold_spinbox.grid(row=postprocessing_row, column=2, sticky=W)
-    stabilization_threshold_spinbox.bind("<KeyRelease>", stabilization_threshold_spinbox_focus_out)
+    stabilization_threshold_spinbox.bind("<FocusOut>", stabilization_threshold_spinbox_focus_out)
     stabilization_threshold_selection('down')
     postprocessing_row += 1
 
@@ -2346,7 +2366,7 @@ def build_ui():
         custom_ffmpeg_path.pack()
         custom_ffmpeg_path.delete(0, 'end')
         custom_ffmpeg_path.insert('end', FfmpegBinName)
-        custom_ffmpeg_path.bind("<KeyRelease>", custom_ffmpeg_path_focus_out)
+        custom_ffmpeg_path.bind("<FocusOut>", custom_ffmpeg_path_focus_out)
 
         # Video filters area
         video_filters_frame = LabelFrame(right_area_frame, text='Video Filters Area',
@@ -2425,6 +2445,7 @@ def main(argv):
     global job_list
     global project_settings
     global SmallSize
+    global default_project_config
 
     LoggingMode = "warning"
 
@@ -2432,7 +2453,7 @@ def main(argv):
     job_list = {}
 
     # Create project setttings dictionary
-    project_settings = {}
+    project_settings = default_project_config.copy()
 
     pattern_filenames = [pattern_filename, pattern_bw_filename, pattern_wb_filename]
     for filename in pattern_filenames:
