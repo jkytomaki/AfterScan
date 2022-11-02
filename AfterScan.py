@@ -140,7 +140,49 @@ ui_init_done = False
 IgnoreConfig = False
 global ffmpeg_installed
 ffmpeg_state = Enum('ffmpeg_state', ['Pending', 'Running', 'Completed'])
-
+resolution_dict = {
+    "Unchanged": "",
+    "-- 4:3 --": "",
+    "160x120 (QQVGA)": "160:120",
+    "320x240 (QVGA)": "320:240",
+    "640x480 (VGA)": "640:480",
+    "800x600 (SVGA)": "800:600",
+    "1024x768 (XGA)": "1024:768",
+    "1152x864 (XGA+)": "1152:864",
+    "1280x960 (SXGA−)": "1280:960",
+    "1400x1050 (SXGA+)": "1400:1050",
+    "1600x1200 (UXGA)": "1600:1200",
+    "1920x1440 (1080P)": "1920:1440",
+    "2048x1536 (QXGA)": "2048:1536",
+    "2880x2160 (3K UHD)": "2880:2160",
+    "3072x2304 (3K)": "3072:2304",
+    "3840x2880 (4K UHD)": "3840:2880",
+    "4096x3072 (HXGA)": "4096:3072",
+    "5120x3840 (5K)": "5120:3840",
+    "6144x4608 (6K)": "6144:4608",
+    "7680x5760 (8K UHD)": "7680:5760",
+    "8192x6144 (8K)": "8192:6144",
+    "-- 16:9 --": "",
+    "432x243 (FWQVGA)": "432:243",
+    "640x360 (nHD)": "640:360",
+    "896x504 (FWVGA)": "896:504",
+    "960x540 (qHD)": "960:540",
+    "1024x576 (EDTV)": "1024:576",
+    "1280x720 (HD Ready)": "1280:720",
+    "1360x765 (WXGA)": "1360:765",
+    "1600x900 (HD+)": "1600:900",
+    "1920x1080 (FHD)": "1920:1080",
+    "2048x1152 (2K)": "2048:1152",
+    "2560x1440 (QHD)": "2560:1440",
+    "3072x1728 (3K)": "3072:1728",
+    "3200x1800 (QHD+)": "3200:1800",
+    "3840x2160 (4K-UHD)": "3840:2160",
+    "4096x2304 (DCI 4K)": "4096:2304",
+    "5120x2880 (5K UHD+)": "5120:2880",
+    "7680x4320 (8K-UHD)": "7680:4320",
+    "8192x4608 (True 8K)": "8192:4608",
+    "15360x8640 (16K UHD)": "15360:8640"
+}
 # Miscellaneous vars
 global win
 ExpertMode = False
@@ -308,6 +350,7 @@ def decode_project_config():
     global project_config_basename, project_config_filename
     global CurrentFrame, frame_slider
     global VideoFps, video_fps_dropdown_selected
+    global resolution_dropdown, resolution_dropdown_selected
     global frame_input_filename_pattern
     global start_from_current_frame, frames_to_encode
     global skip_frame_regeneration
@@ -420,6 +463,11 @@ def decode_project_config():
         VideoFps = 18
         video_fps_dropdown_selected.set(VideoFps)
     set_fps(str(VideoFps))
+    if 'VideoResolution' in project_config:
+        resolution_dropdown_selected.set(project_config["VideoResolution"])
+    else:
+        resolution_dropdown_selected.set('Unchanged')
+
 
     if ExpertMode:
         if 'FillBorders' in project_config:
@@ -725,6 +773,7 @@ def widget_state_refresh():
     global fill_borders_thickness_slider, fill_borders_mode_label
     global fill_borders_mode_label_dropdown
     global video_fps_dropdown, video_fps_label, video_filename_name
+    global resolution_dropdown, resolution_label
     global ffmpeg_preset_rb1, ffmpeg_preset_rb2, ffmpeg_preset_rb3
     global ExpertMode
 
@@ -737,6 +786,10 @@ def widget_state_refresh():
     video_fps_dropdown.config(
         state=NORMAL if generate_video.get() else DISABLED)
     video_fps_label.config(
+        state=NORMAL if generate_video.get() else DISABLED)
+    resolution_dropdown.config(
+        state=NORMAL if generate_video.get() else DISABLED)
+    resolution_label.config(
         state=NORMAL if generate_video.get() else DISABLED)
     video_filename_name.config(
         state=NORMAL if generate_video.get() else DISABLED)
@@ -857,11 +910,16 @@ def generate_video_selection():
     global generate_video
     global video_fps_dropdown, video_fps_label, video_filename_name
     global ffmpeg_preset_rb1, ffmpeg_preset_rb2, ffmpeg_preset_rb3
+    global resolution_dropdown, resolution_label
 
     project_config["GenerateVideo"] = generate_video.get()
     video_fps_dropdown.config(
         state=NORMAL if generate_video.get() else DISABLED)
     video_fps_label.config(
+        state=NORMAL if generate_video.get() else DISABLED)
+    resolution_dropdown.config(
+        state=NORMAL if generate_video.get() else DISABLED)
+    resolution_label.config(
         state=NORMAL if generate_video.get() else DISABLED)
     video_filename_name.config(
         state=NORMAL if generate_video.get() else DISABLED)
@@ -887,6 +945,11 @@ def set_fps(selected):
 
     project_config["VideoFps"] = selected
     VideoFps = eval(selected)
+
+
+def set_resolution(selected):
+    global resolution_dict
+    project_config["VideoResolution"] = selected
 
 
 def scale_display_update():
@@ -1622,9 +1685,15 @@ def call_ffmpeg():
     global ffmpeg_encoding_status
     global FrameFilenameOutputPattern
     global first_absolute_frame, frames_to_encode
+    global CropTopLeft, CropBottomRight
 
     extra_input_options = []
     extra_output_options = []
+    if resolution_dict[project_config["VideoResolution"]] != '':
+        extra_input_options += ['-s:v',
+                                str(CropBottomRight[0]-CropTopLeft[0])
+                                + 'x'
+                                + str(CropBottomRight[1]-CropTopLeft[1])]
     if frames_to_encode > 0:
         extra_output_options += ['-frames:v', str(frames_to_encode)]
     if ExpertMode and fill_borders.get():
@@ -1637,6 +1706,9 @@ def call_ffmpeg():
              'bottom=' + str(fill_borders_thickness.get()) + ':'
              'mode=' + fill_borders_mode.get() + ' [v]',
              '-map', '[v]']
+    if resolution_dict[project_config["VideoResolution"]] != '':
+        extra_output_options += ['-vf',
+                                 'scale=' + resolution_dict[project_config["VideoResolution"]]]
     cmd_ffmpeg = [FfmpegBinName,
                   '-y',
                   '-loglevel', 'error',
@@ -1645,10 +1717,10 @@ def call_ffmpeg():
                   '-f', 'image2',
                   '-start_number', str(StartFrame +
                                        first_absolute_frame),
-                  '-framerate', str(VideoFps),
-                  '-i',
-                  os.path.join(TargetDir,
-                               FrameFilenameOutputPattern)]
+                  '-framerate', str(VideoFps)]
+    cmd_ffmpeg.extend(extra_input_options)
+    cmd_ffmpeg.extend(
+                  ['-i', os.path.join(TargetDir, FrameFilenameOutputPattern)])
     cmd_ffmpeg.extend(extra_output_options)
     cmd_ffmpeg.extend(
         ['-an',  # no audio
@@ -1899,6 +1971,7 @@ def build_ui():
     global Exit_btn
     global video_fps_dropdown_selected
     global video_fps_dropdown, video_fps_label, video_filename_name
+    global resolution_dropdown, resolution_label, resolution_dropdown_selected
     global ffmpeg_preset
     global ffmpeg_preset_rb1, ffmpeg_preset_rb2, ffmpeg_preset_rb3
     global skip_frame_regeneration
@@ -1929,7 +2002,7 @@ def build_ui():
     #right_area_frame.grid(row=0, column=1, rowspan=2, padx=5, pady=5, sticky=N)
     right_area_frame.pack(side=LEFT, padx=5, pady=5, anchor=N)
 
-    # Frame for top section of standard widgets
+    # Frame for top section of standard widgets ******************************
     regular_top_section_frame = Frame(right_area_frame, width=50, height=50)
     regular_top_section_frame.pack(side=TOP, padx=2, pady=2)
 
@@ -1966,7 +2039,7 @@ def build_ui():
                     activeforeground='white', wraplength=80)
     Go_btn.grid(row=0, column=2, sticky=W)
 
-    # Create frame to select source and target folders
+    # Create frame to select source and target folders *******************************
     folder_frame = LabelFrame(right_area_frame, text='Folder selection', width=50,
                               height=8)
     folder_frame.pack(side=TOP, padx=2, pady=2, anchor=W)
@@ -2014,7 +2087,7 @@ def build_ui():
     frame_input_filename_pattern.delete(0, 'end')
     frame_input_filename_pattern.insert('end', project_config["FrameInputFilenamePattern"])
 
-    # Define post-processing area
+    # Define post-processing area *********************************************
     postprocessing_frame = LabelFrame(right_area_frame,
                                       text='Frame post-processing',
                                       width=40, height=8)
@@ -2097,7 +2170,7 @@ def build_ui():
     film_type_R8_rb.grid(row=postprocessing_row, column=1, sticky=W)
     film_type.set(project_config["FilmType"])
 
-    # Define video generating area
+    # Define video generating area ************************************
     video_frame = LabelFrame(right_area_frame,
                              text='Video generation',
                              width=50, height=8)
@@ -2192,7 +2265,28 @@ def build_ui():
     ffmpeg_preset.set('medium')
     video_row += 1
 
-    # Define job list area
+    # Drop down to select resolution
+    # datatype of menu text
+    resolution_dropdown_selected = StringVar()
+
+    # initial menu text
+    resolution_dropdown_selected.set("Unchanged")
+
+    # Create resolution Dropdown menu
+    resolution_frame = Frame(video_frame)
+    resolution_frame.grid(row=video_row, column=0, columnspan= 2, sticky=W)
+    resolution_label = Label(resolution_frame, text='Resolution:')
+    resolution_label.pack(side=LEFT, anchor=W)
+    resolution_label.config(state=DISABLED)
+    resolution_dropdown = OptionMenu(resolution_frame,
+                                    resolution_dropdown_selected, *resolution_dict.keys(),
+                                    command=set_resolution)
+    resolution_dropdown.config(takefocus=1)
+    resolution_dropdown.pack(side=LEFT, anchor=E)
+    resolution_dropdown.config(state=DISABLED)
+    video_row += 1
+
+    # Define job list area ***************************************************
     job_list_frame = LabelFrame(left_area_frame,
                              text='Job List',
                              width=50, height=8)
