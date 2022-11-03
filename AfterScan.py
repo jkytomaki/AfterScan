@@ -256,6 +256,7 @@ def load_general_config():
     else:   # No project config file. Set empty config to force defaults
         general_config = {}
 
+    logging.info("Reading general config")
     for item in general_config:
         logging.info("%s=%s", item, str(general_config[item]))
 
@@ -282,8 +283,9 @@ def save_project_settings():
     global project_settings, project_settings_filename
 
     if not IgnoreConfig:
+        logging.info("Saving project settings:")
         with open(project_settings_filename, 'w+') as f:
-            logging.debug(project_settings)
+            logging.info(project_settings)
             json.dump(project_settings, f)
 
 
@@ -345,14 +347,15 @@ def load_project_config():
     project_config = default_project_config.copy()  # set default config
     if not IgnoreConfig:
         if SourceDir in project_settings:
-            logging.debug("Loading project config from consolidated project settings")
+            logging.info("Loading project config from consolidated project settings")
             project_config |= project_settings[SourceDir].copy()
         elif os.path.isfile(project_config_filename):
-            logging.debug("Loading project config from dedicated project config file")
+            logging.info("Loading project config from dedicated project config file")
             persisted_data_file = open(project_config_filename)
             project_config |= json.load(persisted_data_file)
             persisted_data_file.close()
         else:  # No project config file. Set empty config to force defaults
+            logging.info("No project config exists, initializing defaults")
             project_config = default_project_config.copy()
             project_config['SourceDir'] = SourceDir
 
@@ -1241,7 +1244,7 @@ def match_template(template, img, thres):
     w = template.shape[1]
     h = template.shape[0]
     if (w >= img.shape[1] or h >= img.shape[0]):
-        logging.debug("Template (%ix%i) bigger than image  (%ix%i)",
+        logging.error("Template (%ix%i) bigger than image  (%ix%i)",
                       w, h, img.shape[1], img.shape[0])
         return (0, 0)
     # convert img to grey
@@ -1384,7 +1387,7 @@ def stabilize_image(img):
         exception_template = ("An exception of type {0} occurred. "
                               "Arguments:\n{1!r}")
         exception_details = template.format(type(ex).__name__, ex.args)
-        logging.debug("Error in match_template (file %s), "
+        logging.error("Error in match_template (file %s), "
                       "returning original image. %s",
                       SourceDirFileList[CurrentFrame], exception_details)
         translated_image = img
@@ -1441,7 +1444,7 @@ def is_ffmpeg_installed():
         ffmpeg_installed = True
     except FileNotFoundError:
         ffmpeg_installed = False
-        logging.debug("ffmpeg is NOT installed.")
+        logging.error("ffmpeg is NOT installed.")
 
     return ffmpeg_installed
 
@@ -1750,7 +1753,7 @@ def call_ffmpeg():
          os.path.join(TargetDir,
                       TargetVideoFilename)])
 
-    logging.debug("Generated ffmpeg command: %s", cmd_ffmpeg)
+    logging.info("Generated ffmpeg command: %s", cmd_ffmpeg)
     ffmpeg_process = sp.Popen(cmd_ffmpeg, stderr=sp.STDOUT,
                               stdout=sp.PIPE,
                               universal_newlines=True)
@@ -1805,7 +1808,7 @@ def video_generation_loop():
     elif ffmpeg_encoding_status == ffmpeg_state.Running:
         if ConvertLoopExitRequested:
             ffmpeg_process.terminate()
-            logging.info("Video generation terminated by user for %s",
+            logging.warning("Video generation terminated by user for %s",
                          os.path.join(TargetDir, TargetVideoFilename))
             status_str = "Status: Cancelled by user"
             app_status_label.config(text=status_str, fg='red')
@@ -1845,7 +1848,7 @@ def video_generation_loop():
                     "as stated below\r\n" +
                     os.path.join(TargetDir, TargetVideoFilename))
         else:
-            logging.info("Video generation failed for %s", os.path.join(TargetDir, TargetVideoFilename))
+            logging.error("Video generation failed for %s", os.path.join(TargetDir, TargetVideoFilename))
             status_str = "Status: Video generation failed"
             app_status_label.config(text=status_str, fg='red')
             if not BatchJobRunning:
@@ -1965,7 +1968,7 @@ def afterscan_init():
 
     WinInitDone = True
 
-    logging.debug("AfterScan initialized")
+    logging.info("AfterScan initialized")
 
 
 def build_ui():
@@ -2502,21 +2505,21 @@ def main(argv):
         IsWindows = True
         FfmpegBinName = 'C:\\ffmpeg\\bin\\ffmpeg.exe'
         AltFfmpegBinName = 'ffmpeg.exe'
-        logging.debug("Detected Windows OS")
+        logging.info("Detected Windows OS")
     elif platform.system() == 'Linux':
         IsLinux = True
         FfmpegBinName = 'ffmpeg'
         AltFfmpegBinName = 'ffmpeg'
-        logging.debug("Detected Linux OS")
+        logging.info("Detected Linux OS")
     elif platform.system() == 'Darwin':
         IsMac = True
         FfmpegBinName = 'ffmpeg'
         AltFfmpegBinName = 'ffmpeg'
-        logging.debug("Detected Darwin (MacOS) OS")
+        logging.info("Detected Darwin (MacOS) OS")
     else:
         FfmpegBinName = 'ffmpeg'
         AltFfmpegBinName = 'ffmpeg'
-        logging.debug("OS not recognized: " + platform.system())
+        logging.info("OS not recognized: " + platform.system())
 
     if is_ffmpeg_installed():
         ffmpeg_installed = True
