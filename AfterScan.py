@@ -234,6 +234,38 @@ Configuration file support functions
 """
 
 
+def set_project_defaults():
+    global project_config
+    global perform_cropping, generate_video, resolution_dropdown_selected
+    global frame_slider, start_from_current_frame, frames_to_encode_str
+    global perform_stabilization, skip_frame_regeneration, ffmpeg_preset
+    global video_filename_name, fill_borders
+
+    project_config["PerformCropping"] = False
+    perform_cropping.set(project_config["PerformCropping"])
+    project_config["GenerateVideo"] = False
+    generate_video.set(project_config["GenerateVideo"])
+    project_config["VideoResolution"] = "Unchanged"
+    resolution_dropdown_selected.set(project_config["VideoResolution"])
+    project_config["CurrentFrame"] = 0
+    frame_slider.set(project_config["CurrentFrame"])
+    project_config["StartFromCurrentFrame"] = False
+    start_from_current_frame.set(project_config["StartFromCurrentFrame"])
+    project_config["FramesToEncode"] = "All"
+    frames_to_encode_str.set(project_config["FramesToEncode"])
+    project_config["PerformStabilization"] = False
+    perform_stabilization.set(project_config["PerformStabilization"])
+    project_config["skip_frame_regeneration"] = False
+    skip_frame_regeneration.set(project_config["skip_frame_regeneration"])
+    project_config["FFmpegPreset"] = "veryslow"
+    ffmpeg_preset.set(project_config["FFmpegPreset"])
+    project_config["VideoFilename"] = ""
+    video_filename_name.delete(0, 'end')
+    video_filename_name.insert('end', project_config["VideoFilename"])
+    project_config["FillBorders"] = False
+    fill_borders.set(project_config["FillBorders"])
+
+
 def save_general_config():
     # Write config data upon exit
     general_config["GeneralConfigDate"] = str(datetime.now())
@@ -745,6 +777,7 @@ def set_target_folder():
     else:
         folder_frame_target_dir.delete(0, 'end')
         folder_frame_target_dir.insert('end', TargetDir)
+        set_project_defaults()
 
     project_config["TargetDir"] = TargetDir
 
