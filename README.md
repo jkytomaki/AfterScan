@@ -11,7 +11,7 @@ Actions performed by this tool on the captured frames are:
 
 And that's about it. Other post-processing jobs (film cleanup, color correction) should be done with other tools to be found elsewhere.
 
-This tool relies in the following open source projects to achieve its objectives:
+This tool relies in the following open source projects to achieve its objectives. Need to be installed in the system used to run AfterScan:
 * [Python](https://www.python.org/)
 * [OpenCV](https://opencv.org/)
 * [NumPy](https://numpy.org/)
