@@ -746,10 +746,10 @@ def set_source_folder():
 
     load_project_config()  # Needs SourceDir defined
 
+    decode_project_config()  # Needs first_absolute_frame defined
+
     # Load matching file list from newly selected dir
     get_current_dir_file_list()  # first_absolute_frame is set here
-
-    decode_project_config()  # Needs first_absolute_frame defined
 
     # Enable Start and Crop buttons, plus slider, once we have files to handle
     cropping_btn.config(state=NORMAL)
@@ -1336,6 +1336,8 @@ def display_image(img):
 
 def display_image_by_frame_number(frame_number):
     global StartFrame
+    if StartFrame + frame_number > len(SourceDirFileList):
+        return  # Do nothing if asked to go out of bounds
     # Get current file
     file = SourceDirFileList[StartFrame + frame_number]
     # read image
@@ -1504,6 +1506,10 @@ def get_current_dir_file_list():
         clear_image()
         folder_frame_target_dir.delete(0, 'end')
         return
+
+    # Sanity check for CurrentFrame
+    if CurrentFrame >= len(SourceDirFileList):
+        CurrentFrame = 0
 
     first_absolute_frame = int(
         ''.join(list(filter(str.isdigit,
