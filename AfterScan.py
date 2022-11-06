@@ -1330,7 +1330,7 @@ def display_image(img):
 
 def display_image_by_frame_number(frame_number):
     global StartFrame
-    if StartFrame + frame_number > len(SourceDirFileList):
+    if StartFrame + frame_number >= len(SourceDirFileList):
         return  # Do nothing if asked to go out of bounds
     # Get current file
     file = SourceDirFileList[StartFrame + frame_number]
