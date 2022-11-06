@@ -683,29 +683,6 @@ User feedback support functions
 """
 
 
-def display_ffmpeg_progress():
-    global win
-    global ffmpeg_process
-    global stop_event, stop_event_lock
-    global TargetVideoFilename
-
-    exit_thread = False
-    while not exit_thread:
-        time.sleep(0.5)
-        if stop_event.is_set():
-            exit_thread = True
-        while True:
-            line = ffmpeg_process.stdout.readline()
-            if not line:
-                break
-            else:
-                # Now this is part of the tool functionality, so we display
-                # it using print, to avoid dependencies on log level
-                print(time.strftime("%H:%M:%S", time.localtime()) + " - " +
-                      str(line)[:-1])
-                encoded_frame = str(line)[:-1].split()[1]
-
-
 def display_ffmpeg_result(ffmpeg_output):
     global win
 
@@ -1825,7 +1802,6 @@ def video_generation_loop():
     global Go_btn
     global VideoTargetDir
     global TargetVideoFilename
-    global stop_event, stop_event_lock
     global ffmpeg_success, ffmpeg_encoding_status
     global ffmpeg_process
     global frames_to_encode
@@ -1855,9 +1831,6 @@ def video_generation_loop():
             logging.debug(
                 "First filename in list: %s, extracted number: %s",
                 os.path.basename(SourceDirFileList[0]), first_absolute_frame)
-            stop_event = threading.Event()
-            stop_event_lock = threading.Lock()
-
             ffmpeg_success = False
             ffmpeg_encoding_thread = threading.Thread(target=call_ffmpeg)
             ffmpeg_encoding_thread.daemon = True
@@ -1891,10 +1864,6 @@ def video_generation_loop():
     elif ffmpeg_encoding_status == ffmpeg_state.Completed:
         status_str = "Status: Generating video 100%"
         app_status_label.config(text=status_str, fg='black')
-        """
-        stop_event.set()
-        ffmpeg_progress_thread.join()
-        """
         # And display results
         if ffmpeg_success:
             logging.info("Video generated OK: %s", os.path.join(VideoTargetDir, TargetVideoFilename))
