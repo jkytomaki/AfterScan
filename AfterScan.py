@@ -75,6 +75,7 @@ pattern_filename = pattern_filename_s8
 default_project_config = {
     "SourceDir": "",
     "TargetDir": "",
+    "VideoTargetDir": "",
     "FrameInputFilenamePattern": "picture-*.jpg",
     "FilmType": "S8",
     "PerformCropping": False,
@@ -117,6 +118,7 @@ HoleSearchBottomRight = (0, 0)
 TargetVideoFilename = ""
 SourceDir = ""
 TargetDir = ""
+VideoTargetDir = ""
 FrameFilenameOutputPattern = "picture_out-%05d.jpg"
 FrameCheckFilenameOutputPattern = "picture_out-*.jpg"  # Req. for ffmpeg gen.
 SourceDirFileList = []
@@ -400,7 +402,7 @@ def load_project_config():
 
 
 def decode_project_config():        
-    global SourceDir, TargetDir
+    global SourceDir, TargetDir, VideoTargetDir
     global project_config
     global project_config_basename, project_config_filename
     global CurrentFrame, frame_slider
@@ -420,15 +422,25 @@ def decode_project_config():
         # If directory in configuration does not exist, set current working dir
         if not os.path.isdir(SourceDir):
             SourceDir = ""
-        folder_frame_source_dir.delete(0, 'end')
-        folder_frame_source_dir.insert('end', SourceDir)
+        frames_source_dir.delete(0, 'end')
+        frames_source_dir.insert('end', SourceDir)
+        frames_source_dir.after(100, frames_source_dir.xview_moveto, 1)
     if 'TargetDir' in project_config:
         TargetDir = project_config["TargetDir"]
         # If directory in configuration does not exist, set current working dir
         if not os.path.isdir(TargetDir):
             TargetDir = ""
-        folder_frame_target_dir.delete(0, 'end')
-        folder_frame_target_dir.insert('end', TargetDir)
+        frames_target_dir.delete(0, 'end')
+        frames_target_dir.insert('end', TargetDir)
+        frames_target_dir.after(100, frames_target_dir.xview_moveto, 1)
+    if 'VideoTargetDir' in project_config:
+        VideoTargetDir = project_config["VideoTargetDir"]
+        # If directory in configuration does not exist, set current working dir
+        if not os.path.isdir(VideoTargetDir):
+            VideoTargetDir = TargetDir  # use frames target dir as fallback option
+        video_target_dir.delete(0, 'end')
+        video_target_dir.insert('end', VideoTargetDir)
+        video_target_dir.after(100, video_target_dir.xview_moveto, 1)
     if 'CurrentFrame' in project_config:
         CurrentFrame = project_config["CurrentFrame"]
         CurrentFrame = max(CurrentFrame, 0)
@@ -660,8 +672,7 @@ def job_processing_loop():
         job_list_listbox.selection_clear(idx)
         idx += 1
     if not job_started:
-        BatchJobRunning = False  # Cancel batch jobs if any
-        start_batch_btn.config(text="Start batch", bg=save_bg, fg=save_fg)
+        CurrentJobEntry = -1
         generation_exit()
 
 
@@ -676,7 +687,7 @@ def display_ffmpeg_progress():
     global win
     global ffmpeg_process
     global stop_event, stop_event_lock
-    global TargetDir, TargetVideoFilename
+    global TargetVideoFilename
 
     exit_thread = False
     while not exit_thread:
@@ -739,8 +750,9 @@ def set_source_folder():
             "Source folder cannot be the same as target folder.")
         return
     else:
-        folder_frame_source_dir.delete(0, 'end')
-        folder_frame_source_dir.insert('end', SourceDir)
+        frames_source_dir.delete(0, 'end')
+        frames_source_dir.insert('end', SourceDir)
+        frames_source_dir.after(100, frames_source_dir.xview_moveto, 1)
 
     general_config["SourceDir"] = SourceDir
 
@@ -759,13 +771,13 @@ def set_source_folder():
     init_display()
 
 
-def set_target_folder():
+def set_frames_target_folder():
     global TargetDir
-    global folder_frame_target_dir
+    global frames_target_dir
 
     TargetDir = tk.filedialog.askdirectory(
         initialdir=TargetDir,
-        title="Select folder where to store processed images/video")
+        title="Select folder where to store generated frames")
 
     if not TargetDir:
         return
@@ -775,11 +787,35 @@ def set_target_folder():
             "Target folder cannot be the same as source folder.")
         return
     else:
-        folder_frame_target_dir.delete(0, 'end')
-        folder_frame_target_dir.insert('end', TargetDir)
+        frames_target_dir.delete(0, 'end')
+        frames_target_dir.insert('end', TargetDir)
+        frames_target_dir.after(100, frames_target_dir.xview_moveto, 1)
         set_project_defaults()
 
     project_config["TargetDir"] = TargetDir
+
+
+def set_video_target_folder():
+    global VideoTargetDir
+    global video_target_dir
+
+    VideoTargetDir = tk.filedialog.askdirectory(
+        initialdir=VideoTargetDir,
+        title="Select folder where to store generated video")
+
+    if not VideoTargetDir:
+        return
+    elif VideoTargetDir == SourceDir:
+        tk.messagebox.showerror(
+            "Error!",
+            "Video target folder cannot be the same as source folder.")
+        return
+    else:
+        video_target_dir.delete(0, 'end')
+        video_target_dir.insert('end', VideoTargetDir)
+        video_target_dir.after(100, video_target_dir.xview_moveto, 1)
+
+    project_config["VideoTargetDir"] = VideoTargetDir
 
 
 """
@@ -834,6 +870,7 @@ def widget_state_refresh():
     global resolution_dropdown, resolution_label
     global ffmpeg_preset_rb1, ffmpeg_preset_rb2, ffmpeg_preset_rb3
     global ExpertMode
+    global video_target_dir, video_target_folder_btn, video_filename_label
 
     if CropTopLeft != (0, 0) and CropBottomRight != (0, 0):
         CropAreaDefined = True
@@ -841,31 +878,39 @@ def widget_state_refresh():
         state=NORMAL if CropAreaDefined else DISABLED)
     generate_video_checkbox.config(
         state=NORMAL if ffmpeg_installed else DISABLED)
+    skip_frame_regeneration_cb.config(
+        state=NORMAL if project_config["GenerateVideo"] else DISABLED)
+    video_target_dir.config(
+        state=NORMAL if project_config["GenerateVideo"] else DISABLED)
+    video_target_folder_btn.config(
+        state=NORMAL if project_config["GenerateVideo"] else DISABLED)
+    video_filename_label.config(
+        state=NORMAL if project_config["GenerateVideo"] else DISABLED)
     video_fps_dropdown.config(
-        state=NORMAL if generate_video.get() else DISABLED)
+        state=NORMAL if project_config["GenerateVideo"] else DISABLED)
     video_fps_label.config(
-        state=NORMAL if generate_video.get() else DISABLED)
+        state=NORMAL if project_config["GenerateVideo"] else DISABLED)
     resolution_dropdown.config(
-        state=NORMAL if generate_video.get() else DISABLED)
+        state=NORMAL if project_config["GenerateVideo"] else DISABLED)
     resolution_label.config(
-        state=NORMAL if generate_video.get() else DISABLED)
+        state=NORMAL if project_config["GenerateVideo"] else DISABLED)
     video_filename_name.config(
-        state=NORMAL if generate_video.get() else DISABLED)
+        state=NORMAL if project_config["GenerateVideo"] else DISABLED)
     ffmpeg_preset_rb1.config(
-        state=NORMAL if generate_video.get() else DISABLED)
+        state=NORMAL if project_config["GenerateVideo"] else DISABLED)
     ffmpeg_preset_rb2.config(
-        state=NORMAL if generate_video.get() else DISABLED)
+        state=NORMAL if project_config["GenerateVideo"] else DISABLED)
     ffmpeg_preset_rb3.config(
-        state=NORMAL if generate_video.get() else DISABLED)
+        state=NORMAL if project_config["GenerateVideo"] else DISABLED)
     if ExpertMode:
         fill_borders_checkbox.config(
-            state=NORMAL if generate_video.get() else DISABLED)
+            state=NORMAL if project_config["GenerateVideo"] else DISABLED)
         fill_borders_thickness_slider.config(
-            state=NORMAL if generate_video.get() else DISABLED)
+            state=NORMAL if project_config["GenerateVideo"] else DISABLED)
         fill_borders_mode_label.config(
-            state=NORMAL if generate_video.get() else DISABLED)
+            state=NORMAL if project_config["GenerateVideo"] else DISABLED)
         fill_borders_mode_label_dropdown.config(
-            state=NORMAL if generate_video.get() else DISABLED)
+            state=NORMAL if project_config["GenerateVideo"] else DISABLED)
 
 
 def frame_input_filename_pattern_focus_out(event):
@@ -966,37 +1011,9 @@ def fill_borders_set_thickness_scale(selected_thickness):
 
 def generate_video_selection():
     global generate_video
-    global video_fps_dropdown, video_fps_label, video_filename_name
-    global ffmpeg_preset_rb1, ffmpeg_preset_rb2, ffmpeg_preset_rb3
-    global resolution_dropdown, resolution_label
 
     project_config["GenerateVideo"] = generate_video.get()
-    video_fps_dropdown.config(
-        state=NORMAL if generate_video.get() else DISABLED)
-    video_fps_label.config(
-        state=NORMAL if generate_video.get() else DISABLED)
-    resolution_dropdown.config(
-        state=NORMAL if generate_video.get() else DISABLED)
-    resolution_label.config(
-        state=NORMAL if generate_video.get() else DISABLED)
-    video_filename_name.config(
-        state=NORMAL if generate_video.get() else DISABLED)
-    ffmpeg_preset_rb1.config(
-        state=NORMAL if generate_video.get() else DISABLED)
-    ffmpeg_preset_rb2.config(
-        state=NORMAL if generate_video.get() else DISABLED)
-    ffmpeg_preset_rb3.config(
-        state=NORMAL if generate_video.get() else DISABLED)
-    if ExpertMode:
-        fill_borders_checkbox.config(
-            state=NORMAL if generate_video.get() else DISABLED)
-        fill_borders_thickness_slider.config(
-            state=NORMAL if generate_video.get() else DISABLED)
-        fill_borders_mode_label.config(
-            state=NORMAL if generate_video.get() else DISABLED)
-        fill_borders_mode_label_dropdown.config(
-            state=NORMAL if generate_video.get() else DISABLED)
-
+    widget_state_refresh()
 
 def set_fps(selected):
     global VideoFps
@@ -1491,7 +1508,7 @@ def get_current_dir_file_list():
     global CurrentFrame, first_absolute_frame, last_absolute_frame
     global frame_slider
     global area_select_image_factor, screen_height
-    global folder_frame_target_dir
+    global frames_target_dir
 
     if not os.path.isdir(SourceDir):
         return
@@ -1504,7 +1521,7 @@ def get_current_dir_file_list():
                                 "No files match pattern name. "
                                 "Please specify new one and try again")
         clear_image()
-        folder_frame_target_dir.delete(0, 'end')
+        frames_target_dir.delete(0, 'end')
         return
 
     # Sanity check for CurrentFrame
@@ -1631,10 +1648,10 @@ def start_convert():
                 TargetVideoFilename += ".mp4"
                 video_filename_name.delete(0, 'end')
                 video_filename_name.insert('end', TargetVideoFilename)
-            elif os.path.isfile(os.path.join(TargetDir, TargetVideoFilename)):
-                error_msg = (TargetVideoFilename + " already exist in target "
-                             "folder. Overwrite?")
+            elif os.path.isfile(os.path.join(VideoTargetDir, TargetVideoFilename)):
                 if not BatchJobRunning:
+                    error_msg = (TargetVideoFilename + " already exist in target "
+                                 "folder. Overwrite?")
                     if not tk.messagebox.askyesno("Error!", error_msg):
                         generation_exit()
                         return
@@ -1657,17 +1674,21 @@ def generation_exit():
     global BatchJobRunning
     global job_list, CurrentJobEntry
 
-    ConvertLoopExitRequested = False  # Reset flags
     ConvertLoopRunning = False
-    if not BatchJobRunning:
+
+    if BatchJobRunning:
+        if ConvertLoopExitRequested or CurrentJobEntry == -1:
+            ConvertLoopExitRequested = False  # Reset flags
+            start_batch_btn.config(text="Start batch", bg=save_bg, fg=save_fg)
+            BatchJobRunning = False
+        else:
+            job_list[CurrentJobEntry]['done'] = True    # Flag as done
+            win.after(100, job_processing_loop)         # Continue with next
+    else:
         Go_btn.config(text="Start", bg=save_bg, fg=save_fg)
     # Enable all buttons in main window
     button_status_change_except(0, NORMAL)
     win.update()
-
-    if BatchJobRunning:
-        job_list[CurrentJobEntry]['done'] = True
-        job_processing_loop()
 
 
 def frame_generation_loop():
@@ -1737,7 +1758,7 @@ def frame_generation_loop():
 
 
 def call_ffmpeg():
-    global TargetDir
+    global VideoTargetDir, TargetDir
     global cmd_ffmpeg
     global ffmpeg_preset
     global TargetVideoFilename
@@ -1789,7 +1810,7 @@ def call_ffmpeg():
          '-preset', ffmpeg_preset.get(),
          '-crf', '18',
          '-pix_fmt', 'yuv420p',
-         os.path.join(TargetDir,
+         os.path.join(VideoTargetDir,
                       TargetVideoFilename)])
 
     logging.info("Generated ffmpeg command: %s", cmd_ffmpeg)
@@ -1802,7 +1823,7 @@ def call_ffmpeg():
 
 def video_generation_loop():
     global Go_btn
-    global TargetDir
+    global VideoTargetDir
     global TargetVideoFilename
     global stop_event, stop_event_lock
     global ffmpeg_success, ffmpeg_encoding_status
@@ -1848,7 +1869,7 @@ def video_generation_loop():
         if ConvertLoopExitRequested:
             ffmpeg_process.terminate()
             logging.warning("Video generation terminated by user for %s",
-                         os.path.join(TargetDir, TargetVideoFilename))
+                         os.path.join(VideoTargetDir, TargetVideoFilename))
             status_str = "Status: Cancelled by user"
             app_status_label.config(text=status_str, fg='red')
             tk.messagebox.showinfo(
@@ -1856,7 +1877,7 @@ def video_generation_loop():
                 "\r\nVideo generation by FFMPEG has been stopped by user "
                 "action.")
             generation_exit()  # Restore all settings to normal
-            os.remove(os.path.join(TargetDir, TargetVideoFilename))
+            os.remove(os.path.join(VideoTargetDir, TargetVideoFilename))
         else:
             line = ffmpeg_process.stdout.readline()
             if line:
@@ -1876,7 +1897,7 @@ def video_generation_loop():
         """
         # And display results
         if ffmpeg_success:
-            logging.info("Video generated OK: %s", os.path.join(TargetDir, TargetVideoFilename))
+            logging.info("Video generated OK: %s", os.path.join(VideoTargetDir, TargetVideoFilename))
             status_str = "Status: Video generated OK"
             app_status_label.config(text=status_str, fg='green')
             if not BatchJobRunning:
@@ -1885,9 +1906,9 @@ def video_generation_loop():
                     "\r\nVideo encoding has finalized successfully. "
                     "You can find your video in the target folder, "
                     "as stated below\r\n" +
-                    os.path.join(TargetDir, TargetVideoFilename))
+                    os.path.join(VideoTargetDir, TargetVideoFilename))
         else:
-            logging.error("Video generation failed for %s", os.path.join(TargetDir, TargetVideoFilename))
+            logging.error("Video generation failed for %s", os.path.join(VideoTargetDir, TargetVideoFilename))
             status_str = "Status: Video generation failed"
             app_status_label.config(text=status_str, fg='red')
             if not BatchJobRunning:
@@ -2012,8 +2033,8 @@ def afterscan_init():
 
 def build_ui():
     global win
-    global SourceDir, TargetDir
-    global folder_frame_source_dir, folder_frame_target_dir
+    global SourceDir
+    global frames_source_dir, frames_target_dir, video_target_dir
     global perform_cropping, cropping_btn
     global generate_video, generate_video_checkbox
     global fill_borders, fill_borders_checkbox
@@ -2030,9 +2051,10 @@ def build_ui():
     global perform_cropping_checkbox, Crop_btn
     global Go_btn
     global Exit_btn
-    global video_fps_dropdown_selected
+    global video_fps_dropdown_selected, skip_frame_regeneration_cb
     global video_fps_dropdown, video_fps_label, video_filename_name
     global resolution_dropdown, resolution_label, resolution_dropdown_selected
+    global video_target_dir, video_target_folder_btn, video_filename_label
     global ffmpeg_preset
     global ffmpeg_preset_rb1, ffmpeg_preset_rb2, ffmpeg_preset_rb3
     global skip_frame_regeneration
@@ -2107,11 +2129,12 @@ def build_ui():
 
     source_folder_frame = Frame(folder_frame)
     source_folder_frame.pack(side=TOP)
-    folder_frame_source_dir = Entry(source_folder_frame, width=36,
+    frames_source_dir = Entry(source_folder_frame, width=36,
                                     borderwidth=1)
-    folder_frame_source_dir.pack(side=LEFT)
-    folder_frame_source_dir.delete(0, 'end')
-    folder_frame_source_dir.insert('end', SourceDir)
+    frames_source_dir.pack(side=LEFT)
+    frames_source_dir.delete(0, 'end')
+    frames_source_dir.insert('end', SourceDir)
+    frames_source_dir.after(100, frames_source_dir.xview_moveto, 1)
 
     source_folder_btn = Button(source_folder_frame, text='Source', width=6,
                                height=1, command=set_source_folder,
@@ -2121,11 +2144,11 @@ def build_ui():
 
     target_folder_frame = Frame(folder_frame)
     target_folder_frame.pack(side=TOP)
-    folder_frame_target_dir = Entry(target_folder_frame, width=36,
+    frames_target_dir = Entry(target_folder_frame, width=36,
                                     borderwidth=1)
-    folder_frame_target_dir.pack(side=LEFT)
+    frames_target_dir.pack(side=LEFT)
     target_folder_btn = Button(target_folder_frame, text='Target', width=6,
-                               height=1, command=set_target_folder,
+                               height=1, command=set_frames_target_folder,
                                activebackground='green',
                                activeforeground='white', wraplength=80)
     target_folder_btn.pack(side=LEFT)
@@ -2259,6 +2282,19 @@ def build_ui():
                                     columnspan=2, sticky=W)
     skip_frame_regeneration_cb.config(state=NORMAL if ffmpeg_installed
                                       else DISABLED)
+    video_row += 1
+
+    # Video target folder
+    video_target_dir = Entry(video_frame, width=36, borderwidth=1)
+    video_target_dir.grid(row=video_row, column=0, columnspan=2,
+                             sticky=W)
+    video_target_dir.delete(0, 'end')
+    video_target_dir.insert('end', '')
+    video_target_folder_btn = Button(video_frame, text='Target', width=6,
+                               height=1, command=set_video_target_folder,
+                               activebackground='green',
+                               activeforeground='white', wraplength=80)
+    video_target_folder_btn.grid(row=video_row, column=2, columnspan=2, sticky=W)
     video_row += 1
 
     # Video filename
