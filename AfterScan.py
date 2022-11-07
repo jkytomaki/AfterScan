@@ -71,6 +71,7 @@ project_config_from_file = True
 job_list_filename = os.path.join(script_dir, "AfterScan_job_list.json")
 pattern_filename_r8 = os.path.join(script_dir, "Pattern.R8.jpg")
 pattern_filename_s8 = os.path.join(script_dir, "Pattern.S8.jpg")
+pattern_filename_custom = os.path.join(script_dir, "Pattern.custom.jpg")
 pattern_filename = pattern_filename_s8
 default_project_config = {
     "SourceDir": "",
@@ -103,7 +104,8 @@ project_config = default_project_config.copy()
 
 # Film hole search vars
 expected_pattern_pos_s8 = (6.5, 34)
-expected_pattern_pos_r8 = (6.8, 15.5)   # used bo be 9.6, 13.3 before shortening height of R8 template
+expected_pattern_pos_r8 = (4, 11)   # used be be 9.6, 13.3 before shortening height of R8 template
+expected_pattern_pos_custom = (0, 0)
 expected_pattern_pos = expected_pattern_pos_s8
 default_hole_height_s8 = 344
 default_interhole_height_r8 = 808
@@ -142,7 +144,7 @@ ix, iy = -1, -1
 x_, y_ = 0, 0
 CropWindowTitle = "Select area to crop, press Enter to confirm, " \
                   "Escape to cancel"
-StabilizeWindowTitle = "Select height of S8 hole, or R8 inter-hole space. " \
+CustomTemplateTitle = "Select area with film holes to use as template. " \
                        "Press Enter to confirm, Escape to cancel"
 RectangleWindowTitle = ""
 StabilizeAreaDefined = False
@@ -152,6 +154,7 @@ RectangleTopLeft = (0, 0)
 RectangleBottomRight = (0, 0)
 CropTopLeft = (0, 0)
 CropBottomRight = (0, 0)
+CustomTemplateDefined = False
 
 # Video generation vars
 VideoFps = 18
@@ -330,6 +333,12 @@ def load_project_settings():
         f = open(project_settings_filename)
         project_settings = json.load(f)
         f.close()
+        # Perform some cleanup, in case projects have been deleted
+        project_folders = list(project_settings.keys())  # freeze keys iterator into a list
+        for folder in project_folders:
+            if not os.path.isdir(folder):
+                project_settings.pop(folder)
+                logging.debug("Deleting %s from project settings, as it no longer exists", folder)
     else:   # No project settings file. Set empty config to force defaults
         project_settings = default_project_config.copy()
 
@@ -416,6 +425,10 @@ def decode_project_config():
     global StabilizeAreaDefined, film_hole_height, film_type
     global ExpertMode
     global StabilizationThreshold
+    global CustomTemplateDefined
+    global pattern_filename, expected_pattern_pos
+    global pattern_filename_custom, expected_pattern_pos_custom
+    global custom_stabilization_btn
 
     if 'SourceDir' in project_config:
         SourceDir = project_config["SourceDir"]
@@ -474,6 +487,14 @@ def decode_project_config():
     else:
         StabilizationThreshold = 240
         stabilization_threshold_str.set(StabilizationThreshold)
+    if 'CustomTemplateExpectedPos' in project_config:
+        expected_pattern_pos_custom = project_config["CustomTemplateExpectedPos"]
+    if 'CustomTemplateDefined' in project_config:
+        CustomTemplateDefined = project_config["CustomTemplateDefined"]
+        if CustomTemplateDefined:
+            pattern_filename = pattern_filename_custom
+            expected_pattern_pos = expected_pattern_pos_custom
+            set_film_type()
     if 'PerformCropping' in project_config:
         perform_cropping.set(project_config["PerformCropping"])
     else:
@@ -813,7 +834,7 @@ def button_status_change_except(except_button, button_status):
         source_folder_btn.config(state=button_status)
     if except_button != target_folder_btn:
         target_folder_btn.config(state=button_status)
-    if except_button != perform_cropping_checkbox:
+    if except_button != perform_cropping_checkbox and not ExpertMode:
         perform_cropping_checkbox.config(state=button_status)
     # if except_button != Crop_btn:
     #    Crop_btn.config(state=DISABLED if active else NORMAL)
@@ -821,7 +842,7 @@ def button_status_change_except(except_button, button_status):
         Go_btn.config(state=button_status)
     if except_button != Exit_btn:
         Exit_btn.config(state=button_status)
-    if except_button != perform_stabilization_checkbox:
+    if except_button != perform_stabilization_checkbox and not ExpertMode:
         perform_stabilization_checkbox.config(state=button_status)
 
     if not CropAreaDefined:
@@ -1098,7 +1119,7 @@ def draw_rectangle(event, x, y, flags, param):
                       RectangleBottomRight[0], RectangleBottomRight[1])
 
 
-def select_rectangle_area():
+def select_rectangle_area(stabilize):
     global work_image, base_image, original_image
     global CurrentFrame, first_absolute_frame
     global SourceDirFileList
@@ -1119,7 +1140,8 @@ def select_rectangle_area():
     # load the image, clone it, and setup the mouse callback function
     original_image = cv2.imread(file, cv2.IMREAD_UNCHANGED)
     # Stabilize image to make sure target image matches user visual definition
-    original_image = stabilize_image(original_image)
+    if stabilize:
+        original_image = stabilize_image(original_image)
     # Scale area selection image as required
     work_image = resize_image(original_image, 100*area_select_image_factor)
 
@@ -1155,7 +1177,7 @@ def select_cropping_area():
 
     RectangleWindowTitle = CropWindowTitle
 
-    if select_rectangle_area():
+    if select_rectangle_area(True):
         CropAreaDefined = True
         button_status_change_except(0, NORMAL)
         CropTopLeft = RectangleTopLeft
@@ -1175,6 +1197,49 @@ def select_cropping_area():
     project_config["CropRectangle"] = CropTopLeft, CropBottomRight
     perform_cropping_checkbox.config(state=NORMAL if CropAreaDefined
                                      else DISABLED)
+
+    # Enable all buttons in main window
+    button_status_change_except(0, NORMAL)
+    win.update()
+
+
+def select_custom_template():
+    global RectangleWindowTitle
+    global perform_cropping
+    global CropTopLeft, CropBottomRight
+    global CustomTemplateDefined
+    global CurrentFrame, SourceDirFileList
+    global expected_pattern_pos_custom
+    global StabilizationThreshold
+    global custom_stabilization_btn
+
+    # Disable all buttons in main window
+    button_status_change_except(0, DISABLED)
+    win.update()
+
+    RectangleWindowTitle = CustomTemplateTitle
+
+    if select_rectangle_area(False) and CurrentFrame < len(SourceDirFileList):
+        button_status_change_except(0, NORMAL)
+        logging.debug("Custom template area: (%i,%i) - (%i, %i)", RectangleTopLeft[0],
+                      RectangleTopLeft[1], RectangleBottomRight[0], RectangleBottomRight[1])
+        CustomTemplateDefined = True
+        custom_stabilization_btn.config(relief=SUNKEN)
+        file = SourceDirFileList[CurrentFrame]
+        img = cv2.imread(file, cv2.IMREAD_UNCHANGED)
+        img = crop_image(img, RectangleTopLeft, RectangleBottomRight)
+        img_grey = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        img_bw = cv2.threshold(img_grey, float(StabilizationThreshold), 255, cv2.THRESH_BINARY)[1]
+        cv2.imwrite(pattern_filename_custom, img_bw)
+        expected_pattern_pos_custom = RectangleTopLeft
+        project_config["CustomTemplateExpectedPos"] = expected_pattern_pos_custom
+    else:
+        CustomTemplateDefined = False
+        custom_stabilization_btn.config(relief=RAISED)
+        button_status_change_except(0, DISABLED)
+
+    project_config["CustomTemplateDefined"] = CustomTemplateDefined
+    set_film_type()
 
     # Enable all buttons in main window
     button_status_change_except(0, NORMAL)
@@ -1235,7 +1300,7 @@ def determine_hole_height(img):
 def adjust_hole_pattern_size():
     global film_hole_height, film_hole_template
 
-    if film_hole_height <= 0:
+    if film_hole_height <= 0 or CustomTemplateDefined:
         return
 
     ratio = 1
@@ -1251,14 +1316,22 @@ def set_film_type():
     global film_type, expected_pattern_pos, pattern_filename, film_hole_template
     global default_hole_height_s8, default_interhole_height_r8
     global film_hole_height
-    if project_config["FilmType"] == 'S8':
-        pattern_filename = pattern_filename_s8
-        expected_pattern_pos = expected_pattern_pos_s8
-    elif project_config["FilmType"] == 'R8':
-        pattern_filename = pattern_filename_r8
-        expected_pattern_pos = expected_pattern_pos_r8
+    global CustomTemplateDefined
+    if CustomTemplateDefined:
+        if os.path.isfile(pattern_filename_custom):
+            pattern_filename = pattern_filename_custom
+            expected_pattern_pos = expected_pattern_pos_custom
+        else:
+            CustomTemplateDefined = False
+    if not CustomTemplateDefined:
+        if film_type.get() == 'S8':
+            pattern_filename = pattern_filename_s8
+            expected_pattern_pos = expected_pattern_pos_s8
+        elif film_type.get() == 'R8':
+            pattern_filename = pattern_filename_r8
+            expected_pattern_pos = expected_pattern_pos_r8
 
-    film_type.set(project_config["FilmType"])
+    project_config["FilmType"] = film_type.get()
     film_hole_template = cv2.imread(pattern_filename, 0)
     adjust_hole_pattern_size()
 
@@ -1398,11 +1471,12 @@ def stabilize_image(img):
         # be situated at 12% of the horizontal axis, and 38% of the vertical
         # axis. Calculate shift, according to those proportions
 
-        move_x = round((expected_pattern_pos[0] * width / 100)) - top_left[0]
-        move_y = round((expected_pattern_pos[1] * height / 100)) - top_left[1]
-
-        logging.debug("Stabilizing frame: (%i,%i) to move (%i, %i)",
-                      top_left[0], top_left[1], move_x, move_y)
+        if CustomTemplateDefined:
+            move_x = expected_pattern_pos[0] - top_left[0]
+            move_y = expected_pattern_pos[1] - top_left[1]
+        else:
+            move_x = round((expected_pattern_pos[0] * width / 100)) - top_left[0]
+            move_y = round((expected_pattern_pos[1] * height / 100)) - top_left[1]
 
         # Create the translation matrix using move_x and move_y (NumPy array)
         translation_matrix = np.array([
@@ -1411,7 +1485,7 @@ def stabilize_image(img):
         ], dtype=np.float32)
         # Apply the translation to the image
         translated_image = cv2.warpAffine(src=img, M=translation_matrix,
-                                          dsize=(width+move_x, height+move_y))
+                                          dsize=(width, height))
     except Exception as ex:
         exception_template = ("An exception of type {0} occurred. "
                               "Arguments:\n{1!r}")
@@ -1420,6 +1494,12 @@ def stabilize_image(img):
                       "returning original image. %s",
                       SourceDirFileList[CurrentFrame], exception_details)
         translated_image = img
+
+    logging.debug("Stabilizing frame %i (%ix%i): (%i,%i) to move (%i, %i) -> (%ix%i)",
+                  CurrentFrame, img.shape[1], img.shape[0],
+                  top_left[0], top_left[1], move_x, move_y,
+                  translated_image.shape[1], translated_image.shape[0])
+
     return translated_image
 
 
@@ -1655,7 +1735,6 @@ def generation_exit():
 
     if BatchJobRunning:
         if ConvertLoopExitRequested or CurrentJobEntry == -1:
-            ConvertLoopExitRequested = False  # Reset flags
             start_batch_btn.config(text="Start batch", bg=save_bg, fg=save_fg)
             BatchJobRunning = False
         else:
@@ -1663,6 +1742,7 @@ def generation_exit():
             win.after(100, job_processing_loop)         # Continue with next
     else:
         Go_btn.config(text="Start", bg=save_bg, fg=save_fg)
+    ConvertLoopExitRequested = False  # Reset flags
     # Enable all buttons in main window
     button_status_change_except(0, NORMAL)
     win.update()
@@ -1962,14 +2042,14 @@ def afterscan_init():
     # Set dimensions of UI elements adapted to screen size
     if screen_height >= 1000:
         PreviewWidth = 700
-        PreviewHeight = 560
+        PreviewHeight = 640
     else:
         PreviewWidth = 620
-        PreviewHeight = 460
+        PreviewHeight = 540
     app_width = PreviewWidth + 370 + 30
     app_height = PreviewHeight + 170
     if ExpertMode:
-        app_height += 0  # No need tto increase height for now
+        app_height += 0  # No need to increase height for now
     if SmallSize:
         app_width -= 80
         app_height -= 60
@@ -2017,6 +2097,7 @@ def build_ui():
     global perform_stabilization, perform_stabilization_checkbox
     global stabilization_threshold_spinbox, stabilization_threshold_str
     global StabilizationThreshold
+    global custom_stabilization_btn
     global perform_cropping_checkbox, Crop_btn
     global Go_btn
     global Exit_btn
@@ -2178,14 +2259,19 @@ def build_ui():
     # Check box to do stabilization or not
     perform_stabilization = tk.BooleanVar(value=False)
     perform_stabilization_checkbox = tk.Checkbutton(
-        postprocessing_frame, text='Stabilize threshold',
-        variable=perform_stabilization, onvalue=True, offvalue=False, width=15,
+        postprocessing_frame, text='Stabilize',
+        variable=perform_stabilization, onvalue=True, offvalue=False, width=7,
         command=perform_stabilization_selection)
     perform_stabilization_checkbox.grid(row=postprocessing_row, column=0,
-                                        columnspan=2, sticky=W)
+                                        columnspan=1, sticky=W)
     perform_stabilization_checkbox.config(state=DISABLED)
 
     # Spinbox to select stabilization threshold
+    stabilization_threshold_label = tk.Label(postprocessing_frame,
+                                      text='Threshold:',
+                                      width=16)
+    stabilization_threshold_label.grid(row=postprocessing_row, column=1,
+                                columnspan=1, sticky=E)
     stabilization_threshold_str = tk.StringVar(value=str(StabilizationThreshold))
     stabilization_threshold_selection_aux = postprocessing_frame.register(
         stabilization_threshold_selection)
@@ -2405,12 +2491,26 @@ def build_ui():
         #expert_frame = Frame(win, width=900, height=150)
         #expert_frame.grid(row=1, column=0, padx=5, pady=5, sticky=NW)
 
+        # Custom film perforation template
+        custom_stabilization_frame = LabelFrame(right_area_frame, text='Custom perforation template',
+                                     width=36, height=8)
+        custom_stabilization_frame.pack(side=TOP)
+        custom_stabilization_btn = Button(custom_stabilization_frame,
+                                          text='Define custom template',
+                                          width=30, height=1,
+                                          command=select_custom_template,
+                                          activebackground='green',
+                                          activeforeground='white')
+        custom_stabilization_btn.config(relief=SUNKEN if CustomTemplateDefined else RAISED)
+        custom_stabilization_btn.pack(padx=5, pady=5)
+        postprocessing_row += 1
+
         # Custom ffmpeg path
         custom_ffmpeg_path_frame = LabelFrame(right_area_frame, text='Custom FFMpeg path',
                                      width=26, height=8)
         custom_ffmpeg_path_frame.pack(side=TOP)
         custom_ffmpeg_path = Entry(custom_ffmpeg_path_frame, width=26, borderwidth=1)
-        custom_ffmpeg_path.pack()
+        custom_ffmpeg_path.pack(padx=5, pady=5)
         custom_ffmpeg_path.delete(0, 'end')
         custom_ffmpeg_path.insert('end', FfmpegBinName)
         custom_ffmpeg_path.bind("<FocusOut>", custom_ffmpeg_path_focus_out)
@@ -2499,7 +2599,7 @@ def main(argv):
     # Create job dictionary
     job_list = {}
 
-    # Create project setttings dictionary
+    # Create project settings dictionary
     project_settings = default_project_config.copy()
 
     pattern_filenames = [pattern_filename, pattern_bw_filename, pattern_wb_filename]
