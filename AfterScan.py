@@ -624,6 +624,7 @@ def job_list_add_current():
         save_project_config()  # Make sure all current settings are in project_config
         job_list[entry_name] = {'project': project_config.copy(), 'done': False}
         job_list_listbox.insert('end', entry_name)
+        job_list_listbox.itemconfig('end', fg='black')
 
 
 def job_list_delete_selected():
@@ -633,6 +634,19 @@ def job_list_delete_selected():
     job_list.pop(job_list_listbox.get(selected))
     if selected != ():
         job_list_listbox.delete(selected)
+
+
+def job_list_rerun_selected():
+    global job_list
+    global job_list_listbox
+    selected = job_list_listbox.curselection()
+    #job_list.get(selected)['done'] = False
+    idx = 0
+    for entry in job_list:
+        if idx == selected[0]:
+            job_list[entry]['done'] = False
+        idx += 1
+    job_list_listbox.itemconfig(selected, fg='black')
 
 
 def save_job_list():
@@ -652,6 +666,10 @@ def load_job_list():
         for entry in job_list:
             job_list_listbox.insert('end', entry)
         f.close()
+        idx = 0
+        for entry in job_list:
+            job_list_listbox.itemconfig(idx, fg='black' if job_list[entry]['done'] == False else 'green')
+            idx += 1
     else:   # No job list file. Set empty config to force defaults
         job_list = {}
 
@@ -869,6 +887,7 @@ def widget_state_refresh():
     global ffmpeg_preset_rb1, ffmpeg_preset_rb2, ffmpeg_preset_rb3
     global ExpertMode
     global video_target_dir, video_target_folder_btn, video_filename_label
+    global stabilization_bounds_alert_checkbox
 
     if CropTopLeft != (0, 0) and CropBottomRight != (0, 0):
         CropAreaDefined = True
@@ -909,6 +928,8 @@ def widget_state_refresh():
             state=NORMAL if project_config["GenerateVideo"] else DISABLED)
         fill_borders_mode_label_dropdown.config(
             state=NORMAL if project_config["GenerateVideo"] else DISABLED)
+        stabilization_bounds_alert_checkbox.config(
+            state=NORMAL if perform_stabilization.get() and perform_cropping.get() else DISABLED)
 
 
 def frame_input_filename_pattern_focus_out(event):
@@ -934,10 +955,12 @@ def custom_ffmpeg_path_focus_out(event):
 
 def perform_stabilization_selection():
     global perform_stabilization
+    global stabilization_bounds_alert_checkbox
     stabilization_threshold_spinbox.config(
         state=NORMAL if perform_stabilization.get() else DISABLED)
     project_config["PerformStabilization"] = perform_stabilization.get()
-        
+    stabilization_bounds_alert_checkbox.config(
+        state=NORMAL if perform_stabilization.get() and perform_cropping.get() else DISABLED)
 
 
 def stabilization_threshold_selection(updown):
@@ -958,11 +981,14 @@ def perform_cropping_selection():
     global perform_cropping, perform_cropping
     global generate_video_checkbox
     global ui_init_done
+    global stabilization_bounds_alert_checkbox
     generate_video_checkbox.config(state=NORMAL if ffmpeg_installed
                                    else DISABLED)
     project_config["PerformCropping"] = perform_cropping.get()
     if ui_init_done:
         scale_display_update()
+    stabilization_bounds_alert_checkbox.config(
+        state=NORMAL if perform_stabilization.get() and perform_cropping.get() else DISABLED)
 
 
 def start_from_current_frame_selection():
@@ -1401,21 +1427,16 @@ def display_image(img):
     win.update()
 
 
-def display_image_by_frame_number(frame_number):
+def display_output_frame_by_number(frame_number):
     global StartFrame
-    if StartFrame + frame_number >= len(SourceDirFileList):
+    global generated_frame_list
+
+    if StartFrame + frame_number >= len(generated_frame_list):
         return  # Do nothing if asked to go out of bounds
     # Get current file
-    file = SourceDirFileList[StartFrame + frame_number]
+    file = generated_frame_list[StartFrame + frame_number]
     # read image
     img = cv2.imread(file, cv2.IMREAD_UNCHANGED)
-
-    if project_config["PerformStabilization"]:
-        img = stabilize_image(img)
-    if project_config["PerformCropping"]:
-        img = crop_image(img, CropTopLeft, CropBottomRight)
-    else:
-        img = even_image(img)
 
     display_image(img)
 
@@ -1452,9 +1473,15 @@ def stabilize_image(img):
     global HoleSearchTopLeft, HoleSearchBottomRight
     global expected_pattern_pos, film_hole_template
     global StabilizationThreshold
+    global CropTopLeft, CropBottomRight, win
+    global stabilization_bounds_alert
+
     # Get image dimensions to perform image shift later
     width = img.shape[1]
     height = img.shape[0]
+
+    # Get crop height to calculate if part of the image will be missing
+    crop_height = CropBottomRight[1]-CropTopLeft[1]
 
     left_stripe_image = get_image_left_stripe(img)
 
@@ -1471,13 +1498,28 @@ def stabilize_image(img):
         # be situated at 12% of the horizontal axis, and 38% of the vertical
         # axis. Calculate shift, according to those proportions
 
-        if CustomTemplateDefined:
+        if CustomTemplateDefined:   # For custom template, expected position is absolute
             move_x = expected_pattern_pos[0] - top_left[0]
             move_y = expected_pattern_pos[1] - top_left[1]
         else:
             move_x = round((expected_pattern_pos[0] * width / 100)) - top_left[0]
             move_y = round((expected_pattern_pos[1] * height / 100)) - top_left[1]
 
+        # Experimental: Try to figure out if there will be a part missing
+        # at the bottom, or the top
+        # missing_bottom = top_left[1] - CropTopLeft[1] + crop_height - height - move_y
+        # missing_top = top_left[1] - CropTopLeft[1]
+        missing_bottom = height - CropBottomRight[1] + move_y
+        missing_top = CropTopLeft[1] - move_y
+        if missing_bottom < 0 or missing_top < 0:
+            if stabilization_bounds_alert.get():
+                win.bell()
+            if missing_bottom < 0:
+                logging.debug("Frame %i, missing %i pixel rows at bottom (move_y=%i)",
+                              CurrentFrame, abs(missing_bottom), move_y)
+            if missing_top < 0:
+                logging.debug("Frame %i, missing %i pixel rows at top (move_y=%i)",
+                              CurrentFrame, abs(missing_top), move_y)
         # Create the translation matrix using move_x and move_y (NumPy array)
         translation_matrix = np.array([
             [1, 0, move_x],
@@ -1609,10 +1651,11 @@ def get_current_dir_file_list():
 
 def valid_generated_frame_range():
     global StartFrame, frames_to_encode, first_absolute_frame
+    global generated_frame_list
 
     file_count = 0
-    generated_frame_list = list(glob(os.path.join(
-        TargetDir, FrameCheckFilenameOutputPattern)))
+    generated_frame_list = sorted(list(glob(os.path.join(
+        TargetDir, FrameCheckFilenameOutputPattern))))
     for i in range(first_absolute_frame + StartFrame,
                    first_absolute_frame + StartFrame + frames_to_encode):
         file_to_check = os.path.join(TargetDir,
@@ -1739,6 +1782,12 @@ def generation_exit():
             BatchJobRunning = False
         else:
             job_list[CurrentJobEntry]['done'] = True    # Flag as done
+            idx = 0
+            for entry in job_list:
+                if job_list[entry] == job_list[CurrentJobEntry]:
+                    break
+                idx += 1
+            job_list_listbox.itemconfig(idx, fg='green')
             win.after(100, job_processing_loop)         # Continue with next
     else:
         Go_btn.config(text="Start", bg=save_bg, fg=save_fg)
@@ -1939,8 +1988,8 @@ def video_generation_loop():
                     encoded_frame = int(frame_str)
                     status_str = "Status: Generating video %.1f%%" % (encoded_frame*100/frames_to_encode)
                     app_status_label.config(text=status_str, fg='black')
-                    display_image_by_frame_number(encoded_frame)
-            win.after(200, video_generation_loop)
+                    display_output_frame_by_number(encoded_frame)
+            win.after(100, video_generation_loop)
     elif ffmpeg_encoding_status == ffmpeg_state.Completed:
         status_str = "Status: Generating video 100%"
         app_status_label.config(text=status_str, fg='black')
@@ -2049,7 +2098,7 @@ def afterscan_init():
     app_width = PreviewWidth + 370 + 30
     app_height = PreviewHeight + 170
     if ExpertMode:
-        app_height += 0  # No need to increase height for now
+        app_height += 10
     if SmallSize:
         app_width -= 80
         app_height -= 60
@@ -2121,6 +2170,7 @@ def build_ui():
     global custom_ffmpeg_path
     global project_config
     global start_batch_btn, add_job_btn, delete_job_btn
+    global stabilization_bounds_alert_checkbox, stabilization_bounds_alert
 
     # Create a frame to add a border to the preview
     left_area_frame = Frame(win)
@@ -2441,12 +2491,12 @@ def build_ui():
     # Define job list area ***************************************************
     job_list_frame = LabelFrame(left_area_frame,
                              text='Job List',
-                             width=50, height=8)
+                             width=67, height=8)
     job_list_frame.pack(side=TOP, padx=2, pady=2, anchor=W)
     job_list_row = 0
 
     # job listbox
-    job_list_listbox = Listbox(job_list_frame, width=50, height=5)
+    job_list_listbox = Listbox(job_list_frame, width=67, height=7)
     job_list_listbox.grid(column=0, row=0, padx=5, pady=2)
 
     # job listbox scrollbars
@@ -2477,6 +2527,12 @@ def build_ui():
                     activeforeground='white', wraplength=100)
     delete_job_btn.pack(side=TOP, padx=2, pady=2)
 
+    # Rerun job button
+    rerun_job_btn = Button(job_list_btn_frame, text="Rerun job", width=12, height=1,
+                    command=job_list_rerun_selected, activebackground='green',
+                    activeforeground='white', wraplength=100)
+    rerun_job_btn.pack(side=TOP, padx=2, pady=2)
+
     # Start processing job button
     start_batch_btn = Button(job_list_btn_frame, text="Start batch", width=12, height=1,
                     command=start_processing_job_list, activebackground='green',
@@ -2496,7 +2552,7 @@ def build_ui():
                                      width=36, height=8)
         custom_stabilization_frame.pack(side=TOP)
         custom_stabilization_btn = Button(custom_stabilization_frame,
-                                          text='Define custom template',
+                                          text='Define hole custom template',
                                           width=30, height=1,
                                           command=select_custom_template,
                                           activebackground='green',
@@ -2568,6 +2624,17 @@ def build_ui():
         fill_borders_mode_label_dropdown.config(state=DISABLED)
 
         video_row += 1
+
+        # Checkbox - Beep if stabilization forces image out of cropping bounds
+        stabilization_bounds_alert = tk.BooleanVar(value=False)
+        stabilization_bounds_alert_checkbox = tk.Checkbutton(right_area_frame,
+                                               text='Cropping alert when image out of bounds',
+                                               variable=stabilization_bounds_alert,
+                                               onvalue=True, offvalue=False,
+                                               width=40)
+        stabilization_bounds_alert_checkbox.pack(side=TOP)
+        stabilization_bounds_alert_checkbox.config(state=NORMAL if perform_stabilization.get() and
+                                     perform_cropping.get() else DISABLED)
 
 
 def exit_app():  # Exit Application
