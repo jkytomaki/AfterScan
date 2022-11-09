@@ -1192,7 +1192,7 @@ def select_rectangle_area(stabilize):
             break
         elif k == 27:  # Escape: Cancel selection
             break
-    cv2.destroyAllWindows()
+    cv2.destroyWindow(RectangleWindowTitle)
     return retvalue
 
 
@@ -1243,6 +1243,7 @@ def select_custom_template():
     global expected_pattern_pos_custom
     global StabilizationThreshold
     global custom_stabilization_btn
+    global area_select_image_factor
 
     # Disable all buttons in main window
     button_status_change_except(0, DISABLED)
@@ -1263,7 +1264,15 @@ def select_custom_template():
         img_bw = cv2.threshold(img_grey, float(StabilizationThreshold), 255, cv2.THRESH_BINARY)[1]
         cv2.imwrite(pattern_filename_custom, img_bw)
         expected_pattern_pos_custom = RectangleTopLeft
-        project_config["CustomTemplateExpectedPos"] = expected_pattern_pos_custom
+        CustomTemplateWindowTitle = "Captured custom template. Press any key to continue."
+        project_config[CustomTemplateWindowTitle] = expected_pattern_pos_custom
+        win_x = int(img_bw.shape[1] * area_select_image_factor)
+        win_y = int(img_bw.shape[0] * area_select_image_factor)
+        cv2.namedWindow(CustomTemplateWindowTitle, flags=cv2.WINDOW_KEEPRATIO)
+        cv2.imshow(CustomTemplateWindowTitle, img_bw)
+        cv2.resizeWindow(CustomTemplateWindowTitle, win_x, win_y)
+        cv2.waitKey(0)
+        cv2.destroyWindow(CustomTemplateWindowTitle)
     else:
         CustomTemplateDefined = False
         custom_stabilization_btn.config(relief=RAISED)
