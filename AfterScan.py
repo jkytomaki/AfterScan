@@ -693,7 +693,9 @@ def job_processing_loop():
     idx = 0
     for entry in job_list:
         if  job_list[entry]['done'] == False:
-            job_list_listbox.selection_set(idx)
+            job_list_listbox.selection_clear(0, END)
+            #job_list_listbox.selection_set(idx)
+            job_list_listbox.itemconfig(idx, fg='blue')
             CurrentJobEntry = entry
             logging.info("Processing %s, starting from frame %i, %s frames",
                          entry, job_list[entry]['project']['CurrentFrame'],
