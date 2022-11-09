@@ -631,8 +631,8 @@ def job_list_delete_selected():
     global job_list
     global job_list_listbox
     selected = job_list_listbox.curselection()
-    job_list.pop(job_list_listbox.get(selected))
     if selected != ():
+        job_list.pop(job_list_listbox.get(selected))
         job_list_listbox.delete(selected)
 
 
@@ -1192,7 +1192,9 @@ def select_rectangle_area(stabilize):
             break
         elif k == 27:  # Escape: Cancel selection
             break
-    cv2.destroyWindow(RectangleWindowTitle)
+    cv2.destroyAllWindows()
+    logging.debug("Destroying window %s", RectangleWindowTitle)
+
     return retvalue
 
 
@@ -1265,14 +1267,14 @@ def select_custom_template():
         cv2.imwrite(pattern_filename_custom, img_bw)
         expected_pattern_pos_custom = RectangleTopLeft
         CustomTemplateWindowTitle = "Captured custom template. Press any key to continue."
-        project_config[CustomTemplateWindowTitle] = expected_pattern_pos_custom
+        project_config['CustomTemplateExpectedPos'] = expected_pattern_pos_custom
         win_x = int(img_bw.shape[1] * area_select_image_factor)
         win_y = int(img_bw.shape[0] * area_select_image_factor)
         cv2.namedWindow(CustomTemplateWindowTitle, flags=cv2.WINDOW_KEEPRATIO)
         cv2.imshow(CustomTemplateWindowTitle, img_bw)
         cv2.resizeWindow(CustomTemplateWindowTitle, win_x, win_y)
         cv2.waitKey(0)
-        cv2.destroyWindow(CustomTemplateWindowTitle)
+        cv2.destroyAllWindows()
     else:
         CustomTemplateDefined = False
         custom_stabilization_btn.config(relief=RAISED)
@@ -2396,7 +2398,7 @@ def build_ui():
     skip_frame_regeneration_cb = tk.Checkbutton(
         video_frame, text='Skip Frame regeneration',
         variable=skip_frame_regeneration, onvalue=True, offvalue=False,
-        width=20)
+        width=22)
     skip_frame_regeneration_cb.grid(row=video_row, column=1,
                                     columnspan=2, sticky=W)
     skip_frame_regeneration_cb.config(state=NORMAL if ffmpeg_installed
