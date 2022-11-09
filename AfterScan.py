@@ -1115,7 +1115,6 @@ def draw_rectangle(event, x, y, flags, param):
     global x_, y_
     # Code posted by Ahsin Shabbir, same Stack overflow thread
     global RectangleTopLeft, RectangleBottomRight
-    global area_select_image_factor
 
     if event == cv2.EVENT_LBUTTONDOWN:
         if not rectangle_drawing:
@@ -1135,10 +1134,10 @@ def draw_rectangle(event, x, y, flags, param):
         cv2.rectangle(work_image, (ix, iy), (x, y), (0, 255, 0), 1)
         # Update global variables with area
         # Need to account for the fact area calculated with 50% reduced image
-        RectangleTopLeft = (max(0, round(min(ix, x)/area_select_image_factor)),
-                            max(0, round(min(iy, y)/area_select_image_factor)))
-        RectangleBottomRight = (min(original_image.shape[1], round(max(ix, x)/area_select_image_factor)),
-                                min(original_image.shape[0], round(max(iy, y)/area_select_image_factor)))
+        RectangleTopLeft = (max(0, round(min(ix, x))),
+                            max(0, round(min(iy, y))))
+        RectangleBottomRight = (min(original_image.shape[1], round(max(ix, x))),
+                                min(original_image.shape[0], round(max(iy, y))))
         logging.debug("Original image: (%i, %i)", original_image.shape[1], original_image.shape[0])
         logging.debug("Selected area: (%i, %i), (%i, %i)",
                       RectangleTopLeft[0], RectangleTopLeft[1],
@@ -1169,17 +1168,21 @@ def select_rectangle_area(stabilize):
     if stabilize:
         original_image = stabilize_image(original_image)
     # Scale area selection image as required
-    work_image = resize_image(original_image, 100*area_select_image_factor)
+    work_image = np.copy(original_image)
+    win_x = int(work_image.shape[1] * area_select_image_factor)
+    win_y = int(work_image.shape[0] * area_select_image_factor)
+    line_thickness = int(2/area_select_image_factor)
 
     # work_image = np.zeros((512,512,3), np.uint8)
     base_image = np.copy(work_image)
-    cv2.namedWindow(RectangleWindowTitle)
+    cv2.namedWindow(RectangleWindowTitle, cv2.WINDOW_KEEPRATIO)
     cv2.setMouseCallback(RectangleWindowTitle, draw_rectangle)
     while 1:
         cv2.imshow(RectangleWindowTitle, work_image)
+        cv2.resizeWindow(RectangleWindowTitle, win_x, win_y)
         if not cv2.EVENT_MOUSEMOVE:
             copy = work_image.copy()
-            cv2.rectangle(copy, (ix, iy), (x_, y_), (0, 255, 0), 1)
+            cv2.rectangle(copy, (ix, iy), (x_, y_), (0, 255, 0), line_thickness)
             cv2.imshow(RectangleWindowTitle, copy)
         k = cv2.waitKey(1) & 0xFF
         if k == 13 and not rectangle_drawing:  # Enter: Confirm selection
