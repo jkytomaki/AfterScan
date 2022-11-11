@@ -124,6 +124,7 @@ VideoTargetDir = ""
 FrameFilenameOutputPattern = "picture_out-%05d.jpg"
 FrameCheckFilenameOutputPattern = "picture_out-*.jpg"  # Req. for ffmpeg gen.
 SourceDirFileList = []
+TargetDirFileList = []
 global film_type
 
 # Flow control vars
@@ -443,6 +444,8 @@ def decode_project_config():
         # If directory in configuration does not exist, set current working dir
         if not os.path.isdir(TargetDir):
             TargetDir = ""
+        else:
+            get_target_dir_file_list()
         frames_target_dir.delete(0, 'end')
         frames_target_dir.insert('end', TargetDir)
         frames_target_dir.after(100, frames_target_dir.xview_moveto, 1)
@@ -705,7 +708,8 @@ def job_processing_loop():
             decode_project_config()
 
             # Load matching file list from newly selected dir
-            get_current_dir_file_list()  # first_absolute_frame is set here
+            get_source_dir_file_list()  # first_absolute_frame is set here
+            get_target_dir_file_list()
 
             start_convert()
             job_started = True
@@ -779,7 +783,7 @@ def set_source_folder():
     decode_project_config()  # Needs first_absolute_frame defined
 
     # Load matching file list from newly selected dir
-    get_current_dir_file_list()  # first_absolute_frame is set here
+    get_source_dir_file_list()  # first_absolute_frame is set here
 
     # Enable Start and Crop buttons, plus slider, once we have files to handle
     cropping_btn.config(state=NORMAL)
@@ -805,6 +809,7 @@ def set_frames_target_folder():
             "Target folder cannot be the same as source folder.")
         return
     else:
+        get_target_dir_file_list()
         frames_target_dir.delete(0, 'end')
         frames_target_dir.insert('end', TargetDir)
         frames_target_dir.after(100, frames_target_dir.xview_moveto, 1)
@@ -874,6 +879,8 @@ def button_status_change_except(except_button, button_status):
             add_job_btn.config(state=button_status)
         if except_button != delete_job_btn:
             delete_job_btn.config(state=button_status)
+        if except_button != rerun_job_btn:
+            rerun_job_btn.config(state=button_status)
 
 
 def widget_state_refresh():
@@ -938,7 +945,7 @@ def frame_input_filename_pattern_focus_out(event):
     global frame_input_filename_pattern
 
     project_config["FrameInputFilenamePattern"] = frame_input_filename_pattern.get()
-    get_current_dir_file_list()
+    get_source_dir_file_list()
     init_display()
 
 
@@ -1445,12 +1452,12 @@ def display_image(img):
 
 def display_output_frame_by_number(frame_number):
     global StartFrame
-    global generated_frame_list
+    global TargetDirFileList
 
-    if StartFrame + frame_number >= len(generated_frame_list):
+    if StartFrame + frame_number >= len(TargetDirFileList):
         return  # Do nothing if asked to go out of bounds
     # Get current file
-    file = generated_frame_list[StartFrame + frame_number]
+    file = TargetDirFileList[StartFrame + frame_number]
     # read image
     img = cv2.imread(file, cv2.IMREAD_UNCHANGED)
 
@@ -1616,7 +1623,7 @@ def is_ffmpeg_installed():
     return ffmpeg_installed
 
 
-def get_current_dir_file_list():
+def get_source_dir_file_list():
     global SourceDir
     global project_config
     global SourceDirFileList
@@ -1665,18 +1672,36 @@ def get_current_dir_file_list():
     return len(SourceDirFileList)
 
 
+def get_target_dir_file_list():
+    global TargetDir
+    global TargetDirFileList
+    global out_frame_width, out_frame_height
+
+    if not os.path.isdir(TargetDir):
+        return
+
+    TargetDirFileList = sorted(list(glob(os.path.join(
+        TargetDir, FrameCheckFilenameOutputPattern))))
+    if len(TargetDirFileList) != 0:
+        # read image
+        img = cv2.imread(TargetDirFileList[0], cv2.IMREAD_UNCHANGED)
+        out_frame_width = img.shape[1]
+        out_frame_height = img.shape[0]
+    else:
+        out_frame_width = 0
+        out_frame_height = 0
+
+
 def valid_generated_frame_range():
     global StartFrame, frames_to_encode, first_absolute_frame
-    global generated_frame_list
+    global TargetDirFileList
 
     file_count = 0
-    generated_frame_list = sorted(list(glob(os.path.join(
-        TargetDir, FrameCheckFilenameOutputPattern))))
     for i in range(first_absolute_frame + StartFrame,
                    first_absolute_frame + StartFrame + frames_to_encode):
         file_to_check = os.path.join(TargetDir,
                                      FrameFilenameOutputPattern % i)
-        if file_to_check in generated_frame_list:
+        if file_to_check in TargetDirFileList:
             file_count += 1
     logging.debug("Checking frame range %i-%i: %i files found",
                   first_absolute_frame + StartFrame,
@@ -1889,15 +1914,14 @@ def call_ffmpeg():
     global ffmpeg_encoding_status
     global FrameFilenameOutputPattern
     global first_absolute_frame, frames_to_encode
-    global CropTopLeft, CropBottomRight
+    global out_frame_width, out_frame_height
+
 
     extra_input_options = []
     extra_output_options = []
     if resolution_dict[project_config["VideoResolution"]] != '':
-        extra_input_options += ['-s:v',
-                                str(CropBottomRight[0]-CropTopLeft[0])
-                                + 'x'
-                                + str(CropBottomRight[1]-CropTopLeft[1])]
+        extra_input_options += ['-s:v', str(out_frame_width)
+                                + 'x' + str(out_frame_height)]
     if frames_to_encode > 0:
         extra_output_options += ['-frames:v', str(frames_to_encode)]
     if ExpertMode and fill_borders.get():
@@ -2185,7 +2209,7 @@ def build_ui():
     global draw_capture_canvas
     global custom_ffmpeg_path
     global project_config
-    global start_batch_btn, add_job_btn, delete_job_btn
+    global start_batch_btn, add_job_btn, delete_job_btn, rerun_job_btn
     global stabilization_bounds_alert_checkbox, stabilization_bounds_alert
 
     # Create a frame to add a border to the preview
@@ -2774,7 +2798,8 @@ def main(argv):
 
     load_job_list()
 
-    get_current_dir_file_list()
+    get_source_dir_file_list()
+    get_target_dir_file_list()
 
     ui_init_done = True
 
