@@ -65,6 +65,7 @@ script_dir = os.path.realpath(sys.argv[0])
 script_dir = os.path.dirname(script_dir)
 general_config_filename = os.path.join(script_dir, "AfterScan.json")
 project_settings_filename = os.path.join(script_dir, "AfterScan-projects.json")
+project_settings_backup_filename = os.path.join(script_dir, "AfterScan-projects.json.bak")
 project_config_basename = "AfterScan-project.json"
 project_config_filename = ""
 project_config_from_file = True
@@ -73,6 +74,8 @@ pattern_filename_r8 = os.path.join(script_dir, "Pattern.R8.jpg")
 pattern_filename_s8 = os.path.join(script_dir, "Pattern.S8.jpg")
 pattern_filename_custom = os.path.join(script_dir, "Pattern.custom.jpg")
 pattern_filename = pattern_filename_s8
+files_to_delete = []
+
 default_project_config = {
     "SourceDir": "",
     "TargetDir": "",
@@ -318,9 +321,12 @@ def update_project_settings():
 
 
 def save_project_settings():
-    global project_settings, project_settings_filename
+    global project_settings, project_settings_filename, project_settings_backup_filename
 
     if not IgnoreConfig:
+        if os.path.isfile(project_settings_backup_filename):
+            os.remove(project_settings_backup_filename)
+        os.rename(project_settings_filename, project_settings_backup_filename)
         logging.info("Saving project settings:")
         with open(project_settings_filename, 'w+') as f:
             logging.info(project_settings)
@@ -329,6 +335,7 @@ def save_project_settings():
 
 def load_project_settings():
     global project_settings, project_settings_filename, default_project_config
+    global SourceDir, files_to_delete
 
     if not IgnoreConfig and os.path.isfile(project_settings_filename):
         f = open(project_settings_filename)
@@ -338,8 +345,13 @@ def load_project_settings():
         project_folders = list(project_settings.keys())  # freeze keys iterator into a list
         for folder in project_folders:
             if not os.path.isdir(folder):
+                aux_template_filename = os.path.join(SourceDir, project_settings[folder]["CustomTemplateFilename"])
+                if os.path.isfile(aux_template_filename):
+                    os.remove(aux_template_filename)
                 project_settings.pop(folder)
                 logging.debug("Deleting %s from project settings, as it no longer exists", folder)
+            elif not os.path.isdir(SourceDir) and os.path.isdir(folder):
+                SourceDir = folder
     else:   # No project settings file. Set empty config to force defaults
         project_settings = default_project_config.copy()
 
@@ -495,6 +507,8 @@ def decode_project_config():
     if 'CustomTemplateDefined' in project_config:
         CustomTemplateDefined = project_config["CustomTemplateDefined"]
         if CustomTemplateDefined:
+            if 'CustomTemplateFilename' in project_config:
+                pattern_filename_custom = project_config["CustomTemplateFilename"]
             pattern_filename = pattern_filename_custom
             expected_pattern_pos = expected_pattern_pos_custom
             set_film_type()
@@ -760,18 +774,19 @@ def set_source_folder():
     # Write project data before switching project
     save_project_config()
 
-    SourceDir = tk.filedialog.askdirectory(
+    aux_dir = tk.filedialog.askdirectory(
         initialdir=SourceDir,
         title="Select folder with captured images to process")
 
-    if not SourceDir:
+    if not aux_dir or aux_dir == "" or aux_dir == ():
         return
-    elif TargetDir == SourceDir:
+    elif TargetDir == aux_dir:
         tk.messagebox.showerror(
             "Error!",
             "Source folder cannot be the same as target folder.")
         return
     else:
+        SourceDir = aux_dir
         frames_source_dir.delete(0, 'end')
         frames_source_dir.insert('end', SourceDir)
         frames_source_dir.after(100, frames_source_dir.xview_moveto, 1)
@@ -797,18 +812,19 @@ def set_frames_target_folder():
     global TargetDir
     global frames_target_dir
 
-    TargetDir = tk.filedialog.askdirectory(
+    aux_dir = tk.filedialog.askdirectory(
         initialdir=TargetDir,
         title="Select folder where to store generated frames")
 
-    if not TargetDir:
+    if not aux_dir or aux_dir == "" or aux_dir == ():
         return
-    elif TargetDir == SourceDir:
+    elif aux_dir == SourceDir:
         tk.messagebox.showerror(
             "Error!",
             "Target folder cannot be the same as source folder.")
         return
     else:
+        TargetDir = aux_dir
         get_target_dir_file_list()
         frames_target_dir.delete(0, 'end')
         frames_target_dir.insert('end', TargetDir)
@@ -897,6 +913,8 @@ def widget_state_refresh():
     global ExpertMode
     global video_target_dir, video_target_folder_btn, video_filename_label
     global stabilization_bounds_alert_checkbox
+    global custom_stabilization_btn
+    global film_type_S8_rb, film_type_R8_rb
 
     if CropTopLeft != (0, 0) and CropBottomRight != (0, 0):
         CropAreaDefined = True
@@ -928,6 +946,12 @@ def widget_state_refresh():
         state=NORMAL if project_config["GenerateVideo"] else DISABLED)
     ffmpeg_preset_rb3.config(
         state=NORMAL if project_config["GenerateVideo"] else DISABLED)
+    custom_stabilization_btn.config(
+        relief=SUNKEN if CustomTemplateDefined else RAISED)
+    film_type_S8_rb.config(
+        state=DISABLED if CustomTemplateDefined else NORMAL)
+    film_type_R8_rb.config(
+        state=DISABLED if CustomTemplateDefined else NORMAL)
     if ExpertMode:
         fill_borders_checkbox.config(
             state=NORMAL if project_config["GenerateVideo"] else DISABLED)
@@ -1248,50 +1272,60 @@ def select_custom_template():
     global perform_cropping
     global CropTopLeft, CropBottomRight
     global CustomTemplateDefined
-    global CurrentFrame, SourceDirFileList
-    global expected_pattern_pos_custom
+    global CurrentFrame, SourceDirFileList, SourceDir, script_dir
+    global expected_pattern_pos_custom, pattern_filename_custom
     global StabilizationThreshold
     global custom_stabilization_btn
     global area_select_image_factor
 
-    # Disable all buttons in main window
-    button_status_change_except(0, DISABLED)
-    win.update()
-
-    RectangleWindowTitle = CustomTemplateTitle
-
-    if select_rectangle_area(False) and CurrentFrame < len(SourceDirFileList):
-        button_status_change_except(0, NORMAL)
-        logging.debug("Custom template area: (%i,%i) - (%i, %i)", RectangleTopLeft[0],
-                      RectangleTopLeft[1], RectangleBottomRight[0], RectangleBottomRight[1])
-        CustomTemplateDefined = True
-        custom_stabilization_btn.config(relief=SUNKEN)
-        file = SourceDirFileList[CurrentFrame]
-        img = cv2.imread(file, cv2.IMREAD_UNCHANGED)
-        img = crop_image(img, RectangleTopLeft, RectangleBottomRight)
-        img_grey = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        img_bw = cv2.threshold(img_grey, float(StabilizationThreshold), 255, cv2.THRESH_BINARY)[1]
-        cv2.imwrite(pattern_filename_custom, img_bw)
-        expected_pattern_pos_custom = RectangleTopLeft
-        CustomTemplateWindowTitle = "Captured custom template. Press any key to continue."
-        project_config['CustomTemplateExpectedPos'] = expected_pattern_pos_custom
-        win_x = int(img_bw.shape[1] * area_select_image_factor)
-        win_y = int(img_bw.shape[0] * area_select_image_factor)
-        cv2.namedWindow(CustomTemplateWindowTitle, flags=cv2.WINDOW_KEEPRATIO)
-        cv2.imshow(CustomTemplateWindowTitle, img_bw)
-        cv2.resizeWindow(CustomTemplateWindowTitle, win_x, win_y)
-        cv2.waitKey(0)
-        cv2.destroyAllWindows()
-    else:
+    if (CustomTemplateDefined):
+        if os.path.isfile(pattern_filename_custom): # Delete Template if it exist
+            os.remove(pattern_filename_custom)
         CustomTemplateDefined = False
-        custom_stabilization_btn.config(relief=RAISED)
+    else:
+        # Disable all buttons in main window
         button_status_change_except(0, DISABLED)
+        win.update()
+
+        RectangleWindowTitle = CustomTemplateTitle
+
+        if select_rectangle_area(False) and CurrentFrame < len(SourceDirFileList):
+            button_status_change_except(0, NORMAL)
+            logging.debug("Custom template area: (%i,%i) - (%i, %i)", RectangleTopLeft[0],
+                          RectangleTopLeft[1], RectangleBottomRight[0], RectangleBottomRight[1])
+            CustomTemplateDefined = True
+            custom_stabilization_btn.config(relief=SUNKEN)
+            file = SourceDirFileList[CurrentFrame]
+            img = cv2.imread(file, cv2.IMREAD_UNCHANGED)
+            img = crop_image(img, RectangleTopLeft, RectangleBottomRight)
+            img_grey = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            img_bw = cv2.threshold(img_grey, float(StabilizationThreshold), 255, cv2.THRESH_BINARY)[1]
+            pattern_filename_custom = os.path.join(script_dir, "Pattern.custom." + os.path.split(SourceDir)[-1] + ".jpg")
+            project_config["CustomTemplateFilename"] = pattern_filename_custom
+            cv2.imwrite(pattern_filename_custom, img_bw)
+            expected_pattern_pos_custom = RectangleTopLeft
+            CustomTemplateWindowTitle = "Captured custom template. Press any key to continue."
+            project_config['CustomTemplateExpectedPos'] = expected_pattern_pos_custom
+            win_x = int(img_bw.shape[1] * area_select_image_factor)
+            win_y = int(img_bw.shape[0] * area_select_image_factor)
+            cv2.namedWindow(CustomTemplateWindowTitle, flags=cv2.WINDOW_KEEPRATIO)
+            cv2.imshow(CustomTemplateWindowTitle, img_bw)
+            cv2.resizeWindow(CustomTemplateWindowTitle, win_x, win_y)
+            cv2.waitKey(0)
+            cv2.destroyAllWindows()
+        else:
+            if os.path.isfile(pattern_filename_custom):  # Delete Template if it exist
+                os.remove(pattern_filename_custom)
+            CustomTemplateDefined = False
+            custom_stabilization_btn.config(relief=RAISED)
+            button_status_change_except(0, DISABLED)
 
     project_config["CustomTemplateDefined"] = CustomTemplateDefined
     set_film_type()
 
     # Enable all buttons in main window
     button_status_change_except(0, NORMAL)
+    widget_state_refresh()
     win.update()
 
 
@@ -1342,7 +1376,6 @@ def determine_hole_height(img):
             top_left_aux = top_left_1
             top_left_1 = top_left_2
             top_left_2 = top_left_aux
-            return 0
     logging.debug("Hole height: %i", top_left_2[1]-top_left_1[1])
     return top_left_2[1]-top_left_1[1]
 
@@ -1365,7 +1398,7 @@ def set_film_type():
     global film_type, expected_pattern_pos, pattern_filename, film_hole_template
     global default_hole_height_s8, default_interhole_height_r8
     global film_hole_height
-    global CustomTemplateDefined
+    global CustomTemplateDefined, pattern_filename_custom
     if CustomTemplateDefined:
         if os.path.isfile(pattern_filename_custom):
             pattern_filename = pattern_filename_custom
@@ -1398,8 +1431,10 @@ def match_template(template, img, thres):
         return (0, 0)
     # convert img to grey
     img_grey = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    img_bw = cv2.threshold(img_grey, thres, 255, cv2.THRESH_BINARY)[1]
-    res = cv2.matchTemplate(img_bw, template, cv2.TM_CCOEFF_NORMED)
+    img_blur = cv2.GaussianBlur(img_grey, (3, 3), 0)
+    #img_bw = cv2.threshold(img_blur, thres, 255, cv2.THRESH_BINARY)[1]
+    #img_edges = cv2.Canny(image=img_bw, threshold1=100, threshold2=20)  # Canny Edge Detection
+    res = cv2.matchTemplate(img_blur, template, cv2.TM_CCOEFF_NORMED)
     # Debug code starts
     # cv2.namedWindow('Template')
     # cv2.namedWindow('Image left strip')
@@ -1534,14 +1569,16 @@ def stabilize_image(img):
         # missing_top = top_left[1] - CropTopLeft[1]
         missing_bottom = height - CropBottomRight[1] + move_y
         missing_top = CropTopLeft[1] - move_y
+        # Log frame alignment info for analysis
+        # Items logged: Tag, Frame number, missing pixel rows, location (bottom/top), Vertical shift
         if missing_bottom < 0 or missing_top < 0:
             if stabilization_bounds_alert.get():
                 win.bell()
             if missing_bottom < 0:
-                logging.debug("Frame %i, missing %i pixel rows at bottom (move_y=%i)",
+                logging.debug("FrameAlignTag, %i, %i, bottom, %i",
                               CurrentFrame, abs(missing_bottom), move_y)
             if missing_top < 0:
-                logging.debug("Frame %i, missing %i pixel rows at top (move_y=%i)",
+                logging.debug("FrameAlignTag, %i, %i, top, %i",
                               CurrentFrame, abs(missing_top), move_y)
         # Create the translation matrix using move_x and move_y (NumPy array)
         translation_matrix = np.array([
@@ -1714,7 +1751,7 @@ def valid_generated_frame_range():
 def set_hole_search_area(img):
     global HoleSearchTopLeft, HoleSearchBottomRight
 
-    # Initizalize default values for perforation search area,
+    # Initialize default values for perforation search area,
     # as they are relative to image size
     # Get image dimensions first
     width = img.shape[1]
@@ -1722,7 +1759,7 @@ def set_hole_search_area(img):
     # Default values are needed before the stabilization search area
     # has been defined, therefore we initialized them here
     HoleSearchTopLeft = (0, 0)
-    HoleSearchBottomRight = (round(width * 0.20), height)
+    HoleSearchBottomRight = (round(width * 0.12), height)
 
 
 """
@@ -1756,7 +1793,7 @@ def start_convert():
         else:
             frames_to_encode = int(frames_to_encode_spinbox.get())
             if StartFrame + frames_to_encode >= len(SourceDirFileList):
-                frames_to_encode = len(SourceDirFileList) - StartFrame
+                frames_to_encode = len(SourceDirFileList) - StartFrame + 1
         project_config["FramesToEncode"] = str(frames_to_encode)
         if frames_to_encode == 0:
             tk.messagebox.showwarning(
@@ -1799,9 +1836,9 @@ def start_convert():
 
         ConvertLoopRunning = True
 
-        if not skip_frame_regeneration.get():
+        if not generate_video.get() or not skip_frame_regeneration.get():
             win.after(1, frame_generation_loop)
-        else:
+        elif generate_video.get():
             ffmpeg_success = False
             ffmpeg_encoding_status = ffmpeg_state.Pending
             win.after(1, video_generation_loop)
@@ -1852,6 +1889,9 @@ def frame_generation_loop():
     if CurrentFrame >= StartFrame + frames_to_encode:
         status_str = "Status: Frame generation OK"
         app_status_label.config(text=status_str, fg='green')
+        # Refresh Target dir file list
+        TargetDirFileList = sorted(list(glob(os.path.join(
+            TargetDir, FrameCheckFilenameOutputPattern))))
         if generate_video.get():
             ffmpeg_success = False
             ffmpeg_encoding_status = ffmpeg_state.Pending
@@ -2211,6 +2251,7 @@ def build_ui():
     global project_config
     global start_batch_btn, add_job_btn, delete_job_btn, rerun_job_btn
     global stabilization_bounds_alert_checkbox, stabilization_bounds_alert
+    global film_type_S8_rb, film_type_R8_rb
 
     # Create a frame to add a border to the preview
     left_area_frame = Frame(win)
@@ -2698,6 +2739,7 @@ def main(argv):
     global IgnoreConfig
     global job_list
     global project_settings
+    global SmallSize
     global SmallSize
     global default_project_config
 
