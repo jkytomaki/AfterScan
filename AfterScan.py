@@ -74,6 +74,7 @@ pattern_filename_r8 = os.path.join(script_dir, "Pattern.R8.jpg")
 pattern_filename_s8 = os.path.join(script_dir, "Pattern.S8.jpg")
 pattern_filename_custom = os.path.join(script_dir, "Pattern.custom.jpg")
 pattern_filename = pattern_filename_s8
+frame_hdr_filename_pattern = "hdrpic*.jpg"
 files_to_delete = []
 
 default_project_config = {
@@ -216,6 +217,8 @@ ExpertMode = False
 IsWindows = False
 IsLinux = False
 IsMac = False
+
+is_demo = False
 
 """
 #################
@@ -398,22 +401,25 @@ def load_project_config():
     global project_settings
     global default_project_config
 
+    if IgnoreConfig:
+        return
+
     project_config_filename = os.path.join(SourceDir, project_config_basename)
     # Check if persisted project data file exist: If it does, load it
     project_config = default_project_config.copy()  # set default config
-    if not IgnoreConfig:
-        if SourceDir in project_settings:
-            logging.info("Loading project config from consolidated project settings")
-            project_config |= project_settings[SourceDir].copy()
-        elif os.path.isfile(project_config_filename):
-            logging.info("Loading project config from dedicated project config file")
-            persisted_data_file = open(project_config_filename)
-            project_config |= json.load(persisted_data_file)
-            persisted_data_file.close()
-        else:  # No project config file. Set empty config to force defaults
-            logging.info("No project config exists, initializing defaults")
-            project_config = default_project_config.copy()
-            project_config['SourceDir'] = SourceDir
+
+    if SourceDir in project_settings:
+        logging.info("Loading project config from consolidated project settings")
+        project_config |= project_settings[SourceDir].copy()
+    elif os.path.isfile(project_config_filename):
+        logging.info("Loading project config from dedicated project config file")
+        persisted_data_file = open(project_config_filename)
+        project_config |= json.load(persisted_data_file)
+        persisted_data_file.close()
+    else:  # No project config file. Set empty config to force defaults
+        logging.info("No project config exists, initializing defaults")
+        project_config = default_project_config.copy()
+        project_config['SourceDir'] = SourceDir
 
     for item in project_config:
         logging.info("%s=%s", item, str(project_config[item]))
@@ -442,6 +448,9 @@ def decode_project_config():
     global pattern_filename, expected_pattern_pos
     global pattern_filename_custom, expected_pattern_pos_custom
     global custom_stabilization_btn
+
+    if IgnoreConfig:
+        return
 
     if 'SourceDir' in project_config:
         SourceDir = project_config["SourceDir"]
@@ -992,8 +1001,9 @@ def perform_stabilization_selection():
     stabilization_threshold_spinbox.config(
         state=NORMAL if perform_stabilization.get() else DISABLED)
     project_config["PerformStabilization"] = perform_stabilization.get()
-    stabilization_bounds_alert_checkbox.config(
-        state=NORMAL if perform_stabilization.get() and perform_cropping.get() else DISABLED)
+    if ExpertMode:
+        stabilization_bounds_alert_checkbox.config(
+            state=NORMAL if perform_stabilization.get() and perform_cropping.get() else DISABLED)
 
 
 def stabilization_threshold_selection(updown):
@@ -1020,8 +1030,9 @@ def perform_cropping_selection():
     project_config["PerformCropping"] = perform_cropping.get()
     if ui_init_done:
         scale_display_update()
-    stabilization_bounds_alert_checkbox.config(
-        state=NORMAL if perform_stabilization.get() and perform_cropping.get() else DISABLED)
+    if ExpertMode:
+        stabilization_bounds_alert_checkbox.config(
+            state=NORMAL if perform_stabilization.get() and perform_cropping.get() else DISABLED)
 
 
 def start_from_current_frame_selection():
@@ -1148,20 +1159,22 @@ def draw_rectangle(event, x, y, flags, param):
     global x_, y_
     # Code posted by Ahsin Shabbir, same Stack overflow thread
     global RectangleTopLeft, RectangleBottomRight
+    global rectangle_refresh
 
     if event == cv2.EVENT_LBUTTONDOWN:
         if not rectangle_drawing:
             work_image = np.copy(base_image)
             x_, y_ = -10, -10
             ix, iy = -10, -10
-        rectangle_drawing = True
-        ix, iy = x, y
-        x_, y_ = x, y
+            rectangle_drawing = True
+            ix, iy = x, y
+            x_, y_ = x, y
     elif event == cv2.EVENT_MOUSEMOVE and rectangle_drawing:
         copy = work_image.copy()
         x_, y_ = x, y
         cv2.rectangle(copy, (ix, iy), (x_, y_), (0, 255, 0), 1)
         cv2.imshow(RectangleWindowTitle, copy)
+        rectangle_refresh = True
     elif event == cv2.EVENT_LBUTTONUP:
         rectangle_drawing = False
         cv2.rectangle(work_image, (ix, iy), (x, y), (0, 255, 0), 1)
@@ -1175,6 +1188,8 @@ def draw_rectangle(event, x, y, flags, param):
         logging.debug("Selected area: (%i, %i), (%i, %i)",
                       RectangleTopLeft[0], RectangleTopLeft[1],
                       RectangleBottomRight[0], RectangleBottomRight[1])
+        rectangle_refresh = True
+
 
 
 def select_rectangle_area(stabilize):
@@ -1185,6 +1200,8 @@ def select_rectangle_area(stabilize):
     global ix, iy
     global x_, y_
     global area_select_image_factor
+    global rectangle_refresh
+    global RectangleTopLeft, RectangleBottomRight
 
     if CurrentFrame >= len(SourceDirFileList):
         return False
@@ -1197,6 +1214,8 @@ def select_rectangle_area(stabilize):
 
     # load the image, clone it, and setup the mouse callback function
     original_image = cv2.imread(file, cv2.IMREAD_UNCHANGED)
+    if not stabilize:   # only take left stripe if not for cropping
+        original_image = get_image_left_stripe(original_image)
     # Stabilize image to make sure target image matches user visual definition
     if stabilize:
         original_image = stabilize_image(original_image)
@@ -1210,13 +1229,18 @@ def select_rectangle_area(stabilize):
     base_image = np.copy(work_image)
     cv2.namedWindow(RectangleWindowTitle, cv2.WINDOW_KEEPRATIO)
     cv2.setMouseCallback(RectangleWindowTitle, draw_rectangle)
-    while 1:
-        cv2.imshow(RectangleWindowTitle, work_image)
+    rectangle_refresh = False
+    cv2.imshow(RectangleWindowTitle, work_image)
+    if is_demo:
+        cv2.resizeWindow(RectangleWindowTitle, round(win_x/2), round(win_y/2))
+    else:
         cv2.resizeWindow(RectangleWindowTitle, win_x, win_y)
-        if not cv2.EVENT_MOUSEMOVE:
-            copy = work_image.copy()
-            cv2.rectangle(copy, (ix, iy), (x_, y_), (0, 255, 0), line_thickness)
-            cv2.imshow(RectangleWindowTitle, copy)
+    while 1:
+        if rectangle_refresh:
+            if not cv2.EVENT_MOUSEMOVE:
+                copy = work_image.copy()
+                cv2.rectangle(copy, (ix, iy), (x_, y_), (0, 255, 0), line_thickness)
+                cv2.imshow(RectangleWindowTitle, copy)
         k = cv2.waitKey(1) & 0xFF
         if k == 13 and not rectangle_drawing:  # Enter: Confirm selection
             retvalue = True
@@ -1282,7 +1306,14 @@ def select_custom_template():
         if os.path.isfile(pattern_filename_custom): # Delete Template if it exist
             os.remove(pattern_filename_custom)
         CustomTemplateDefined = False
+        set_film_type()
     else:
+        if len(SourceDirFileList) <= 0:
+            tk.messagebox.showwarning(
+                "No frame set loaded",
+                "A set of frames is required before a custom template might be defined."
+                "Please select a source folder before proceeding.")
+            return
         # Disable all buttons in main window
         button_status_change_except(0, DISABLED)
         win.update()
@@ -1310,7 +1341,7 @@ def select_custom_template():
             win_y = int(img_bw.shape[0] * area_select_image_factor)
             cv2.namedWindow(CustomTemplateWindowTitle, flags=cv2.WINDOW_KEEPRATIO)
             cv2.imshow(CustomTemplateWindowTitle, img_bw)
-            cv2.resizeWindow(CustomTemplateWindowTitle, win_x, win_y)
+            cv2.resizeWindow(CustomTemplateWindowTitle, round(win_x/2), round(win_y/2))
             cv2.waitKey(0)
             cv2.destroyAllWindows()
         else:
@@ -1420,6 +1451,23 @@ def set_film_type():
     logging.debug("Film type: %s, %s, %i", project_config["FilmType"], os.path.basename(pattern_filename), film_hole_height)
 
     win.update()
+
+
+def validate_template_size():
+    global HoleSearchTopLeft, HoleSearchBottomRight
+    global film_hole_template
+
+    template_width = film_hole_template.shape[1]
+    template_height = film_hole_template.shape[0]
+    image_width = HoleSearchBottomRight[0] - HoleSearchTopLeft[0]
+    image_height = HoleSearchBottomRight[1] - HoleSearchTopLeft[1]
+    if (template_width >= image_width or template_height >= image_height):
+        logging.error("Template (%ix%i) bigger than image  (%ix%i)",
+                      template_width, template_height,
+                      image_width, image_height)
+        return False
+    else:
+        return True
 
 
 def match_template(template, img, thres):
@@ -1544,58 +1592,49 @@ def stabilize_image(img):
     left_stripe_image = get_image_left_stripe(img)
 
     # Search film hole pattern
-    try:
-        top_left = match_template(film_hole_template, left_stripe_image, float(StabilizationThreshold))
-        # The coordinates returned by match template are relative to the
-        # cropped image. In order to calculate the correct values to provide
-        # to the translation matrix, need to convert to absolute coordinates
-        top_left = (top_left[0] + HoleSearchTopLeft[0],
-                    top_left[1] + HoleSearchTopLeft[1])
-        # According to tests done during the development, the ideal top left
-        # position for a match of the hole template used (63*339 pixels) should
-        # be situated at 12% of the horizontal axis, and 38% of the vertical
-        # axis. Calculate shift, according to those proportions
+    top_left = match_template(film_hole_template, left_stripe_image, float(StabilizationThreshold))
+    # The coordinates returned by match template are relative to the
+    # cropped image. In order to calculate the correct values to provide
+    # to the translation matrix, need to convert to absolute coordinates
+    top_left = (top_left[0] + HoleSearchTopLeft[0],
+                top_left[1] + HoleSearchTopLeft[1])
+    # According to tests done during the development, the ideal top left
+    # position for a match of the hole template used (63*339 pixels) should
+    # be situated at 12% of the horizontal axis, and 38% of the vertical
+    # axis. Calculate shift, according to those proportions
 
-        if CustomTemplateDefined:   # For custom template, expected position is absolute
-            move_x = expected_pattern_pos[0] - top_left[0]
-            move_y = expected_pattern_pos[1] - top_left[1]
-        else:
-            move_x = round((expected_pattern_pos[0] * width / 100)) - top_left[0]
-            move_y = round((expected_pattern_pos[1] * height / 100)) - top_left[1]
+    if CustomTemplateDefined:   # For custom template, expected position is absolute
+        move_x = expected_pattern_pos[0] - top_left[0]
+        move_y = expected_pattern_pos[1] - top_left[1]
+    else:
+        move_x = round((expected_pattern_pos[0] * width / 100)) - top_left[0]
+        move_y = round((expected_pattern_pos[1] * height / 100)) - top_left[1]
 
-        # Experimental: Try to figure out if there will be a part missing
-        # at the bottom, or the top
-        # missing_bottom = top_left[1] - CropTopLeft[1] + crop_height - height - move_y
-        # missing_top = top_left[1] - CropTopLeft[1]
-        missing_bottom = height - CropBottomRight[1] + move_y
-        missing_top = CropTopLeft[1] - move_y
-        # Log frame alignment info for analysis
-        # Items logged: Tag, Frame number, missing pixel rows, location (bottom/top), Vertical shift
-        if missing_bottom < 0 or missing_top < 0:
-            if stabilization_bounds_alert.get():
-                win.bell()
-            if missing_bottom < 0:
-                logging.debug("FrameAlignTag, %i, %i, bottom, %i",
-                              CurrentFrame, abs(missing_bottom), move_y)
-            if missing_top < 0:
-                logging.debug("FrameAlignTag, %i, %i, top, %i",
-                              CurrentFrame, abs(missing_top), move_y)
-        # Create the translation matrix using move_x and move_y (NumPy array)
-        translation_matrix = np.array([
-            [1, 0, move_x],
-            [0, 1, move_y]
-        ], dtype=np.float32)
-        # Apply the translation to the image
-        translated_image = cv2.warpAffine(src=img, M=translation_matrix,
-                                          dsize=(width, height))
-    except Exception as ex:
-        exception_template = ("An exception of type {0} occurred. "
-                              "Arguments:\n{1!r}")
-        exception_details = template.format(type(ex).__name__, ex.args)
-        logging.error("Error in match_template (file %s), "
-                      "returning original image. %s",
-                      SourceDirFileList[CurrentFrame], exception_details)
-        translated_image = img
+    # Experimental: Try to figure out if there will be a part missing
+    # at the bottom, or the top
+    # missing_bottom = top_left[1] - CropTopLeft[1] + crop_height - height - move_y
+    # missing_top = top_left[1] - CropTopLeft[1]
+    missing_bottom = height - CropBottomRight[1] + move_y
+    missing_top = CropTopLeft[1] - move_y
+    # Log frame alignment info for analysis
+    # Items logged: Tag, Frame number, missing pixel rows, location (bottom/top), Vertical shift
+    if missing_bottom < 0 or missing_top < 0:
+        if ExpertMode and stabilization_bounds_alert.get():
+            win.bell()
+        if missing_bottom < 0:
+            logging.debug("FrameAlignTag, %i, %i, bottom, %i",
+                          CurrentFrame, abs(missing_bottom), move_y)
+        if missing_top < 0:
+            logging.debug("FrameAlignTag, %i, %i, top, %i",
+                          CurrentFrame, abs(missing_top), move_y)
+    # Create the translation matrix using move_x and move_y (NumPy array)
+    translation_matrix = np.array([
+        [1, 0, move_x],
+        [0, 1, move_y]
+    ], dtype=np.float32)
+    # Apply the translation to the image
+    translated_image = cv2.warpAffine(src=img, M=translation_matrix,
+                                      dsize=(width, height))
 
     logging.debug("Stabilizing frame %i (%ix%i): (%i,%i) to move (%i, %i) -> (%ix%i)",
                   CurrentFrame, img.shape[1], img.shape[0],
@@ -1759,7 +1798,7 @@ def set_hole_search_area(img):
     # Default values are needed before the stabilization search area
     # has been defined, therefore we initialized them here
     HoleSearchTopLeft = (0, 0)
-    HoleSearchBottomRight = (round(width * 0.12), height)
+    HoleSearchBottomRight = (round(width * 0.16), height)
 
 
 """
@@ -1837,6 +1876,11 @@ def start_convert():
         ConvertLoopRunning = True
 
         if not generate_video.get() or not skip_frame_regeneration.get():
+            if not validate_template_size():
+                tk.messagebox.showerror("Error!",
+                                        "Template is bigger than search area. "
+                                        "Please select a smaller template.")
+                ConvertLoopExitRequested = True
             win.after(1, frame_generation_loop)
         elif generate_video.get():
             ffmpeg_success = False
@@ -1875,6 +1919,21 @@ def generation_exit():
     win.update()
 
 
+def build_hdr_file_list():
+    global SourceDirHdrFileList
+    SourceDirHdrFileList = sorted(list(glob(os.path.join(
+        SourceDir, frame_hdr_filename_pattern))))
+    return len(SourceDirHdrFileList)
+
+def hdr_merge_loop():
+    global SourceDirHdrFileList
+    # Get current file
+    file = SourceDirHdrFileList[CurrentHdrFrame]
+    # read image
+    img = cv2.imread(file, cv2.IMREAD_UNCHANGED)
+    # To be done: Read 6 hdr images, merge them, and let go for next loop
+    win.after(1, hdr_merge_loop)
+
 def frame_generation_loop():
     global perform_stabilization, perform_cropping
     global ConvertLoopExitRequested
@@ -1885,6 +1944,7 @@ def frame_generation_loop():
     global FrameFilenameOutputPattern
     global BatchJobRunning
     global ffmpeg_success, ffmpeg_encoding_status
+    global TargetDirFileList
 
     if CurrentFrame >= StartFrame + frames_to_encode:
         status_str = "Status: Frame generation OK"
@@ -2176,9 +2236,9 @@ def afterscan_init():
         PreviewWidth = 620
         PreviewHeight = 540
     app_width = PreviewWidth + 370 + 30
-    app_height = PreviewHeight + 170
+    app_height = PreviewHeight + 200
     if ExpertMode:
-        app_height += 10
+        app_height += 0
     if SmallSize:
         app_width -= 80
         app_height -= 60
@@ -2439,6 +2499,18 @@ def build_ui():
                                   variable=film_type, value='R8')
     film_type_R8_rb.grid(row=postprocessing_row, column=1, sticky=W)
     film_type.set(project_config["FilmType"])
+    postprocessing_row += 1
+
+    # Custom film perforation template
+    custom_stabilization_btn = Button(postprocessing_frame,
+                                      text='Define custom hole template',
+                                      width=30, height=1,
+                                      command=select_custom_template,
+                                      activebackground='green',
+                                      activeforeground='white')
+    custom_stabilization_btn.config(relief=SUNKEN if CustomTemplateDefined else RAISED)
+    custom_stabilization_btn.grid(row=postprocessing_row, column=0, columnspan=3)
+    postprocessing_row += 1
 
     # Define video generating area ************************************
     video_frame = LabelFrame(right_area_frame,
@@ -2628,20 +2700,6 @@ def build_ui():
         #expert_frame = Frame(win, width=900, height=150)
         #expert_frame.grid(row=1, column=0, padx=5, pady=5, sticky=NW)
 
-        # Custom film perforation template
-        custom_stabilization_frame = LabelFrame(right_area_frame, text='Custom perforation template',
-                                     width=36, height=8)
-        custom_stabilization_frame.pack(side=TOP)
-        custom_stabilization_btn = Button(custom_stabilization_frame,
-                                          text='Define hole custom template',
-                                          width=30, height=1,
-                                          command=select_custom_template,
-                                          activebackground='green',
-                                          activeforeground='white')
-        custom_stabilization_btn.config(relief=SUNKEN if CustomTemplateDefined else RAISED)
-        custom_stabilization_btn.pack(padx=5, pady=5)
-        postprocessing_row += 1
-
         # Custom ffmpeg path
         custom_ffmpeg_path_frame = LabelFrame(right_area_frame, text='Custom FFMpeg path',
                                      width=26, height=8)
@@ -2742,6 +2800,7 @@ def main(argv):
     global SmallSize
     global SmallSize
     global default_project_config
+    global is_demo
 
     LoggingMode = "warning"
 
@@ -2765,7 +2824,7 @@ def main(argv):
     film_bw_template =  cv2.imread(pattern_bw_filename, 0)
     film_wb_template =  cv2.imread(pattern_wb_filename, 0)
 
-    opts, args = getopt.getopt(argv, "shiel:")
+    opts, args = getopt.getopt(argv, "shiel:d")
 
     for opt, arg in opts:
         if opt == '-l':
@@ -2776,6 +2835,8 @@ def main(argv):
             SmallSize = True
         elif opt == '-i':
             IgnoreConfig = True
+        elif opt == '-d':
+            is_demo = True
         elif opt == '-h':
             print("AfterScan")
             print("  -l <log mode>  Set log level:")
