@@ -137,10 +137,10 @@ ConvertLoopRunning = False
 BatchJobRunning = False
 
 # preview dimensions (4/3 format) vars
+BigSize = True
 PreviewWidth = 700
 PreviewHeight = 525
 PreviewRatio = 1  # Defined globally for homogeneity, to be calculated once per project
-SmallSize = False
 
 # Crop area rectangle drawing vars
 ref_point = []
@@ -1617,16 +1617,17 @@ def stabilize_image(img):
     missing_bottom = height - CropBottomRight[1] + move_y
     missing_top = CropTopLeft[1] - move_y
     # Log frame alignment info for analysis
-    # Items logged: Tag, Frame number, missing pixel rows, location (bottom/top), Vertical shift
+    # Items logged: Tag, project id, Frame number, missing pixel rows, location (bottom/top), Vertical shift
     if missing_bottom < 0 or missing_top < 0:
+        project_id = os.path.split(SourceDir)[-1]
         if ExpertMode and stabilization_bounds_alert.get():
             win.bell()
         if missing_bottom < 0:
-            logging.debug("FrameAlignTag, %i, %i, bottom, %i",
-                          CurrentFrame, abs(missing_bottom), move_y)
+            logging.debug("FrameAlignTag, %s, %i, %i, bottom, %i",
+                          project_id, CurrentFrame, abs(missing_bottom), move_y)
         if missing_top < 0:
-            logging.debug("FrameAlignTag, %i, %i, top, %i",
-                          CurrentFrame, abs(missing_top), move_y)
+            logging.debug("FrameAlignTag, %s, %i, %i, top, %i",
+                          project_id, CurrentFrame, abs(missing_top), move_y)
     # Create the translation matrix using move_x and move_y (NumPy array)
     translation_matrix = np.array([
         [1, 0, move_x],
@@ -2206,7 +2207,9 @@ def afterscan_init():
     global LogLevel
     global PreviewWidth, PreviewHeight
     global screen_height
-    global ExpertMode, SmallSize
+    global ExpertMode
+    global job_list_listbox
+    global BigSize
 
     # Initialize logging
     log_path = os.path.dirname(__file__)
@@ -2230,18 +2233,21 @@ def afterscan_init():
     screen_width, screen_height = win.maxsize()
     # Set dimensions of UI elements adapted to screen size
     if screen_height >= 1000:
+        BigSize = True
         PreviewWidth = 700
-        PreviewHeight = 640
-    else:
-        PreviewWidth = 620
         PreviewHeight = 540
-    app_width = PreviewWidth + 370 + 30
-    app_height = PreviewHeight + 200
-    if ExpertMode:
-        app_height += 0
-    if SmallSize:
-        app_width -= 80
-        app_height -= 60
+        app_width = PreviewWidth + 420
+        app_height = PreviewHeight + 210
+        if ExpertMode:
+            app_height += 50
+    else:
+        BigSize = False
+        PreviewWidth = 500
+        PreviewHeight = 380
+        app_width = PreviewWidth + 420
+        app_height = PreviewHeight + 270
+        if ExpertMode:
+            app_height += 150
 
     win.title('AfterScan ' + __version__)  # setting title of the window
     win.geometry('1080x700')  # setting the size of the window
@@ -2254,10 +2260,7 @@ def afterscan_init():
 
     # Set default font size
     # Change the default Font that will affect in all the widgets
-    if SmallSize:
-        win.option_add("*font", "TkDefaultFont 8")
-    else:
-        win.option_add("*font", "TkDefaultFont 10")
+    win.option_add("*font", "TkDefaultFont 10")
     win.resizable(False, False)
 
     # Get Top window coordinates
@@ -2344,7 +2347,7 @@ def build_ui():
     frame_slider.set(CurrentFrame)
 
     # Application status label
-    app_status_label = Label(regular_top_section_frame, width=46, borderwidth=2,
+    app_status_label = Label(regular_top_section_frame, width=45, borderwidth=2,
                              relief="groove", text='Status: Idle',
                              highlightthickness=1)
     app_status_label.grid(row=1, column=0, columnspan=3, sticky=W,
@@ -2366,7 +2369,7 @@ def build_ui():
     # Create frame to select source and target folders *******************************
     folder_frame = LabelFrame(right_area_frame, text='Folder selection', width=50,
                               height=8)
-    folder_frame.pack(side=TOP, padx=2, pady=2, anchor=W)
+    folder_frame.pack(side=TOP, padx=2, pady=2, anchor=W, ipadx=5)
 
     source_folder_frame = Frame(folder_frame)
     source_folder_frame.pack(side=TOP)
@@ -2416,7 +2419,7 @@ def build_ui():
     postprocessing_frame = LabelFrame(right_area_frame,
                                       text='Frame post-processing',
                                       width=40, height=8)
-    postprocessing_frame.pack(side=TOP, padx=2, pady=2)
+    postprocessing_frame.pack(side=TOP, padx=2, pady=2, ipadx=5)
     postprocessing_row = 0
 
     # Check box to select start from current frame
@@ -2509,14 +2512,14 @@ def build_ui():
                                       activebackground='green',
                                       activeforeground='white')
     custom_stabilization_btn.config(relief=SUNKEN if CustomTemplateDefined else RAISED)
-    custom_stabilization_btn.grid(row=postprocessing_row, column=0, columnspan=3)
+    custom_stabilization_btn.grid(row=postprocessing_row, column=0, columnspan=3, pady=5)
     postprocessing_row += 1
 
     # Define video generating area ************************************
     video_frame = LabelFrame(right_area_frame,
                              text='Video generation',
                              width=50, height=8)
-    video_frame.pack(side=TOP, padx=2, pady=2)
+    video_frame.pack(side=TOP, padx=2, pady=2, ipadx=5)
     video_row = 0
 
     # Check box to generate video or not
@@ -2649,8 +2652,8 @@ def build_ui():
     job_list_row = 0
 
     # job listbox
-    job_list_listbox = Listbox(job_list_frame, width=67, height=7)
-    job_list_listbox.grid(column=0, row=0, padx=5, pady=2)
+    job_list_listbox = Listbox(job_list_frame, width=67 if BigSize else 42, height=7)
+    job_list_listbox.grid(column=0, row=0, padx=5, pady=2, ipadx=5)
 
     # job listbox scrollbars
     job_list_listbox_scrollbar_y = Scrollbar(job_list_frame, orient="vertical")
@@ -2713,7 +2716,7 @@ def build_ui():
         # Video filters area
         video_filters_frame = LabelFrame(right_area_frame, text='Video Filters Area',
                                      width=26, height=8)
-        video_filters_frame.pack(side=TOP)
+        video_filters_frame.pack(side=TOP, ipadx=5)
 
         # Check box - Fill borders
         fill_borders = tk.BooleanVar(value=False)
@@ -2797,8 +2800,6 @@ def main(argv):
     global IgnoreConfig
     global job_list
     global project_settings
-    global SmallSize
-    global SmallSize
     global default_project_config
     global is_demo
 
@@ -2824,15 +2825,13 @@ def main(argv):
     film_bw_template =  cv2.imread(pattern_bw_filename, 0)
     film_wb_template =  cv2.imread(pattern_wb_filename, 0)
 
-    opts, args = getopt.getopt(argv, "shiel:d")
+    opts, args = getopt.getopt(argv, "hiel:d")
 
     for opt, arg in opts:
         if opt == '-l':
             LoggingMode = arg
         elif opt == '-e':
             ExpertMode = True
-        elif opt == '-s':
-            SmallSize = True
         elif opt == '-i':
             IgnoreConfig = True
         elif opt == '-d':
