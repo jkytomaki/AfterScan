@@ -19,7 +19,7 @@ __author__ = 'Juan Remirez de Esparza'
 __copyright__ = "Copyright 2022, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
-__version__ = "1.5"
+_version__ = "1.5.1"
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
 __status__ = "Development"
@@ -329,11 +329,12 @@ def save_project_settings():
     if not IgnoreConfig:
         if os.path.isfile(project_settings_backup_filename):
             os.remove(project_settings_backup_filename)
-        os.rename(project_settings_filename, project_settings_backup_filename)
-        logging.info("Saving project settings:")
-        with open(project_settings_filename, 'w+') as f:
-            logging.info(project_settings)
-            json.dump(project_settings, f)
+        if os.path.isfile(project_settings_filename):
+            os.rename(project_settings_filename, project_settings_backup_filename)
+            logging.info("Saving project settings:")
+            with open(project_settings_filename, 'w+') as f:
+                logging.info(project_settings)
+                json.dump(project_settings, f)
 
 
 def load_project_settings():
@@ -348,9 +349,10 @@ def load_project_settings():
         project_folders = list(project_settings.keys())  # freeze keys iterator into a list
         for folder in project_folders:
             if not os.path.isdir(folder):
-                aux_template_filename = os.path.join(SourceDir, project_settings[folder]["CustomTemplateFilename"])
-                if os.path.isfile(aux_template_filename):
-                    os.remove(aux_template_filename)
+                if "CustomTemplateFilename" in project_settings[folder]:
+                    aux_template_filename = os.path.join(SourceDir, project_settings[folder]["CustomTemplateFilename"])
+                    if os.path.isfile(aux_template_filename):
+                        os.remove(aux_template_filename)
                 project_settings.pop(folder)
                 logging.debug("Deleting %s from project settings, as it no longer exists", folder)
             elif not os.path.isdir(SourceDir) and os.path.isdir(folder):
@@ -884,7 +886,7 @@ def button_status_change_except(except_button, button_status):
         source_folder_btn.config(state=button_status)
     if except_button != target_folder_btn:
         target_folder_btn.config(state=button_status)
-    if except_button != perform_cropping_checkbox and not ExpertMode:
+    if not is_demo and except_button != perform_cropping_checkbox and not ExpertMode:
         perform_cropping_checkbox.config(state=button_status)
     # if except_button != Crop_btn:
     #    Crop_btn.config(state=DISABLED if active else NORMAL)
@@ -892,7 +894,7 @@ def button_status_change_except(except_button, button_status):
         Go_btn.config(state=button_status)
     if except_button != Exit_btn:
         Exit_btn.config(state=button_status)
-    if except_button != perform_stabilization_checkbox and not ExpertMode:
+    if not is_demo and except_button != perform_stabilization_checkbox and not ExpertMode:
         perform_stabilization_checkbox.config(state=button_status)
 
     if not CropAreaDefined:
@@ -1191,8 +1193,7 @@ def draw_rectangle(event, x, y, flags, param):
         rectangle_refresh = True
 
 
-
-def select_rectangle_area(stabilize):
+def select_rectangle_area(is_cropping=False):
     global work_image, base_image, original_image
     global CurrentFrame, first_absolute_frame
     global SourceDirFileList
@@ -1202,34 +1203,45 @@ def select_rectangle_area(stabilize):
     global area_select_image_factor
     global rectangle_refresh
     global RectangleTopLeft, RectangleBottomRight
+    global CropTopLeft, CropBottomRight
 
     if CurrentFrame >= len(SourceDirFileList):
         return False
 
     retvalue = False
-    ix, iy = -1, -1
-    x_, y_ = 0, 0
+    if is_cropping and CropAreaDefined:
+        ix, iy = CropTopLeft[0], CropTopLeft[1]
+        x_, y_ = CropBottomRight[0], CropBottomRight[1]
+        RectangleTopLeft = CropTopLeft
+        RectangleBottomRight = CropBottomRight
+        rectangle_refresh = True
+    else:
+        ix, iy = -1, -1
+        x_, y_ = 0, 0
+        rectangle_refresh = False
 
     file = SourceDirFileList[CurrentFrame]
 
     # load the image, clone it, and setup the mouse callback function
     original_image = cv2.imread(file, cv2.IMREAD_UNCHANGED)
-    if not stabilize:   # only take left stripe if not for cropping
+    if not is_cropping:   # only take left stripe if not for cropping
         original_image = get_image_left_stripe(original_image)
     # Stabilize image to make sure target image matches user visual definition
-    if stabilize:
+    if is_cropping:
         original_image = stabilize_image(original_image)
     # Scale area selection image as required
     work_image = np.copy(original_image)
-    win_x = int(work_image.shape[1] * area_select_image_factor)
-    win_y = int(work_image.shape[0] * area_select_image_factor)
+    img_width = work_image.shape[1]
+    img_height = work_image.shape[0]
+    win_x = int(img_width * area_select_image_factor)
+    win_y = int(img_height * area_select_image_factor)
     line_thickness = int(2/area_select_image_factor)
 
     # work_image = np.zeros((512,512,3), np.uint8)
     base_image = np.copy(work_image)
     cv2.namedWindow(RectangleWindowTitle, cv2.WINDOW_KEEPRATIO)
     cv2.setMouseCallback(RectangleWindowTitle, draw_rectangle)
-    rectangle_refresh = False
+    # rectangle_refresh = False
     cv2.imshow(RectangleWindowTitle, work_image)
     if is_demo:
         cv2.resizeWindow(RectangleWindowTitle, round(win_x/2), round(win_y/2))
@@ -1237,15 +1249,46 @@ def select_rectangle_area(stabilize):
         cv2.resizeWindow(RectangleWindowTitle, win_x, win_y)
     while 1:
         if rectangle_refresh:
-            if not cv2.EVENT_MOUSEMOVE:
-                copy = work_image.copy()
-                cv2.rectangle(copy, (ix, iy), (x_, y_), (0, 255, 0), line_thickness)
-                cv2.imshow(RectangleWindowTitle, copy)
-        k = cv2.waitKey(1) & 0xFF
+            copy = work_image.copy()
+            cv2.rectangle(copy, (ix, iy), (x_, y_), (0, 255, 0), line_thickness)
+            cv2.imshow(RectangleWindowTitle, copy)
+        k = cv2.waitKeyEx(1) & 0xFF
+        if k != 255:
+            print(k)
         if k == 13 and not rectangle_drawing:  # Enter: Confirm selection
             retvalue = True
             break
-        elif k == 27:  # Escape: Cancel selection
+        elif k == 82:   # Up
+            if iy > 0:
+                iy -= 1
+                y_ -= 1
+                RectangleTopLeft = (ix, iy)
+                RectangleBottomRight = (x_, y_)
+        elif k == 84:   # Down
+            if y_ < img_height:
+                iy += 1
+                y_ += 1
+                RectangleTopLeft = (ix, iy)
+                RectangleBottomRight = (x_, y_)
+        elif k == 81:   # Left
+            if ix > 0:
+                ix -= 1
+                x_ -= 1
+                RectangleTopLeft = (ix, iy)
+                RectangleBottomRight = (x_, y_)
+        elif k == 83:   # Right
+            if x_ < img_width:
+                ix += 1
+                x_ += 1
+                RectangleTopLeft = (ix, iy)
+                RectangleBottomRight = (x_, y_)
+        elif k == 27:  # Escape: Restore previous selection, for cropping
+            if is_cropping and CropAreaDefined:
+                RectangleTopLeft = CropTopLeft
+                RectangleBottomRight = CropBottomRight
+                retvalue = True
+            break
+        elif k == 46 or k == 120 or k == 32:     # Space, X or Supr (inNum keypad) delete selection
             break
     cv2.destroyAllWindows()
     logging.debug("Destroying window %s", RectangleWindowTitle)
@@ -1258,6 +1301,7 @@ def select_cropping_area():
     global perform_cropping
     global CropTopLeft, CropBottomRight
     global CropAreaDefined
+    global RectangleTopLeft, RectangleBottomRight
 
     # Disable all buttons in main window
     button_status_change_except(0, DISABLED)
@@ -1265,7 +1309,7 @@ def select_cropping_area():
 
     RectangleWindowTitle = CropWindowTitle
 
-    if select_rectangle_area(True):
+    if select_rectangle_area(is_cropping=True):
         CropAreaDefined = True
         button_status_change_except(0, NORMAL)
         CropTopLeft = RectangleTopLeft
@@ -2076,6 +2120,7 @@ def video_generation_loop():
     global ffmpeg_process
     global frames_to_encode
     global app_status_label
+    global BatchJobRunning
 
     if ffmpeg_encoding_status == ffmpeg_state.Pending:
         # Check for special cases first
@@ -2087,6 +2132,7 @@ def video_generation_loop():
                 "Video cannot be generated.\r\n"
                 "No frames in target folder match the specified range.\r\n"
                 "Please review your settings and try again.")
+            generation_exit()  # Restore all settings to normal
         elif not valid_generated_frame_range():
             status_str = "Status: No frames to encode"
             app_status_label.config(text=status_str, fg='red')
@@ -2097,6 +2143,7 @@ def video_generation_loop():
                 "allow video generation.\r\n"
                 "Please regenerate frames making sure option "
                 "\'Skip Frame regeneration\' is not selected, and try again.")
+            generation_exit()  # Restore all settings to normal
         else:
             logging.debug(
                 "First filename in list: %s, extracted number: %s",
