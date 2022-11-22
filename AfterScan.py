@@ -1843,7 +1843,7 @@ def set_hole_search_area(img):
     # Default values are needed before the stabilization search area
     # has been defined, therefore we initialized them here
     HoleSearchTopLeft = (0, 0)
-    HoleSearchBottomRight = (round(width * 0.16), height)
+    HoleSearchBottomRight = (round(width * 0.20), height)
 
 
 """
