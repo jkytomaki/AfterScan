@@ -320,8 +320,9 @@ def update_project_settings():
     if SourceDir in project_settings:
         project_settings.update({SourceDir: project_config.copy()})
     elif SourceDir != '':
-        project_settings[project_config["SourceDir"]] = project_config.copy()
-
+        project_settings.update({SourceDir: project_config.copy()})
+        # project_settings[project_config["SourceDir"]] = project_config.copy()
+    print(project_settings)
 
 def save_project_settings():
     global project_settings, project_settings_filename, project_settings_backup_filename
@@ -332,9 +333,9 @@ def save_project_settings():
         if os.path.isfile(project_settings_filename):
             os.rename(project_settings_filename, project_settings_backup_filename)
             logging.info("Saving project settings:")
-            with open(project_settings_filename, 'w+') as f:
-                logging.info(project_settings)
-                json.dump(project_settings, f)
+        with open(project_settings_filename, 'w+') as f:
+            logging.info(project_settings)
+            json.dump(project_settings, f)
 
 
 def load_project_settings():
@@ -358,7 +359,8 @@ def load_project_settings():
             elif not os.path.isdir(SourceDir) and os.path.isdir(folder):
                 SourceDir = folder
     else:   # No project settings file. Set empty config to force defaults
-        project_settings = default_project_config.copy()
+        project_settings = {SourceDir: default_project_config.copy()}
+        project_settings[SourceDir]["SourceDir"] = SourceDir
 
 
 def save_project_config():
@@ -1045,7 +1047,11 @@ def start_from_current_frame_selection():
 def frames_to_encode_selection(updown):
     global frames_to_encode_spinbox, frames_to_encode_str, frames_to_encode
     project_config["FramesToEncode"] = frames_to_encode_spinbox.get()
-    frames_to_encode = int(frames_to_encode_str.get())
+    frames_to_encode_str.set(project_config["FramesToEncode"])
+    if frames_to_encode_str.get() == 'All':
+        frames_to_encode = 0
+    else:
+        frames_to_encode = int(frames_to_encode_str.get())
     if project_config["FramesToEncode"] == '0':
         if updown == 'up':
             frames_to_encode_str.set('1')
@@ -1055,8 +1061,14 @@ def frames_to_encode_selection(updown):
 
 def frames_to_encode_spinbox_focus_out(event):
     global frames_to_encode_spinbox, frames_to_encode_str, frames_to_encode
+
     project_config["FramesToEncode"] = frames_to_encode_spinbox.get()
-    frames_to_encode = int(project_config["FramesToEncode"])
+    frames_to_encode_str.set(project_config["FramesToEncode"])
+    if frames_to_encode_str.get() == 'All':
+        frames_to_encode = 0
+    else:
+        frames_to_encode = int(frames_to_encode_str.get())
+
 
 
 def fill_borders_selection():
@@ -1244,9 +1256,9 @@ def select_rectangle_area(is_cropping=False):
     # rectangle_refresh = False
     cv2.imshow(RectangleWindowTitle, work_image)
     if is_demo:
-        cv2.resizeWindow(RectangleWindowTitle, round(win_x/2), round(win_y/2))
+        cv2.resizeWindow(RectangleWindowTitle, 3*round(win_x/2), round(win_y/2))
     else:
-        cv2.resizeWindow(RectangleWindowTitle, win_x, win_y)
+        cv2.resizeWindow(RectangleWindowTitle, 3*win_x, win_y)
     while 1:
         if rectangle_refresh:
             copy = work_image.copy()
@@ -1385,7 +1397,8 @@ def select_custom_template():
             win_y = int(img_bw.shape[0] * area_select_image_factor)
             cv2.namedWindow(CustomTemplateWindowTitle, flags=cv2.WINDOW_KEEPRATIO)
             cv2.imshow(CustomTemplateWindowTitle, img_bw)
-            cv2.resizeWindow(CustomTemplateWindowTitle, round(win_x/2), round(win_y/2))
+            cv2.resizeWindow(CustomTemplateWindowTitle, 600, round(win_y/2))
+            cv2.moveWindow(CustomTemplateWindowTitle, win.winfo_x()+100, win.winfo_y()+30)
             cv2.waitKey(0)
             cv2.destroyAllWindows()
         else:
@@ -1630,6 +1643,9 @@ def stabilize_image(img):
     width = img.shape[1]
     height = img.shape[0]
 
+    # Create a project id (folder name) for the stats logging below
+    project_id = os.path.split(SourceDir)[-1]
+
     # Get crop height to calculate if part of the image will be missing
     crop_height = CropBottomRight[1]-CropTopLeft[1]
 
@@ -1663,7 +1679,6 @@ def stabilize_image(img):
     # Log frame alignment info for analysis
     # Items logged: Tag, project id, Frame number, missing pixel rows, location (bottom/top), Vertical shift
     if missing_bottom < 0 or missing_top < 0:
-        project_id = os.path.split(SourceDir)[-1]
         if ExpertMode and stabilization_bounds_alert.get():
             win.bell()
         if missing_bottom < 0:
@@ -1681,9 +1696,9 @@ def stabilize_image(img):
     translated_image = cv2.warpAffine(src=img, M=translation_matrix,
                                       dsize=(width, height))
 
-    logging.debug("Stabilizing frame %i (%ix%i): (%i,%i) to move (%i, %i) -> (%ix%i)",
-                  CurrentFrame, img.shape[1], img.shape[0],
-                  top_left[0], top_left[1], move_x, move_y,
+    logging.debug("FrameStabilizeTag, %s, %i, %ix%i, %i,%i, %ix%i",
+                  project_id, CurrentFrame, img.shape[1], img.shape[0],
+                  move_x, move_y,
                   translated_image.shape[1], translated_image.shape[0])
 
     return translated_image
@@ -2026,9 +2041,6 @@ def frame_generation_loop():
 
     display_image(img)
 
-    logging.debug("Display image: %s, target size: (%i, %i), "
-                  "CurrentFrame %i", os.path.basename(file),
-                  img.shape[1], img.shape[0], CurrentFrame)
     if img.shape[1] % 2 == 1 or img.shape[0] % 2 == 1:
         logging.error("Target size, one odd dimension")
         status_str = "Status: Frame %d - odd size" % CurrentFrame
