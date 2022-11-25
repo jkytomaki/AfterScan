@@ -322,7 +322,6 @@ def update_project_settings():
     elif SourceDir != '':
         project_settings.update({SourceDir: project_config.copy()})
         # project_settings[project_config["SourceDir"]] = project_config.copy()
-    print(project_settings)
 
 def save_project_settings():
     global project_settings, project_settings_filename, project_settings_backup_filename
@@ -1239,7 +1238,7 @@ def select_rectangle_area(is_cropping=False):
     if not is_cropping:   # only take left stripe if not for cropping
         original_image = get_image_left_stripe(original_image)
     # Stabilize image to make sure target image matches user visual definition
-    if is_cropping:
+    if is_cropping and perform_stabilization.get():
         original_image = stabilize_image(original_image)
     # Scale area selection image as required
     work_image = np.copy(original_image)
@@ -1265,43 +1264,47 @@ def select_rectangle_area(is_cropping=False):
             cv2.rectangle(copy, (ix, iy), (x_, y_), (0, 255, 0), line_thickness)
             cv2.imshow(RectangleWindowTitle, copy)
         k = cv2.waitKeyEx(1) & 0xFF
-        if k != 255:
-            print(k)
-        if k == 13 and not rectangle_drawing:  # Enter: Confirm selection
-            retvalue = True
-            break
-        elif k == 82:   # Up
-            if iy > 0:
-                iy -= 1
-                y_ -= 1
-                RectangleTopLeft = (ix, iy)
-                RectangleBottomRight = (x_, y_)
-        elif k == 84:   # Down
-            if y_ < img_height:
-                iy += 1
-                y_ += 1
-                RectangleTopLeft = (ix, iy)
-                RectangleBottomRight = (x_, y_)
-        elif k == 81:   # Left
-            if ix > 0:
-                ix -= 1
-                x_ -= 1
-                RectangleTopLeft = (ix, iy)
-                RectangleBottomRight = (x_, y_)
-        elif k == 83:   # Right
-            if x_ < img_width:
-                ix += 1
-                x_ += 1
-                RectangleTopLeft = (ix, iy)
-                RectangleBottomRight = (x_, y_)
-        elif k == 27:  # Escape: Restore previous selection, for cropping
-            if is_cropping and CropAreaDefined:
-                RectangleTopLeft = CropTopLeft
-                RectangleBottomRight = CropBottomRight
+        if not rectangle_drawing:
+            if k in [81, 82, 83, 84]:
+                ix = RectangleTopLeft[0]
+                iy = RectangleTopLeft[1]
+                x_ = RectangleBottomRight[0]
+                y_ = RectangleBottomRight[1]
+            if k == 13:  # Enter: Confirm selection
                 retvalue = True
-            break
-        elif k == 46 or k == 120 or k == 32:     # Space, X or Supr (inNum keypad) delete selection
-            break
+                break
+            elif k == 82:   # Up
+                if iy > 0:
+                    iy -= 1
+                    y_ -= 1
+                    RectangleTopLeft = (ix, iy)
+                    RectangleBottomRight = (x_, y_)
+            elif k == 84:   # Down
+                if y_ < img_height:
+                    iy += 1
+                    y_ += 1
+                    RectangleTopLeft = (ix, iy)
+                    RectangleBottomRight = (x_, y_)
+            elif k == 81:   # Left
+                if ix > 0:
+                    ix -= 1
+                    x_ -= 1
+                    RectangleTopLeft = (ix, iy)
+                    RectangleBottomRight = (x_, y_)
+            elif k == 83:   # Right
+                if x_ < img_width:
+                    ix += 1
+                    x_ += 1
+                    RectangleTopLeft = (ix, iy)
+                    RectangleBottomRight = (x_, y_)
+            elif k == 27:  # Escape: Restore previous selection, for cropping
+                if is_cropping and CropAreaDefined:
+                    RectangleTopLeft = CropTopLeft
+                    RectangleBottomRight = CropBottomRight
+                    retvalue = True
+                break
+            elif k == 46 or k == 120 or k == 32:     # Space, X or Supr (inNum keypad) delete selection
+                break
     cv2.destroyAllWindows()
     logging.debug("Destroying window %s", RectangleWindowTitle)
 
@@ -1681,12 +1684,16 @@ def stabilize_image(img):
     if missing_bottom < 0 or missing_top < 0:
         if ExpertMode and stabilization_bounds_alert.get():
             win.bell()
+        # Tag evolution
+        # FrameAlignTag: project_id, CurrentFrame, missing rows, top/bottom, move_y)
+        # FrameAlignTag-2: project_id, CurrentFrame, +/- missing rows, move_y, move_x)
         if missing_bottom < 0:
-            logging.debug("FrameAlignTag, %s, %i, %i, bottom, %i",
-                          project_id, CurrentFrame, abs(missing_bottom), move_y)
+            # logging.debug("FrameAlignTag, %s, %i, %i, bottom, %i", project_id, CurrentFrame, abs(missing_bottom), move_y)
+            missing_rows = -missing_bottom
         if missing_top < 0:
-            logging.debug("FrameAlignTag, %s, %i, %i, top, %i",
-                          project_id, CurrentFrame, abs(missing_top), move_y)
+            # logging.debug("FrameAlignTag, %s, %i, %i, top, %i", project_id, CurrentFrame, abs(missing_top), move_y)
+            missing_rows = missing_top
+        logging.debug("FrameAlignTag-2, %s, %i, %i, bottom, %i", project_id, CurrentFrame, missing_rows, move_y, move_x)
     # Create the translation matrix using move_x and move_y (NumPy array)
     translation_matrix = np.array([
         [1, 0, move_x],
@@ -1921,7 +1928,7 @@ def start_convert():
                     datetime.now().strftime("%Y_%m_%d-%H-%M-%S") + ".mp4")
                 video_filename_name.delete(0, 'end')
                 video_filename_name.insert('end', TargetVideoFilename)
-            elif ext == "":
+            elif ext not in ['.mp4', '.MP4', '.mkv', '.MKV']:     # ext == "" does not work if filename contains dots ('Av. Manzanares')
                 TargetVideoFilename += ".mp4"
                 video_filename_name.delete(0, 'end')
                 video_filename_name.insert('end', TargetVideoFilename)
@@ -2274,7 +2281,7 @@ def afterscan_init():
     log_path = os.path.dirname(__file__)
     if log_path == "":
         log_path = os.getcwd()
-    log_file_fullpath = log_path + "/AfterScan.debug.log"
+    log_file_fullpath = log_path + "/AfterScan." + time.strftime("%Y%m%d") + ".log"
     logging.basicConfig(
         level=LogLevel,
         format="%(asctime)s [%(levelname)s] %(message)s",
