@@ -1679,9 +1679,9 @@ def stabilize_image(img):
     # missing_top = top_left[1] - CropTopLeft[1]
     missing_bottom = height - CropBottomRight[1] + move_y
     missing_top = CropTopLeft[1] - move_y
-    # Log frame alignment info for analysis
+    # Log frame alignment info for analysis (only when in convert loop)
     # Items logged: Tag, project id, Frame number, missing pixel rows, location (bottom/top), Vertical shift
-    if missing_bottom < 0 or missing_top < 0:
+    if ConvertLoopRunning and (missing_bottom < 0 or missing_top < 0):
         if ExpertMode and stabilization_bounds_alert.get():
             win.bell()
         # Tag evolution
@@ -1693,7 +1693,7 @@ def stabilize_image(img):
         if missing_top < 0:
             # logging.debug("FrameAlignTag, %s, %i, %i, top, %i", project_id, CurrentFrame, abs(missing_top), move_y)
             missing_rows = missing_top
-        logging.debug("FrameAlignTag-2, %s, %i, %i, bottom, %i", project_id, CurrentFrame, missing_rows, move_y, move_x)
+        logging.debug("FrameAlignTag-2, %s, %i, %i, %i, %i", project_id, CurrentFrame, missing_rows, move_y, move_x)
     # Create the translation matrix using move_x and move_y (NumPy array)
     translation_matrix = np.array([
         [1, 0, move_x],
@@ -1703,10 +1703,10 @@ def stabilize_image(img):
     translated_image = cv2.warpAffine(src=img, M=translation_matrix,
                                       dsize=(width, height))
 
-    logging.debug("FrameStabilizeTag, %s, %i, %ix%i, %i,%i, %ix%i",
-                  project_id, CurrentFrame, img.shape[1], img.shape[0],
-                  move_x, move_y,
-                  translated_image.shape[1], translated_image.shape[0])
+    if ConvertLoopRunning:
+        logging.debug("FrameStabilizeTag, %s, %i, %ix%i, %i, %i",
+                      project_id, CurrentFrame, img.shape[1], img.shape[0],
+                      move_x, move_y)
 
     return translated_image
 
