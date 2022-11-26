@@ -26,6 +26,7 @@ import os
 from datetime import datetime
 import json
 from json.decoder import JSONDecodeError
+from operator import itemgetter
 
 # Global variables
 global win
@@ -71,6 +72,7 @@ def show_text(message):
 
 def select_log_file():
     project_list = []
+    batch_list = []
     # show an "Open" dialog box and return the path to the selected file
     log_filename = filedialog.askopenfilename(filetypes=[("Log files", "*.log")])
     if not log_filename:
@@ -85,15 +87,35 @@ def select_log_file():
                 project_list.append(project)
     # Generate csvs from log file
     for project in project_list:
-        csv_filename = temp = os.path.dirname(log_filename) + '/' + project + '.csv'
         # open(csv_filename,'w').writelines(line for line in open(log_filename) if 'FrameAlignTag' in line and project in line)
         faulty_frames = 0
-        with open(csv_filename, 'w') as csv_file, open(log_filename) as log_file:
+        csv_index = 0
+        last_frame = -1
+        first_frame = -1
+        with open(log_filename) as log_file:
+            csv_basename = project + '.' + str(csv_index) + '.csv'
+            csv_filename = temp = os.path.dirname(log_filename) + '/' + csv_basename
+            csv_file = open(csv_filename, 'w')
             for line in log_file:
                 if 'FrameAlignTag' in line and project in line:
+                    chunks = line.split(',')
+                    frame = int(chunks[3])
+                    if first_frame == -1:
+                        first_frame = frame
+                    if (frame < last_frame):
+                        show_text(csv_basename + ': %i frames out of bounds (%i, %i)' % (faulty_frames, first_frame, last_frame))
+                        faulty_frames = 0
+                        first_frame = frame
+                        csv_file.close()
+                        csv_index += 1
+                        csv_basename = project + '.' + str(csv_index) + '.csv'
+                        csv_filename = temp = os.path.dirname(log_filename) + '/' + csv_basename
+                        csv_file = open(csv_filename, 'w')
+                    last_frame = frame
                     csv_file.writelines(line)
                     faulty_frames += 1
-            show_text(project + ': %i frames out of bounds'%faulty_frames )
+            show_text(csv_basename + ': %i frames out of bounds (%i, %i)' % (faulty_frames, first_frame, last_frame))
+            csv_file.close()
 
 
 def select_csv_file():
@@ -145,21 +167,29 @@ def build_ui():
     select_log_file_btn = Button(main_frame, text='Select Log File', width=20,
                                height=1, command=select_log_file,
                                activebackground='green',
-                               activeforeground='white', padx=5, pady=5)
-    select_log_file_btn.pack(side=TOP)
+                               activeforeground='white')
+    select_log_file_btn.pack(side=TOP, padx=2, pady=2, anchor=W)
     # Select csv file button
     select_csv_file_btn = Button(main_frame, text='Select CSV File', width=20,
                                height=1, command=select_csv_file,
                                activebackground='green',
-                               activeforeground='white', padx=5, pady=5)
-    select_csv_file_btn.pack(side=TOP)
+                               activeforeground='white')
+    select_csv_file_btn.pack(side=TOP, padx=2, pady=2, anchor=W)
     # Application Exit button
     Exit_btn = Button(main_frame, text="Exit", width=20,
                       height=1, command=exit_app, activebackground='red',
-                      activeforeground='white', padx=5, pady=5)
-    Exit_btn.pack(side=TOP)
+                      activeforeground='white')
+    Exit_btn.pack(side=TOP, padx=2, pady=2, anchor=W)
+    # Text box to display results
     text_box = Text(main_frame, height=20, width=70)
-    text_box.pack(side=TOP)
+    text_box.pack(side=LEFT, expand=True, padx=2, pady=2)
+    # job listbox scrollbars
+    text_box_scrollbar_y = Scrollbar(main_frame, orient="vertical")
+    text_box_scrollbar_y.config(command=text_box.yview)
+    text_box_scrollbar_y.pack(side=RIGHT, fill=Y)
+    text_box.config(yscrollcommand=text_box_scrollbar_y.set)
+    text_box_scrollbar_y.config(command=text_box.yview)
+
     win.update_idletasks()
 
 def app_init():
@@ -169,8 +199,8 @@ def app_init():
 
     load_general_config()
 
-    app_width = 600
-    app_height = 400
+    app_width = 620
+    app_height = 500
 
     win.title('AfterScan ' + __version__)  # setting title of the window
     win.geometry('600x400')  # setting the size of the window
