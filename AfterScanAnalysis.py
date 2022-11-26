@@ -83,7 +83,7 @@ def select_log_file():
         if 'FrameAlignTag' in line:
             chunks = line.split(',')
             project = chunks[2]
-            if project not in project_list:
+            if not project.replace(' ', '').isnumeric() and project not in project_list:
                 project_list.append(project)
     # Generate csvs from log file
     for project in project_list:
@@ -114,7 +114,10 @@ def select_log_file():
                     last_frame = frame
                     csv_file.writelines(line)
                     faulty_frames += 1
-            show_text(csv_basename + ': %i frames out of bounds (%i, %i)' % (faulty_frames, first_frame, last_frame))
+            if (first_frame < last_frame):
+                show_text(csv_basename + ': %i frames out of bounds (%i, %i)' % (faulty_frames, first_frame, last_frame))
+            else:
+                show_text(csv_basename + ': No frames out of bounds')
             csv_file.close()
 
 

@@ -56,6 +56,8 @@ last_absolute_frame = 0
 frame_scale_refresh_done = True
 frame_scale_refresh_pending = False
 frames_to_encode = 0
+from_frame = 0
+to_frame = 0
 CurrentFrame = 0
 StartFrame = 0
 global work_image, base_image, original_image
@@ -69,6 +71,7 @@ project_settings_backup_filename = os.path.join(script_dir, "AfterScan-projects.
 project_config_basename = "AfterScan-project.json"
 project_config_filename = ""
 project_config_from_file = True
+project_id = "No Project"
 job_list_filename = os.path.join(script_dir, "AfterScan_job_list.json")
 pattern_filename_r8 = os.path.join(script_dir, "Pattern.R8.jpg")
 pattern_filename_s8 = os.path.join(script_dir, "Pattern.S8.jpg")
@@ -88,7 +91,7 @@ default_project_config = {
     "VideoFps": "18",
     "VideoResolution": "Unchanged",
     "CurrentFrame": 0,
-    "StartFromCurrentFrame": False,
+    "EncodeAllFrames": True,
     "FramesToEncode": "All",
     "StabilizationThreshold": "240",
     "PerformStabilization": False,
@@ -249,9 +252,10 @@ Configuration file support functions
 def set_project_defaults():
     global project_config
     global perform_cropping, generate_video, resolution_dropdown_selected
-    global frame_slider, start_from_current_frame, frames_to_encode_str
+    global frame_slider, encode_all_frames, frames_to_encode_str
     global perform_stabilization, skip_frame_regeneration, ffmpeg_preset
     global video_filename_name, fill_borders
+    global frame_from_str, frame_to_str
 
     project_config["PerformCropping"] = False
     perform_cropping.set(project_config["PerformCropping"])
@@ -261,10 +265,12 @@ def set_project_defaults():
     resolution_dropdown_selected.set(project_config["VideoResolution"])
     project_config["CurrentFrame"] = 0
     frame_slider.set(project_config["CurrentFrame"])
-    project_config["StartFromCurrentFrame"] = False
-    start_from_current_frame.set(project_config["StartFromCurrentFrame"])
-    project_config["FramesToEncode"] = "All"
-    frames_to_encode_str.set(project_config["FramesToEncode"])
+    project_config["EncodeAllFrames"] = True
+    encode_all_frames.set(project_config["EncodeAllFrames"])
+    project_config["FramesFrom"] = "0"
+    frame_from_str.set(project_config["FrameFrom"])
+    project_config["FrameTo"] = "0"
+    frame_to_str.set(project_config["FrameTo"])
     project_config["PerformStabilization"] = False
     perform_stabilization.set(project_config["PerformStabilization"])
     project_config["skip_frame_regeneration"] = False
@@ -364,11 +370,11 @@ def load_project_settings():
 
 def save_project_config():
     global skip_frame_regeneration
-    global frames_to_encode_spinbox
     global ffmpeg_preset
     global StabilizeAreaDefined, film_hole_height
     global CurrentFrame
     global video_filename_name
+    global frame_from_str, frame_to_str
 
     # Do not save if current project comes from batch job
     if not project_config_from_file or IgnoreConfig:
@@ -376,12 +382,13 @@ def save_project_config():
     # Write project data upon exit
     project_config["SourceDir"] = SourceDir
     project_config["CurrentFrame"] = CurrentFrame
-    project_config["FramesToEncode"] = frames_to_encode_spinbox.get()
     project_config["skip_frame_regeneration"] = skip_frame_regeneration.get()
     project_config["FFmpegPreset"] = ffmpeg_preset.get()
     project_config["ProjectConfigDate"] = str(datetime.now())
     project_config["PerformCropping"] = perform_cropping.get()
     project_config["VideoFilename"] = video_filename_name.get()
+    project_config["FrameFrom"] = int(frame_from_str.get())
+    project_config["FrameTo"] = int(frame_to_str.get())
     if StabilizeAreaDefined:
         project_config["HoleHeight"] = film_hole_height
         project_config["PerformStabilization"] = perform_stabilization.get()
@@ -440,7 +447,7 @@ def decode_project_config():
     global VideoFps, video_fps_dropdown_selected
     global resolution_dropdown, resolution_dropdown_selected
     global frame_input_filename_pattern
-    global start_from_current_frame, frames_to_encode
+    global encode_all_frames, frames_to_encode
     global skip_frame_regeneration
     global generate_video, video_filename_name
     global CropTopLeft, CropBottomRight, perform_cropping
@@ -451,6 +458,7 @@ def decode_project_config():
     global pattern_filename, expected_pattern_pos
     global pattern_filename_custom, expected_pattern_pos_custom
     global custom_stabilization_btn
+    global frame_from_str, frame_to_str
 
     if IgnoreConfig:
         return
@@ -488,20 +496,19 @@ def decode_project_config():
     else:
         CurrentFrame = 0
         frame_slider.set(CurrentFrame)
-    if 'StartFromCurrentFrame' in project_config:
-        start_from_current_frame.set(project_config["StartFromCurrentFrame"])
+    if 'EncodeAllFrames' in project_config:
+        encode_all_frames.set(project_config["EncodeAllFrames"])
     else:
-        start_from_current_frame.set(False)
-    if 'FramesToEncode' in project_config:
-        frames_to_encode_str.set(project_config["FramesToEncode"])
-        if frames_to_encode_str.get() == 'All':
-            frames_to_encode = 0
-        else:
-            frames_to_encode = int(frames_to_encode_str.get())
-        # frames_to_encode_spinbox.set(frames_to_encode)
+        encode_all_frames.set(True)
+    if 'FrameFrom' in project_config:
+        frame_from_str.set(str(project_config["FrameFrom"]))
     else:
-        frames_to_encode = "All"
-        frames_to_encode_str.set(frames_to_encode)
+        frame_from_str.set('0')
+    if 'FrameTo' in project_config:
+        frame_to_str.set(str(project_config["FrameTo"]))
+    else:
+        frame_to_str.set('0')
+    frames_to_encode = int(frame_to_str.get()) - int(frame_from_str.get()) + 1
 
     if not 'FilmType' in project_config:
         project_config["FilmType"] = 'S8'
@@ -614,10 +621,11 @@ Job list support functions
 """
 def job_list_add_current():
     global job_list
-    global CurrentFrame, frames_to_encode
+    global CurrentFrame, StartFrame, frames_to_encode
     global project_config, video_filename_name
     global job_list_listbox
-    global start_from_current_frame, SourceDirFileList
+    global encode_all_frames, SourceDirFileList
+    global frame_from_str, frame_to_str
 
     entry_name = video_filename_name.get()
     if entry_name == "":
@@ -626,15 +634,21 @@ def job_list_add_current():
         entry_name = entry_name + ", R8, "
     else:
         entry_name = entry_name + ", S8, "
-    if frames_to_encode > 0:
-        entry_name = entry_name + str(frames_to_encode)
-    else:
-        entry_name = entry_name + str(len(SourceDirFileList))
-    entry_name = entry_name + " frames from frame "
-    if start_from_current_frame.get():
-        entry_name = entry_name + str(CurrentFrame)
-    else:
+    entry_name = entry_name + "Frames "
+    if encode_all_frames.get():
         entry_name = entry_name + "0"
+        frames_to_encode = len(SourceDirFileList)
+    else:
+        entry_name = entry_name + frame_from_str.get()
+        frames_to_encode = int(frame_to_str.get()) - int(frame_from_str.get()) + 1
+    entry_name = entry_name + "-"
+    if encode_all_frames.get():
+        entry_name = entry_name + str(len(SourceDirFileList))
+    else:
+        entry_name = entry_name + frame_to_str.get()
+    entry_name = entry_name + " ("
+    entry_name = entry_name + str(frames_to_encode)
+    entry_name = entry_name + " frames)"
     if project_config["GenerateVideo"]:
         if ffmpeg_preset.get() == 'veryslow':
             entry_name = entry_name + ", HQ video"
@@ -927,9 +941,12 @@ def widget_state_refresh():
     global stabilization_bounds_alert_checkbox
     global custom_stabilization_btn
     global film_type_S8_rb, film_type_R8_rb
+    global encode_all_frames, frame_from_entry, frame_to_entry
 
     if CropTopLeft != (0, 0) and CropBottomRight != (0, 0):
         CropAreaDefined = True
+    frame_from_entry.config(state=NORMAL if not encode_all_frames.get() else DISABLED)
+    frame_to_entry.config(state=NORMAL if not encode_all_frames.get() else DISABLED)
     perform_cropping_checkbox.config(
         state=NORMAL if CropAreaDefined else DISABLED)
     generate_video_checkbox.config(
@@ -1038,37 +1055,10 @@ def perform_cropping_selection():
             state=NORMAL if perform_stabilization.get() and perform_cropping.get() else DISABLED)
 
 
-def start_from_current_frame_selection():
-    global start_from_current_frame
-    project_config["StartFromCurrentFrame"] = start_from_current_frame.get()
-
-
-def frames_to_encode_selection(updown):
-    global frames_to_encode_spinbox, frames_to_encode_str, frames_to_encode
-    project_config["FramesToEncode"] = frames_to_encode_spinbox.get()
-    frames_to_encode_str.set(project_config["FramesToEncode"])
-    if frames_to_encode_str.get() == 'All':
-        frames_to_encode = 0
-    else:
-        frames_to_encode = int(frames_to_encode_str.get())
-    if project_config["FramesToEncode"] == '0':
-        if updown == 'up':
-            frames_to_encode_str.set('1')
-        else:
-            frames_to_encode_str.set('All')
-
-
-def frames_to_encode_spinbox_focus_out(event):
-    global frames_to_encode_spinbox, frames_to_encode_str, frames_to_encode
-
-    project_config["FramesToEncode"] = frames_to_encode_spinbox.get()
-    frames_to_encode_str.set(project_config["FramesToEncode"])
-    if frames_to_encode_str.get() == 'All':
-        frames_to_encode = 0
-    else:
-        frames_to_encode = int(frames_to_encode_str.get())
-
-
+def encode_all_frames_selection():
+    global encode_all_frames
+    project_config["EncodeAllFrames"] = encode_all_frames.get()
+    widget_state_refresh()
 
 def fill_borders_selection():
     global fill_borders
@@ -1641,13 +1631,11 @@ def stabilize_image(img):
     global StabilizationThreshold
     global CropTopLeft, CropBottomRight, win
     global stabilization_bounds_alert
+    global project_id
 
     # Get image dimensions to perform image shift later
     width = img.shape[1]
     height = img.shape[0]
-
-    # Create a project id (folder name) for the stats logging below
-    project_id = os.path.split(SourceDir)[-1]
 
     # Get crop height to calculate if part of the image will be missing
     crop_height = CropBottomRight[1]-CropTopLeft[1]
@@ -1688,10 +1676,8 @@ def stabilize_image(img):
         # FrameAlignTag: project_id, CurrentFrame, missing rows, top/bottom, move_y)
         # FrameAlignTag-2: project_id, CurrentFrame, +/- missing rows, move_y, move_x)
         if missing_bottom < 0:
-            # logging.debug("FrameAlignTag, %s, %i, %i, bottom, %i", project_id, CurrentFrame, abs(missing_bottom), move_y)
             missing_rows = -missing_bottom
         if missing_top < 0:
-            # logging.debug("FrameAlignTag, %s, %i, %i, top, %i", project_id, CurrentFrame, abs(missing_top), move_y)
             missing_rows = missing_top
         logging.debug("FrameAlignTag-2, %s, %i, %i, %i, %i", project_id, CurrentFrame, missing_rows, move_y, move_x)
     # Create the translation matrix using move_x and move_y (NumPy array)
@@ -1882,25 +1868,26 @@ def start_convert():
     global SourceDirFileList
     global TargetVideoFilename
     global CurrentFrame, StartFrame
-    global start_from_current_frame
+    global encode_all_frames
     global frames_to_encode
     global ffmpeg_success, ffmpeg_encoding_status
+    global frame_from_str, frame_to_str
+    global project_id
+
 
     if ConvertLoopRunning:
         ConvertLoopExitRequested = True
     else:
-        if not start_from_current_frame.get():
-            CurrentFrame = 0
-            project_config["CurrentFrame"] = CurrentFrame
-        StartFrame = CurrentFrame
         # Centralize 'frames_to_encode' update here
-        if frames_to_encode_spinbox.get() == 'All':
-            frames_to_encode = len(SourceDirFileList) - StartFrame
+        if encode_all_frames.get():
+            StartFrame = 0
+            frames_to_encode = len(SourceDirFileList)
         else:
-            frames_to_encode = int(frames_to_encode_spinbox.get())
+            StartFrame = int(frame_from_str.get())
+            frames_to_encode = int(frame_to_str.get()) - int(frame_from_str.get()) + 1
             if StartFrame + frames_to_encode >= len(SourceDirFileList):
                 frames_to_encode = len(SourceDirFileList) - StartFrame + 1
-        project_config["FramesToEncode"] = str(frames_to_encode)
+        CurrentFrame = StartFrame
         if frames_to_encode == 0:
             tk.messagebox.showwarning(
                 "No frames match range",
@@ -1948,6 +1935,13 @@ def start_convert():
                                         "Template is bigger than search area. "
                                         "Please select a smaller template.")
                 ConvertLoopExitRequested = True
+            else:
+                # Create a project id (folder name) for the stats logging below
+                # Replace any commas by semi colon to avoid problems when generating csv by AfterScanAnalysis
+                project_id = os.path.split(SourceDir)[-1].replace(',', ';')
+                # Log header line for project, to allow AfterScanAnalysis in case there are no out of bounds frames
+                logging.debug("FrameAlignTag-2, %s, 0, 0, 0, 0", project_id)
+
             win.after(1, frame_generation_loop)
         elif generate_video.get():
             ffmpeg_success = False
@@ -2348,8 +2342,8 @@ def build_ui():
     global fill_borders_thickness, fill_borders_thickness_slider
     global fill_borders_thickness_slider, fill_borders_mode_label
     global fill_borders_mode_label_dropdown, fill_borders_mode
-    global start_from_current_frame
-    global frames_to_encode_spinbox, frames_to_encode_str, frames_to_encode
+    global encode_all_frames
+    global frames_to_encode_str, frames_to_encode
     global save_bg, save_fg
     global source_folder_btn, target_folder_btn
     global perform_stabilization, perform_stabilization_checkbox
@@ -2381,6 +2375,7 @@ def build_ui():
     global start_batch_btn, add_job_btn, delete_job_btn, rerun_job_btn
     global stabilization_bounds_alert_checkbox, stabilization_bounds_alert
     global film_type_S8_rb, film_type_R8_rb
+    global frame_from_str, frame_to_str, frame_from_entry, frame_to_entry
 
     # Create a frame to add a border to the preview
     left_area_frame = Frame(win)
@@ -2488,32 +2483,30 @@ def build_ui():
     postprocessing_frame.pack(side=TOP, padx=2, pady=2, ipadx=5)
     postprocessing_row = 0
 
-    # Check box to select start from current frame
-    start_from_current_frame = tk.BooleanVar(value=False)
-    start_from_current_frame_checkbox = tk.Checkbutton(
-        postprocessing_frame, text='Start from current frame',
-        variable=start_from_current_frame, onvalue=True, offvalue=False,
-        command=start_from_current_frame_selection, width=20)
-    start_from_current_frame_checkbox.grid(row=postprocessing_row, column=0,
+    # Check box to select encoding of all frames
+    encode_all_frames = tk.BooleanVar(value=False)
+    encode_all_frames_checkbox = tk.Checkbutton(
+        postprocessing_frame, text='Encode all frames',
+        variable=encode_all_frames, onvalue=True, offvalue=False,
+        command=encode_all_frames_selection, width=14)
+    encode_all_frames_checkbox.grid(row=postprocessing_row, column=0,
                                            columnspan=3, sticky=W)
     postprocessing_row += 1
 
-    # Spinbox to select number of frames to process
+    # Entry to enter start/end frames
     frames_to_encode_label = tk.Label(postprocessing_frame,
-                                      text='Frames to encode:',
-                                      width=16)
-    frames_to_encode_label.grid(row=postprocessing_row, column=0,
-                                columnspan=2, sticky=W)
-    frames_to_encode_str = tk.StringVar(value=str(frames_to_encode))
-    frames_to_encode_selection_aux = postprocessing_frame.register(
-        frames_to_encode_selection)
-    frames_to_encode_spinbox = tk.Spinbox(
-        postprocessing_frame,
-        command=(frames_to_encode_selection_aux, '%d'), width=8,
-        textvariable=frames_to_encode_str, from_=0, to=50000)
-    frames_to_encode_spinbox.grid(row=postprocessing_row, column=2, sticky=W)
-    frames_to_encode_spinbox.bind("<FocusOut>", frames_to_encode_spinbox_focus_out)
-    frames_to_encode_selection('down')
+                                      text='Frame range:',
+                                      width=12)
+    frames_to_encode_label.grid(row=postprocessing_row, column=0, columnspan=2, sticky=W)
+    frame_from_str = tk.StringVar(value=str(from_frame))
+    frame_from_entry = Entry(postprocessing_frame, textvariable=frame_from_str, width=6, borderwidth=1)
+    frame_from_entry.grid(row=postprocessing_row, column=1)
+    frame_from_entry.config(state=DISABLED)
+    frame_to_str = tk.StringVar(value=str(from_frame))
+    frame_to_entry = Entry(postprocessing_frame, textvariable=frame_to_str, width=6, borderwidth=1)
+    frame_to_entry.grid(row=postprocessing_row, column=2, sticky=W)
+    frame_to_entry.config(state=DISABLED)
+
     postprocessing_row += 1
 
     # Check box to do stabilization or not
