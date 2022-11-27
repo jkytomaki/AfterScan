@@ -71,7 +71,7 @@ project_settings_backup_filename = os.path.join(script_dir, "AfterScan-projects.
 project_config_basename = "AfterScan-project.json"
 project_config_filename = ""
 project_config_from_file = True
-project_id = "No Project"
+project_name = "No Project"
 job_list_filename = os.path.join(script_dir, "AfterScan_job_list.json")
 pattern_filename_r8 = os.path.join(script_dir, "Pattern.R8.jpg")
 pattern_filename_s8 = os.path.join(script_dir, "Pattern.S8.jpg")
@@ -297,6 +297,7 @@ def load_general_config():
     global general_config_filename
     global LastSessionDate
     global SourceDir, TargetDir
+    global project_name
 
     # Check if persisted data file exist: If it does, load it
     if not IgnoreConfig and os.path.isfile(general_config_filename):
@@ -315,6 +316,12 @@ def load_general_config():
         # If directory in configuration does not exist, set current working dir
         if not os.path.isdir(SourceDir):
             SourceDir = ""
+            project_name = "No Project"
+        else:
+            # Create a project id (folder name) for the stats logging below
+            # Replace any commas by semi colon to avoid problems when generating csv by AfterScanAnalysis
+            project_name = os.path.split(SourceDir)[-1].replace(',', ';')
+
     if 'FfmpegBinName' in general_config:
         FfmpegBinName = general_config["FfmpegBinName"]
 
@@ -363,6 +370,10 @@ def load_project_settings():
                 logging.debug("Deleting %s from project settings, as it no longer exists", folder)
             elif not os.path.isdir(SourceDir) and os.path.isdir(folder):
                 SourceDir = folder
+                # Create a project id (folder name) for the stats logging below
+                # Replace any commas by semi colon to avoid problems when generating csv by AfterScanAnalysis
+                project_name = os.path.split(SourceDir)[-1].replace(',', ';')
+
     else:   # No project settings file. Set empty config to force defaults
         project_settings = {SourceDir: default_project_config.copy()}
         project_settings[SourceDir]["SourceDir"] = SourceDir
@@ -459,6 +470,7 @@ def decode_project_config():
     global pattern_filename_custom, expected_pattern_pos_custom
     global custom_stabilization_btn
     global frame_from_str, frame_to_str
+    global project_name
 
     if IgnoreConfig:
         return
@@ -468,6 +480,7 @@ def decode_project_config():
         # If directory in configuration does not exist, set current working dir
         if not os.path.isdir(SourceDir):
             SourceDir = ""
+            project_name = "No Project"
         frames_source_dir.delete(0, 'end')
         frames_source_dir.insert('end', SourceDir)
         frames_source_dir.after(100, frames_source_dir.xview_moveto, 1)
@@ -816,6 +829,9 @@ def set_source_folder():
         frames_source_dir.delete(0, 'end')
         frames_source_dir.insert('end', SourceDir)
         frames_source_dir.after(100, frames_source_dir.xview_moveto, 1)
+        # Create a project id (folder name) for the stats logging below
+        # Replace any commas by semi colon to avoid problems when generating csv by AfterScanAnalysis
+        project_name = os.path.split(SourceDir)[-1].replace(',', ';')
 
     general_config["SourceDir"] = SourceDir
 
@@ -1631,7 +1647,7 @@ def stabilize_image(img):
     global StabilizationThreshold
     global CropTopLeft, CropBottomRight, win
     global stabilization_bounds_alert
-    global project_id
+    global project_name
 
     # Get image dimensions to perform image shift later
     width = img.shape[1]
@@ -1673,13 +1689,13 @@ def stabilize_image(img):
         if ExpertMode and stabilization_bounds_alert.get():
             win.bell()
         # Tag evolution
-        # FrameAlignTag: project_id, CurrentFrame, missing rows, top/bottom, move_y)
-        # FrameAlignTag-2: project_id, CurrentFrame, +/- missing rows, move_y, move_x)
+        # FrameAlignTag: project_name, CurrentFrame, missing rows, top/bottom, move_y)
+        # FrameAlignTag-2: project_name, CurrentFrame, +/- missing rows, move_y, move_x)
         if missing_bottom < 0:
             missing_rows = -missing_bottom
         if missing_top < 0:
             missing_rows = missing_top
-        logging.debug("FrameAlignTag-2, %s, %i, %i, %i, %i", project_id, CurrentFrame, missing_rows, move_y, move_x)
+        logging.debug("FrameAlignTag-2, %s, %i, %i, %i, %i", project_name, CurrentFrame, missing_rows, move_y, move_x)
     # Create the translation matrix using move_x and move_y (NumPy array)
     translation_matrix = np.array([
         [1, 0, move_x],
@@ -1691,7 +1707,7 @@ def stabilize_image(img):
 
     if ConvertLoopRunning:
         logging.debug("FrameStabilizeTag, %s, %i, %ix%i, %i, %i",
-                      project_id, CurrentFrame, img.shape[1], img.shape[0],
+                      project_name, CurrentFrame, img.shape[1], img.shape[0],
                       move_x, move_y)
 
     return translated_image
@@ -1872,7 +1888,7 @@ def start_convert():
     global frames_to_encode
     global ffmpeg_success, ffmpeg_encoding_status
     global frame_from_str, frame_to_str
-    global project_id
+    global project_name
 
 
     if ConvertLoopRunning:
@@ -1936,11 +1952,8 @@ def start_convert():
                                         "Please select a smaller template.")
                 ConvertLoopExitRequested = True
             else:
-                # Create a project id (folder name) for the stats logging below
-                # Replace any commas by semi colon to avoid problems when generating csv by AfterScanAnalysis
-                project_id = os.path.split(SourceDir)[-1].replace(',', ';')
                 # Log header line for project, to allow AfterScanAnalysis in case there are no out of bounds frames
-                logging.debug("FrameAlignTag-2, %s, 0, 0, 0, 0", project_id)
+                logging.debug("FrameAlignTag-2, %s, 0, 0, 0, 0", project_name)
 
             win.after(1, frame_generation_loop)
         elif generate_video.get():
