@@ -353,6 +353,7 @@ def save_project_settings():
 def load_project_settings():
     global project_settings, project_settings_filename, default_project_config
     global SourceDir, files_to_delete
+    global project_name
 
     if not IgnoreConfig and os.path.isfile(project_settings_filename):
         f = open(project_settings_filename)
@@ -809,6 +810,7 @@ File handling functions
 def set_source_folder():
     global SourceDir, CurrentFrame, frame_slider, Go_btn, cropping_btn
     global first_absolute_frame
+    global project_name
 
     # Write project data before switching project
     save_project_config()
