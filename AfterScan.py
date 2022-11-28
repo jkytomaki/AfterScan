@@ -393,6 +393,7 @@ def save_project_config():
         return
     # Write project data upon exit
     project_config["SourceDir"] = SourceDir
+    project_config["TargetDir"] = TargetDir
     project_config["CurrentFrame"] = CurrentFrame
     project_config["skip_frame_regeneration"] = skip_frame_regeneration.get()
     project_config["FFmpegPreset"] = ffmpeg_preset.get()
@@ -1903,8 +1904,8 @@ def start_convert():
         else:
             StartFrame = int(frame_from_str.get())
             frames_to_encode = int(frame_to_str.get()) - int(frame_from_str.get()) + 1
-            if StartFrame + frames_to_encode >= len(SourceDirFileList):
-                frames_to_encode = len(SourceDirFileList) - StartFrame + 1
+            if StartFrame + frames_to_encode > len(SourceDirFileList):
+                frames_to_encode = len(SourceDirFileList) - StartFrame
         CurrentFrame = StartFrame
         if frames_to_encode == 0:
             tk.messagebox.showwarning(
@@ -1955,7 +1956,7 @@ def start_convert():
                 ConvertLoopExitRequested = True
             else:
                 # Log header line for project, to allow AfterScanAnalysis in case there are no out of bounds frames
-                logging.debug("FrameAlignTag-2, %s, 0, 0, 0, 0", project_name)
+                logging.debug("FrameAlignTag, %s, %i, %i, 9999, 9999", project_name, StartFrame, frames_to_encode)
 
             win.after(1, frame_generation_loop)
         elif generate_video.get():

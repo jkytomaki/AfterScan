@@ -82,7 +82,7 @@ def select_log_file():
     for line in open(log_filename):
         if 'FrameAlignTag' in line:
             chunks = line.split(',')
-            project = chunks[2]
+            project = chunks[2].strip()
             if not project.replace(' ', '').isnumeric() and project not in project_list:
                 project_list.append(project)
     # Generate csvs from log file
@@ -92,6 +92,8 @@ def select_log_file():
         csv_index = 0
         last_frame = -1
         first_frame = -1
+        first_encoded_frame = 0
+        total_encoded_frames = 0
         with open(log_filename) as log_file:
             csv_basename = project + '.' + str(csv_index) + '.csv'
             csv_filename = temp = os.path.dirname(log_filename) + '/' + csv_basename
@@ -99,11 +101,14 @@ def select_log_file():
             for line in log_file:
                 if 'FrameAlignTag' in line and project in line:
                     chunks = line.split(',')
-                    frame = int(chunks[3])
+                    if chunks[5].strip() == '9999':
+                        first_encoded_frame = int(chunks[3].strip())
+                        total_encoded_frames = int(chunks[4].strip())
+                    frame = int(chunks[3].strip())
                     if first_frame == -1:
                         first_frame = frame
                     if (frame < last_frame):
-                        show_text(csv_basename + ': %i frames out of bounds (%i, %i)' % (faulty_frames, first_frame, last_frame))
+                        show_text(csv_basename + ': %i frames out of bounds (%i, %i)' % (faulty_frames, first_encoded_frame, total_encoded_frames))
                         faulty_frames = 0
                         first_frame = frame
                         csv_file.close()
@@ -114,10 +119,10 @@ def select_log_file():
                     last_frame = frame
                     csv_file.writelines(line)
                     faulty_frames += 1
-            if (first_frame < last_frame):
-                show_text(csv_basename + ': %i frames out of bounds (%i, %i)' % (faulty_frames, first_frame, last_frame))
+            if (faulty_frames > 1):
+                show_text(csv_basename + ': %i frames out of bounds (%i, %i)' % (faulty_frames-1, first_encoded_frame, total_encoded_frames))
             else:
-                show_text(csv_basename + ': No frames out of bounds')
+                show_text(csv_basename + ': No frames out of bounds (%i, %i)'%(first_encoded_frame, total_encoded_frames))
             csv_file.close()
 
 
