@@ -1465,17 +1465,18 @@ def determine_hole_height(img):
     top_left_1 = match_template(template_1, search_img, 230)
     top_left_2 = match_template(template_2, search_img, 230)
     if top_left_1[1] > top_left_2[1]:
-        if tk.messagebox.askyesno(
+        if not BatchJobRunning:
+            if tk.messagebox.askyesno(
                 "Wrong film type detected",
                 "Current project is defined to handle " + project_config["FilmType"] +
                 " film type, however frames seem to be " + other_film_type + ".\r\n"
                 "Do you want to change it now?"):
-            film_type.set(other_film_type)
-            project_config["FilmType"] = other_film_type
-            set_film_type()
-            top_left_aux = top_left_1
-            top_left_1 = top_left_2
-            top_left_2 = top_left_aux
+                film_type.set(other_film_type)
+                project_config["FilmType"] = other_film_type
+                set_film_type()
+                top_left_aux = top_left_1
+                top_left_1 = top_left_2
+                top_left_2 = top_left_aux
     logging.debug("Hole height: %i", top_left_2[1]-top_left_1[1])
     return top_left_2[1]-top_left_1[1]
 
