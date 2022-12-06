@@ -1061,6 +1061,7 @@ def rotation_angle_selection(updown):
     global RotationAngle
     RotationAngle = rotation_angle_spinbox.get()
     project_config["RotationAngle"] = RotationAngle
+    win.after(5, scale_display_update)
 
 
 def rotation_angle_spinbox_focus_out(event):
@@ -1068,6 +1069,7 @@ def rotation_angle_spinbox_focus_out(event):
     global RotationAngle
     RotationAngle = rotation_angle_spinbox.get()
     project_config["RotationAngle"] = RotationAngle
+    win.after(5, scale_display_update)
 
 
 def perform_stabilization_selection():
