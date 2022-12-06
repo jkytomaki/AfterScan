@@ -155,6 +155,7 @@ CropWindowTitle = "Select area to crop, press Enter to confirm, " \
 CustomTemplateTitle = "Select area with film holes to use as template. " \
                        "Press Enter to confirm, Escape to cancel"
 RectangleWindowTitle = ""
+RotationAngle = 0.0
 StabilizeAreaDefined = False
 StabilizationThreshold = 240.0
 CropAreaDefined = False
@@ -467,6 +468,7 @@ def decode_project_config():
     global StabilizeAreaDefined, film_hole_height, film_type
     global ExpertMode
     global StabilizationThreshold
+    global RotationAngle
     global CustomTemplateDefined
     global pattern_filename, expected_pattern_pos
     global pattern_filename_custom, expected_pattern_pos_custom
@@ -530,12 +532,20 @@ def decode_project_config():
     film_type.set(project_config["FilmType"])
     set_film_type()
 
+    if 'RotationAngle' in project_config:
+        RotationAngle = project_config["RotationAngle"]
+        rotation_angle_str.set(RotationAngle)
+    else:
+        RotationAngle = 0
+        rotation_angle_str.set(RotationAngle)
+
     if 'StabilizationThreshold' in project_config:
         StabilizationThreshold = project_config["StabilizationThreshold"]
         stabilization_threshold_str.set(StabilizationThreshold)
     else:
         StabilizationThreshold = 240
         stabilization_threshold_str.set(StabilizationThreshold)
+
     if 'CustomTemplateExpectedPos' in project_config:
         expected_pattern_pos_custom = project_config["CustomTemplateExpectedPos"]
     if 'CustomTemplateDefined' in project_config:
@@ -594,6 +604,11 @@ def decode_project_config():
         perform_stabilization.set(project_config["PerformStabilization"])
     else:
         perform_stabilization.set(False)
+
+    if 'PerformRotation' in project_config:
+        perform_rotation.set(project_config["PerformRotation"])
+    else:
+        perform_rotation.set(False)
 
     if 'VideoFps' in project_config:
         VideoFps = eval(project_config["VideoFps"])
@@ -1034,6 +1049,27 @@ def custom_ffmpeg_path_focus_out(event):
         general_config["FfmpegBinName"] = FfmpegBinName
 
 
+def perform_rotation_selection():
+    global perform_rotation
+    rotation_angle_spinbox.config(
+        state=NORMAL if perform_rotation.get() else DISABLED)
+    project_config["PerformRotation"] = perform_rotation.get()
+
+
+def rotation_angle_selection(updown):
+    global rotation_angle_spinbox, rotation_angle_str
+    global RotationAngle
+    RotationAngle = rotation_angle_spinbox.get()
+    project_config["RotationAngle"] = RotationAngle
+
+
+def rotation_angle_spinbox_focus_out(event):
+    global rotation_angle_spinbox, rotation_angle_str
+    global RotationAngle
+    RotationAngle = rotation_angle_spinbox.get()
+    project_config["RotationAngle"] = RotationAngle
+
+
 def perform_stabilization_selection():
     global perform_stabilization
     global stabilization_bounds_alert_checkbox
@@ -1121,7 +1157,7 @@ def scale_display_update():
     global win
     global frame_scale_refresh_done, frame_scale_refresh_pending
     global CurrentFrame
-    global perform_stabilization, perform_cropping
+    global perform_stabilization, perform_cropping, perform_rotation
     global CropTopLeft, CropBottomRight
     global SourceDirFileList
 
@@ -1129,17 +1165,23 @@ def scale_display_update():
         return
     file = SourceDirFileList[CurrentFrame]
     img = cv2.imread(file, cv2.IMREAD_UNCHANGED)
-    if perform_stabilization.get():
-        img = stabilize_image(img)
-    if perform_cropping.get():
-        img = crop_image(img, CropTopLeft, CropBottomRight)
+    if img is None:
+        logging.error(
+            "Error reading frame %i, skipping", CurrentFrame)
     else:
-        img = even_image(img)
-    display_image(img)
-    frame_scale_refresh_done = True
-    if frame_scale_refresh_pending:
-        frame_scale_refresh_pending = False
-        win.after(100, scale_display_update)
+        if perform_rotation.get():
+            img = rotate_image(img)
+        if perform_stabilization.get():
+            img = stabilize_image(img)
+        if perform_cropping.get():
+            img = crop_image(img, CropTopLeft, CropBottomRight)
+        else:
+            img = even_image(img)
+        display_image(img)
+        frame_scale_refresh_done = True
+        if frame_scale_refresh_pending:
+            frame_scale_refresh_pending = False
+            win.after(100, scale_display_update)
 
 
 def select_scale_frame(selected_frame):
@@ -1224,6 +1266,7 @@ def select_rectangle_area(is_cropping=False):
     global rectangle_refresh
     global RectangleTopLeft, RectangleBottomRight
     global CropTopLeft, CropBottomRight
+    global perform_stabilization, perform_cropping, perform_rotation
 
     if CurrentFrame >= len(SourceDirFileList):
         return False
@@ -1246,6 +1289,9 @@ def select_rectangle_area(is_cropping=False):
     original_image = cv2.imread(file, cv2.IMREAD_UNCHANGED)
     if not is_cropping:   # only take left stripe if not for cropping
         original_image = get_image_left_stripe(original_image)
+    # Rotate image if required
+    if perform_rotation.get():
+        original_image = rotate_image(original_image)
     # Stabilize image to make sure target image matches user visual definition
     if is_cropping and perform_stabilization.get():
         original_image = stabilize_image(original_image)
@@ -1644,6 +1690,17 @@ def get_image_left_stripe(img):
     return img[vertical_range[0]:vertical_range[1], horizontal_range[0]:horizontal_range[1]]
 
 
+def rotate_image(img):
+    global RotationAngle
+    # grab the dimensions of the image and calculate the center of the
+    # image
+    (h, w) = img.shape[:2]
+    (cX, cY) = (w // 2, h // 2)
+    # rotate our image by 45 degrees around the center of the image
+    M = cv2.getRotationMatrix2D((cX, cY), float(RotationAngle), 1.0)
+    rotated = cv2.warpAffine(img, M, (w, h))
+    return rotated
+
 def stabilize_image(img):
     global SourceDirFileList, CurrentFrame
     global HoleSearchTopLeft, HoleSearchBottomRight
@@ -2013,7 +2070,7 @@ def hdr_merge_loop():
     win.after(1, hdr_merge_loop)
 
 def frame_generation_loop():
-    global perform_stabilization, perform_cropping
+    global perform_stabilization, perform_cropping, perform_rotation
     global ConvertLoopExitRequested
     global CropTopLeft, CropBottomRight
     global TargetDir
@@ -2050,28 +2107,34 @@ def frame_generation_loop():
     # read image
     img = cv2.imread(file, cv2.IMREAD_UNCHANGED)
 
-    if perform_stabilization.get():
-        img = stabilize_image(img)
-    if perform_cropping.get():
-        img = crop_image(img, CropTopLeft, CropBottomRight)
+    if img is None:
+        logging.error(
+            "Error reading frame %i, skipping", CurrentFrame)
     else:
-        img = even_image(img)
+        if perform_rotation.get():
+            img = rotate_image(img)
+        if perform_stabilization.get():
+            img = stabilize_image(img)
+        if perform_cropping.get():
+            img = crop_image(img, CropTopLeft, CropBottomRight)
+        else:
+            img = even_image(img)
 
-    display_image(img)
+        display_image(img)
 
-    if img.shape[1] % 2 == 1 or img.shape[0] % 2 == 1:
-        logging.error("Target size, one odd dimension")
-        status_str = "Status: Frame %d - odd size" % CurrentFrame
-        app_status_label.config(text=status_str, fg='red')
-        CurrentFrame = StartFrame + frames_to_encode - 1
+        if img.shape[1] % 2 == 1 or img.shape[0] % 2 == 1:
+            logging.error("Target size, one odd dimension")
+            status_str = "Status: Frame %d - odd size" % CurrentFrame
+            app_status_label.config(text=status_str, fg='red')
+            CurrentFrame = StartFrame + frames_to_encode - 1
 
-    if os.path.isdir(TargetDir):
-        target_file = os.path.join(TargetDir, FrameFilenameOutputPattern % (first_absolute_frame + CurrentFrame))
-        cv2.imwrite(target_file, img)
+        if os.path.isdir(TargetDir):
+            target_file = os.path.join(TargetDir, FrameFilenameOutputPattern % (first_absolute_frame + CurrentFrame))
+            cv2.imwrite(target_file, img)
 
-    frame_slider.set(CurrentFrame)
-    status_str = "Status: Generating frames %.1f%%" % ((CurrentFrame-StartFrame)*100/frames_to_encode)
-    app_status_label.config(text=status_str, fg='black')
+        frame_slider.set(CurrentFrame)
+        status_str = "Status: Generating frames %.1f%%" % ((CurrentFrame-StartFrame)*100/frames_to_encode)
+        app_status_label.config(text=status_str, fg='black')
 
     CurrentFrame += 1
     project_config["CurrentFrame"] = CurrentFrame
@@ -2366,6 +2429,9 @@ def build_ui():
     global perform_stabilization, perform_stabilization_checkbox
     global stabilization_threshold_spinbox, stabilization_threshold_str
     global StabilizationThreshold
+    global perform_rotation, perform_rotation_checkbox
+    global rotation_angle_spinbox, rotation_angle_str
+    global RotationAngle
     global custom_stabilization_btn
     global perform_cropping_checkbox, Crop_btn
     global Go_btn
@@ -2526,6 +2592,35 @@ def build_ui():
 
     postprocessing_row += 1
 
+    # Check box to do rorate image
+    perform_rotation = tk.BooleanVar(value=False)
+    perform_rotation_checkbox = tk.Checkbutton(
+        postprocessing_frame, text='Rotate image:',
+        variable=perform_rotation, onvalue=True, offvalue=False, width=11,
+        command=perform_rotation_selection)
+    perform_rotation_checkbox.grid(row=postprocessing_row, column=0,
+                                        columnspan=1, sticky=W)
+    perform_rotation_checkbox.config(state=NORMAL)
+
+    # Spinbox to select rotation angle
+    rotation_angle_str = tk.StringVar(value=str(StabilizationThreshold))
+    rotation_angle_selection_aux = postprocessing_frame.register(
+        rotation_angle_selection)
+    rotation_angle_spinbox = tk.Spinbox(
+        postprocessing_frame,
+        command=(rotation_angle_selection_aux, '%d'), width=6,
+        textvariable=rotation_angle_str, from_=-5, to=5,
+        format="%.1f", increment=0.1)
+    rotation_angle_spinbox.grid(row=postprocessing_row, column=1, sticky=W)
+    rotation_angle_spinbox.bind("<FocusOut>", rotation_angle_spinbox_focus_out)
+    rotation_angle_selection('down')
+    rotation_angle_label = tk.Label(postprocessing_frame,
+                                      text='degrees',
+                                      width=8)
+    rotation_angle_label.grid(row=postprocessing_row, column=1,
+                                columnspan=1, sticky=E)
+    postprocessing_row += 1
+
     # Check box to do stabilization or not
     perform_stabilization = tk.BooleanVar(value=False)
     perform_stabilization_checkbox = tk.Checkbutton(
@@ -2614,7 +2709,7 @@ def build_ui():
     skip_frame_regeneration_cb = tk.Checkbutton(
         video_frame, text='Skip Frame regeneration',
         variable=skip_frame_regeneration, onvalue=True, offvalue=False,
-        width=22)
+        width=28)
     skip_frame_regeneration_cb.grid(row=video_row, column=1,
                                     columnspan=2, sticky=W)
     skip_frame_regeneration_cb.config(state=NORMAL if ffmpeg_installed
