@@ -1226,6 +1226,7 @@ def draw_rectangle(event, x, y, flags, param):
     # Code posted by Ahsin Shabbir, same Stack overflow thread
     global RectangleTopLeft, RectangleBottomRight
     global rectangle_refresh
+    global line_thickness
 
     if event == cv2.EVENT_LBUTTONDOWN:
         if not rectangle_drawing:
@@ -1238,12 +1239,13 @@ def draw_rectangle(event, x, y, flags, param):
     elif event == cv2.EVENT_MOUSEMOVE and rectangle_drawing:
         copy = work_image.copy()
         x_, y_ = x, y
-        cv2.rectangle(copy, (ix, iy), (x_, y_), (0, 255, 0), 1)
+        cv2.rectangle(copy, (ix, iy), (x_, y_), (0, 255, 0), line_thickness)
         cv2.imshow(RectangleWindowTitle, copy)
         rectangle_refresh = True
     elif event == cv2.EVENT_LBUTTONUP:
         rectangle_drawing = False
-        cv2.rectangle(work_image, (ix, iy), (x, y), (0, 255, 0), 1)
+        copy = work_image.copy()
+        cv2.rectangle(copy, (ix, iy), (x, y), (0, 255, 0), line_thickness)
         # Update global variables with area
         # Need to account for the fact area calculated with 50% reduced image
         RectangleTopLeft = (max(0, round(min(ix, x))),
@@ -1269,6 +1271,7 @@ def select_rectangle_area(is_cropping=False):
     global RectangleTopLeft, RectangleBottomRight
     global CropTopLeft, CropBottomRight
     global perform_stabilization, perform_cropping, perform_rotation
+    global line_thickness
 
     if CurrentFrame >= len(SourceDirFileList):
         return False
