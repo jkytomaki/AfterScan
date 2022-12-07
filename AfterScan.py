@@ -164,6 +164,7 @@ RectangleBottomRight = (0, 0)
 CropTopLeft = (0, 0)
 CropBottomRight = (0, 0)
 CustomTemplateDefined = False
+Force43 = False
 
 # Video generation vars
 VideoFps = 18
@@ -475,6 +476,7 @@ def decode_project_config():
     global custom_stabilization_btn
     global frame_from_str, frame_to_str
     global project_name
+    global force_4_3_crop
 
     if IgnoreConfig:
         return
@@ -567,6 +569,10 @@ def decode_project_config():
         CropBottomRight = (0, 0)
         CropTopLeft = (0, 0)
     perform_cropping_selection()
+    if 'Force_4/3' in project_config:
+        force_4_3_crop.set(project_config["Force_4/3"])
+    else:
+        force_4_3_crop.set(False)
     if 'GenerateVideo' in project_config:
         generate_video.set(project_config["GenerateVideo"])
     else:
@@ -927,7 +933,7 @@ UI support commands & functions
 def button_status_change_except(except_button, button_status):
     global source_folder_btn, target_folder_btn
     global perform_stabilization_checkbox
-    global perform_cropping_checkbox, Crop_btn
+    global perform_cropping_checkbox, force_4_3_crop_checkbox, Crop_btn
     global Go_btn
     global Exit_btn
 
@@ -937,6 +943,8 @@ def button_status_change_except(except_button, button_status):
         target_folder_btn.config(state=button_status)
     if not is_demo and except_button != perform_cropping_checkbox and not ExpertMode:
         perform_cropping_checkbox.config(state=button_status)
+    if except_button != force_4_3_crop_checkbox:
+        force_4_3_crop_checkbox.config(state=button_status)
     # if except_button != Crop_btn:
     #    Crop_btn.config(state=DISABLED if active else NORMAL)
     if except_button != Go_btn:
@@ -1102,6 +1110,7 @@ def perform_cropping_selection():
     global generate_video_checkbox
     global ui_init_done
     global stabilization_bounds_alert_checkbox
+
     generate_video_checkbox.config(state=NORMAL if ffmpeg_installed
                                    else DISABLED)
     project_config["PerformCropping"] = perform_cropping.get()
@@ -1110,6 +1119,17 @@ def perform_cropping_selection():
     if ExpertMode:
         stabilization_bounds_alert_checkbox.config(
             state=NORMAL if perform_stabilization.get() and perform_cropping.get() else DISABLED)
+
+
+def force_4_3_selection():
+    global perform_cropping, perform_cropping
+    global generate_video_checkbox
+    global ui_init_done
+    global stabilization_bounds_alert_checkbox
+    global Force43
+
+    Force43 = force_4_3_crop.get()
+    project_config["Force_4/3"] = force_4_3_crop.get()
 
 
 def encode_all_frames_selection():
@@ -1227,6 +1247,7 @@ def draw_rectangle(event, x, y, flags, param):
     global RectangleTopLeft, RectangleBottomRight
     global rectangle_refresh
     global line_thickness
+    global Force43
 
     if event == cv2.EVENT_LBUTTONDOWN:
         if not rectangle_drawing:
@@ -1238,6 +1259,13 @@ def draw_rectangle(event, x, y, flags, param):
             x_, y_ = x, y
     elif event == cv2.EVENT_MOUSEMOVE and rectangle_drawing:
         copy = work_image.copy()
+        if Force43:
+            w = x - ix
+            h = y -iy
+            if y * 1.33 > x:
+                x = int(y * 1.33)
+            else:
+                y = int(x / 1.33)
         x_, y_ = x, y
         cv2.rectangle(copy, (ix, iy), (x_, y_), (0, 255, 0), line_thickness)
         cv2.imshow(RectangleWindowTitle, copy)
@@ -1245,6 +1273,13 @@ def draw_rectangle(event, x, y, flags, param):
     elif event == cv2.EVENT_LBUTTONUP:
         rectangle_drawing = False
         copy = work_image.copy()
+        if Force43:
+            w = x - ix
+            h = y -iy
+            if y * 1.33 > x:
+                x = int(y * 1.33)
+            else:
+                y = int(x / 1.33)
         cv2.rectangle(copy, (ix, iy), (x, y), (0, 255, 0), line_thickness)
         # Update global variables with area
         # Need to account for the fact area calculated with 50% reduced image
@@ -1407,6 +1442,8 @@ def select_cropping_area():
 
     # Enable all buttons in main window
     button_status_change_except(0, NORMAL)
+
+    scale_display_update()
     win.update()
 
 
@@ -2439,6 +2476,7 @@ def build_ui():
     global RotationAngle
     global custom_stabilization_btn
     global perform_cropping_checkbox, Crop_btn
+    global force_4_3_crop_checkbox, force_4_3_crop
     global Go_btn
     global Exit_btn
     global video_fps_dropdown_selected, skip_frame_regeneration_cb
@@ -2639,7 +2677,7 @@ def build_ui():
     # Spinbox to select stabilization threshold
     stabilization_threshold_label = tk.Label(postprocessing_frame,
                                       text='Threshold:',
-                                      width=16)
+                                      width=11)
     stabilization_threshold_label.grid(row=postprocessing_row, column=1,
                                 columnspan=1, sticky=E)
     stabilization_threshold_str = tk.StringVar(value=str(StabilizationThreshold))
@@ -2662,11 +2700,17 @@ def build_ui():
         width=4)
     perform_cropping_checkbox.grid(row=postprocessing_row, column=0, sticky=W)
     perform_cropping_checkbox.config(state=DISABLED)
+    force_4_3_crop = tk.BooleanVar(value=False)
+    force_4_3_crop_checkbox = tk.Checkbutton(
+        postprocessing_frame, text='Force 4/3', variable=force_4_3_crop,
+        onvalue=True, offvalue=False, command=force_4_3_selection,
+        width=8)
+    force_4_3_crop_checkbox.grid(row=postprocessing_row, column=1, sticky=W)
     cropping_btn = Button(postprocessing_frame, text='Define crop area',
-                          width=18, height=1, command=select_cropping_area,
+                          width=12, height=1, command=select_cropping_area,
                           activebackground='green', activeforeground='white',
                           wraplength=120)
-    cropping_btn.grid(row=postprocessing_row, column=1, columnspan=2, sticky=W)
+    cropping_btn.grid(row=postprocessing_row, column=2, sticky=E)
     postprocessing_row += 1
 
     # Radio buttons to select R8/S8. Required to select adequate pattern, and match position
