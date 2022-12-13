@@ -662,6 +662,7 @@ def job_list_add_current():
     global job_list_listbox
     global encode_all_frames, SourceDirFileList
     global frame_from_str, frame_to_str
+    global resolution_dropdown_selected
 
     entry_name = video_filename_name.get()
     if entry_name == "":
@@ -694,6 +695,9 @@ def job_list_add_current():
             entry_name = entry_name + ", medium Q. video"
     else:
         entry_name = entry_name + ", no video"
+    if resolution_dropdown_selected.get():
+        entry_name = entry_name + ", " + resolution_dropdown_selected.get()
+
     if entry_name in job_list:
         tk.messagebox.showerror(
             "Error: Job already exists",
@@ -1062,6 +1066,7 @@ def perform_rotation_selection():
     rotation_angle_spinbox.config(
         state=NORMAL if perform_rotation.get() else DISABLED)
     project_config["PerformRotation"] = perform_rotation.get()
+    win.after(5, scale_display_update)
 
 
 def rotation_angle_selection(updown):
@@ -1126,7 +1131,7 @@ def force_4_3_selection():
     global generate_video_checkbox
     global ui_init_done
     global stabilization_bounds_alert_checkbox
-    global Force43
+    global force_4_3_crop, Force43
 
     Force43 = force_4_3_crop.get()
     project_config["Force_4/3"] = force_4_3_crop.get()
@@ -1248,6 +1253,7 @@ def draw_rectangle(event, x, y, flags, param):
     global rectangle_refresh
     global line_thickness
     global Force43
+    global IsCropping
 
     if event == cv2.EVENT_LBUTTONDOWN:
         if not rectangle_drawing:
@@ -1259,7 +1265,7 @@ def draw_rectangle(event, x, y, flags, param):
             x_, y_ = x, y
     elif event == cv2.EVENT_MOUSEMOVE and rectangle_drawing:
         copy = work_image.copy()
-        if Force43:
+        if Force43 and IsCropping:
             w = x - ix
             h = y -iy
             if y * 1.33 > x:
@@ -1273,7 +1279,7 @@ def draw_rectangle(event, x, y, flags, param):
     elif event == cv2.EVENT_LBUTTONUP:
         rectangle_drawing = False
         copy = work_image.copy()
-        if Force43:
+        if Force43 and IsCropping:
             w = x - ix
             h = y -iy
             if y * 1.33 > x:
@@ -1307,6 +1313,9 @@ def select_rectangle_area(is_cropping=False):
     global CropTopLeft, CropBottomRight
     global perform_stabilization, perform_cropping, perform_rotation
     global line_thickness
+    global IsCropping
+
+    IsCropping = is_cropping
 
     if CurrentFrame >= len(SourceDirFileList):
         return False
@@ -2162,7 +2171,8 @@ def frame_generation_loop():
         else:
             img = even_image(img)
 
-        display_image(img)
+        if CurrentFrame % 2 == 0:
+            display_image(img)
 
         if img.shape[1] % 2 == 1 or img.shape[0] % 2 == 1:
             logging.error("Target size, one odd dimension")
@@ -2175,6 +2185,8 @@ def frame_generation_loop():
             cv2.imwrite(target_file, img)
 
         frame_slider.set(CurrentFrame)
+        frame_slider.config(label='Global:'+
+                            str(CurrentFrame+first_absolute_frame))
         status_str = "Status: Generating frames %.1f%%" % ((CurrentFrame-StartFrame)*100/frames_to_encode)
         app_status_label.config(text=status_str, fg='black')
 
@@ -2256,6 +2268,7 @@ def video_generation_loop():
     global frames_to_encode
     global app_status_label
     global BatchJobRunning
+    global StartFrame, first_absolute_frame
 
     if ffmpeg_encoding_status == ffmpeg_state.Pending:
         # Check for special cases first
@@ -2309,6 +2322,9 @@ def video_generation_loop():
                 frame_str = str(line)[:-1].split()[1]
                 if is_a_number(frame_str):  # Sometimes ffmpeg output might be corrupted on the way
                     encoded_frame = int(frame_str)
+                    frame_slider.set(StartFrame + first_absolute_frame + encoded_frame)
+                    frame_slider.config(label='Global:' +
+                                              str(StartFrame + first_absolute_frame + encoded_frame))
                     status_str = "Status: Generating video %.1f%%" % (encoded_frame*100/frames_to_encode)
                     app_status_label.config(text=status_str, fg='black')
                     display_output_frame_by_number(encoded_frame)
@@ -2421,7 +2437,7 @@ def afterscan_init():
         app_width = PreviewWidth + 420
         app_height = PreviewHeight + 210
         if ExpertMode:
-            app_height += 50
+            app_height += 100
     else:
         BigSize = False
         PreviewWidth = 500
@@ -2429,7 +2445,7 @@ def afterscan_init():
         app_width = PreviewWidth + 420
         app_height = PreviewHeight + 270
         if ExpertMode:
-            app_height += 150
+            app_height += 200
 
     win.title('AfterScan ' + __version__)  # setting title of the window
     win.geometry('1080x700')  # setting the size of the window
@@ -2651,17 +2667,17 @@ def build_ui():
         rotation_angle_selection)
     rotation_angle_spinbox = tk.Spinbox(
         postprocessing_frame,
-        command=(rotation_angle_selection_aux, '%d'), width=6,
+        command=(rotation_angle_selection_aux, '%d'), width=3,
         textvariable=rotation_angle_str, from_=-5, to=5,
         format="%.1f", increment=0.1)
-    rotation_angle_spinbox.grid(row=postprocessing_row, column=1, sticky=W)
+    rotation_angle_spinbox.grid(row=postprocessing_row, column=1, sticky=E)
     rotation_angle_spinbox.bind("<FocusOut>", rotation_angle_spinbox_focus_out)
     rotation_angle_selection('down')
     rotation_angle_label = tk.Label(postprocessing_frame,
                                       text='degrees',
                                       width=8)
-    rotation_angle_label.grid(row=postprocessing_row, column=1,
-                                columnspan=1, sticky=E)
+    rotation_angle_label.grid(row=postprocessing_row, column=2,
+                                columnspan=1, sticky=W)
     postprocessing_row += 1
 
     # Check box to do stabilization or not
