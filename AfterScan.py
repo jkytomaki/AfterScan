@@ -161,10 +161,12 @@ StabilizationThreshold = 240.0
 CropAreaDefined = False
 RectangleTopLeft = (0, 0)
 RectangleBottomRight = (0, 0)
+RectangleBottomRight = (0, 0)
 CropTopLeft = (0, 0)
 CropBottomRight = (0, 0)
 CustomTemplateDefined = False
 Force43 = False
+Force169 = False
 
 # Video generation vars
 VideoFps = 18
@@ -476,7 +478,7 @@ def decode_project_config():
     global custom_stabilization_btn
     global frame_from_str, frame_to_str
     global project_name
-    global force_4_3_crop
+    global force_4_3_crop, force_16_9_crop
 
     if IgnoreConfig:
         return
@@ -573,6 +575,12 @@ def decode_project_config():
         force_4_3_crop.set(project_config["Force_4/3"])
     else:
         force_4_3_crop.set(False)
+    if 'Force_16/9' in project_config:
+        force_16_9_crop.set(project_config["Force_16/9"])
+    else:
+        force_16_9_crop.set(False)
+    if force_4_3_crop.get():    # 4:3 has priority if both set
+        force_16_9_crop.set(False)
     if 'GenerateVideo' in project_config:
         generate_video.set(project_config["GenerateVideo"])
     else:
@@ -771,6 +779,7 @@ def job_processing_loop():
     global CurrentJobEntry
     global BatchJobRunning
     global project_config_from_file
+    global suspend_on_joblist_end
 
     job_started = False
     idx = 0
@@ -799,6 +808,8 @@ def job_processing_loop():
     if not job_started:
         CurrentJobEntry = -1
         generation_exit()
+        if suspend_on_joblist_end.get():
+            system_suspend()
 
 
 """
@@ -937,7 +948,8 @@ UI support commands & functions
 def button_status_change_except(except_button, button_status):
     global source_folder_btn, target_folder_btn
     global perform_stabilization_checkbox
-    global perform_cropping_checkbox, force_4_3_crop_checkbox, Crop_btn
+    global perform_cropping_checkbox, Crop_btn
+    global force_4_3_crop_checkbox, force_16_9_crop_checkbox
     global Go_btn
     global Exit_btn
 
@@ -949,6 +961,8 @@ def button_status_change_except(except_button, button_status):
         perform_cropping_checkbox.config(state=button_status)
     if except_button != force_4_3_crop_checkbox:
         force_4_3_crop_checkbox.config(state=button_status)
+    if except_button != force_16_9_crop_checkbox:
+        force_16_9_crop_checkbox.config(state=button_status)
     # if except_button != Crop_btn:
     #    Crop_btn.config(state=DISABLED if active else NORMAL)
     if except_button != Go_btn:
@@ -1132,9 +1146,28 @@ def force_4_3_selection():
     global ui_init_done
     global stabilization_bounds_alert_checkbox
     global force_4_3_crop, Force43
+    global force_16_9_crop, Force169
 
     Force43 = force_4_3_crop.get()
+    if Force43:
+        force_16_9_crop.set(False)
     project_config["Force_4/3"] = force_4_3_crop.get()
+    project_config["Force_16/9"] = force_16_9_crop.get()
+
+
+def force_16_9_selection():
+    global perform_cropping, perform_cropping
+    global generate_video_checkbox
+    global ui_init_done
+    global stabilization_bounds_alert_checkbox
+    global force_4_3_crop, Force43
+    global force_16_9_crop, Force169
+
+    Force169 = force_16_9_crop.get()
+    if Force169:
+        force_4_3_crop.set(False)
+    project_config["Force_4/3"] = force_4_3_crop.get()
+    project_config["Force_16/9"] = force_16_9_crop.get()
 
 
 def encode_all_frames_selection():
@@ -1272,6 +1305,13 @@ def draw_rectangle(event, x, y, flags, param):
                 x = int(y * 1.33)
             else:
                 y = int(x / 1.33)
+        elif Force169 and IsCropping:
+            w = x - ix
+            h = y -iy
+            if y * 1.78 > x:
+                x = int(y * 1.78)
+            else:
+                y = int(x / 1.78)
         x_, y_ = x, y
         cv2.rectangle(copy, (ix, iy), (x_, y_), (0, 255, 0), line_thickness)
         cv2.imshow(RectangleWindowTitle, copy)
@@ -1286,6 +1326,13 @@ def draw_rectangle(event, x, y, flags, param):
                 x = int(y * 1.33)
             else:
                 y = int(x / 1.33)
+        elif Force169 and IsCropping:
+            w = x - ix
+            h = y -iy
+            if y * 1.78 > x:
+                x = int(y * 1.78)
+            else:
+                y = int(x / 1.78)
         cv2.rectangle(copy, (ix, iy), (x, y), (0, 255, 0), line_thickness)
         # Update global variables with area
         # Need to account for the fact area calculated with 50% reduced image
@@ -1807,7 +1854,7 @@ def stabilize_image(img):
             missing_rows = -missing_bottom
         if missing_top < 0:
             missing_rows = missing_top
-        logging.debug("FrameAlignTag-2, %s, %i, %i, %i, %i", project_name, CurrentFrame, missing_rows, move_y, move_x)
+        logging.warning("FrameAlignTag-2, %s, %i, %i, %i, %i", project_name, CurrentFrame, missing_rows, move_y, move_x)
     # Create the translation matrix using move_x and move_y (NumPy array)
     translation_matrix = np.array([
         [1, 0, move_x],
@@ -1878,6 +1925,22 @@ def is_ffmpeg_installed():
         logging.error("ffmpeg is NOT installed.")
 
     return ffmpeg_installed
+
+
+def system_suspend():
+    global IsWindows, IsLinux, IsMac
+
+    if IsLinux:
+        cmd_suspend = ['systemctl', 'suspend']
+    elif IsWindows:
+        cmd_suspend = ['rundll32.exe',  'powrprof.dll,SetSuspendState', '0,1,0']
+    elif IsMac:
+        cmd_suspend = ['pmset',  'sleepnow']
+
+    try:
+        sp.Popen(cmd_suspend, stderr=sp.PIPE, stdout=sp.PIPE)
+    except:
+        logging.error("Cannot suspend.")
 
 
 def get_source_dir_file_list():
@@ -2001,6 +2064,8 @@ def start_convert():
     global ffmpeg_success, ffmpeg_encoding_status
     global frame_from_str, frame_to_str
     global project_name
+    global BatchJobRunning
+    global job_list, CurrentJobEntry
 
 
     if ConvertLoopRunning:
@@ -2064,8 +2129,9 @@ def start_convert():
                                         "Please select a smaller template.")
                 ConvertLoopExitRequested = True
             else:
+                project_name_tag = project_name + '(' + video_filename_name.get() + ')'
                 # Log header line for project, to allow AfterScanAnalysis in case there are no out of bounds frames
-                logging.debug("FrameAlignTag, %s, %i, %i, 9999, 9999", project_name, StartFrame, frames_to_encode)
+                logging.warning("FrameAlignTag, %s, %i, %i, 9999, 9999", project_name_tag, StartFrame, frames_to_encode)
 
             win.after(1, frame_generation_loop)
         elif generate_video.get():
@@ -2317,7 +2383,8 @@ def video_generation_loop():
             generation_exit()  # Restore all settings to normal
             os.remove(os.path.join(VideoTargetDir, TargetVideoFilename))
         else:
-            line = ffmpeg_process.stdout.readline()
+            line = ffmpeg_process.stdout.readline().strip()
+            logging.debug(line)
             if line:
                 frame_str = str(line)[:-1].split()[1]
                 if is_a_number(frame_str):  # Sometimes ffmpeg output might be corrupted on the way
@@ -2328,7 +2395,7 @@ def video_generation_loop():
                     status_str = "Status: Generating video %.1f%%" % (encoded_frame*100/frames_to_encode)
                     app_status_label.config(text=status_str, fg='black')
                     display_output_frame_by_number(encoded_frame)
-            win.after(100, video_generation_loop)
+            win.after(200, video_generation_loop)
     elif ffmpeg_encoding_status == ffmpeg_state.Completed:
         status_str = "Status: Generating video 100%"
         app_status_label.config(text=status_str, fg='black')
@@ -2493,6 +2560,7 @@ def build_ui():
     global custom_stabilization_btn
     global perform_cropping_checkbox, Crop_btn
     global force_4_3_crop_checkbox, force_4_3_crop
+    global force_16_9_crop_checkbox, force_16_9_crop
     global Go_btn
     global Exit_btn
     global video_fps_dropdown_selected, skip_frame_regeneration_cb
@@ -2518,6 +2586,7 @@ def build_ui():
     global stabilization_bounds_alert_checkbox, stabilization_bounds_alert
     global film_type_S8_rb, film_type_R8_rb
     global frame_from_str, frame_to_str, frame_from_entry, frame_to_entry
+    global suspend_on_joblist_end
 
     # Create a frame to add a border to the preview
     left_area_frame = Frame(win)
@@ -2718,10 +2787,16 @@ def build_ui():
     perform_cropping_checkbox.config(state=DISABLED)
     force_4_3_crop = tk.BooleanVar(value=False)
     force_4_3_crop_checkbox = tk.Checkbutton(
-        postprocessing_frame, text='Force 4/3', variable=force_4_3_crop,
+        postprocessing_frame, text='4:3', variable=force_4_3_crop,
         onvalue=True, offvalue=False, command=force_4_3_selection,
-        width=8)
-    force_4_3_crop_checkbox.grid(row=postprocessing_row, column=1, sticky=W)
+        width=4)
+    force_4_3_crop_checkbox.grid(row=postprocessing_row, column=0, sticky=E)
+    force_16_9_crop = tk.BooleanVar(value=False)
+    force_16_9_crop_checkbox = tk.Checkbutton(
+        postprocessing_frame, text='16:9', variable=force_16_9_crop,
+        onvalue=True, offvalue=False, command=force_16_9_selection,
+        width=4)
+    force_16_9_crop_checkbox.grid(row=postprocessing_row, column=1, sticky=W)
     cropping_btn = Button(postprocessing_frame, text='Define crop area',
                           width=12, height=1, command=select_cropping_area,
                           activebackground='green', activeforeground='white',
@@ -2888,7 +2963,7 @@ def build_ui():
     job_list_row = 0
 
     # job listbox
-    job_list_listbox = Listbox(job_list_frame, width=67 if BigSize else 42, height=7)
+    job_list_listbox = Listbox(job_list_frame, width=67 if BigSize else 42, height=9)
     job_list_listbox.grid(column=0, row=0, padx=5, pady=2, ipadx=5)
 
     # job listbox scrollbars
@@ -2930,6 +3005,14 @@ def build_ui():
                     command=start_processing_job_list, activebackground='green',
                     activeforeground='white', wraplength=100)
     start_batch_btn.pack(side=TOP, padx=2, pady=2)
+
+    # Suspend on end checkbox
+    suspend_on_joblist_end = tk.BooleanVar(value=False)
+    suspend_on_joblist_end_cb = tk.Checkbutton(
+        job_list_btn_frame, text='Suspend on end',
+        variable=suspend_on_joblist_end, onvalue=True, offvalue=False,
+        width=13)
+    suspend_on_joblist_end_cb.pack(side=TOP, padx=2, pady=2)
 
     postprocessing_bottom_frame = Frame(video_frame, width=30)
     postprocessing_bottom_frame.grid(row=video_row, column=0)
