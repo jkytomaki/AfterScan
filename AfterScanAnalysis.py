@@ -63,10 +63,10 @@ def display_plot(filename):
     plt.show()
 
 
-def show_text(message):
+def show_text(message, tags=None):
     global text_box
     text_box.config(state='normal')
-    text_box.insert('end', message + '\n')
+    text_box.insert('end', message + '\n', tags)
     text_box.config(state='disabled')
 
 
@@ -108,7 +108,11 @@ def select_log_file():
                     if first_frame == -1:
                         first_frame = frame
                     if (frame < last_frame):
-                        show_text(csv_basename + ': %i frames out of bounds (%i, %i)' % (faulty_frames, first_encoded_frame, total_encoded_frames))
+                        if (faulty_frames * 100) > total_encoded_frames:
+                            tag = 'warning'
+                        else:
+                            tag = 'None'
+                        show_text(csv_basename + ': %i frames out of bounds (%i, %i)' % (faulty_frames, first_encoded_frame, total_encoded_frames), tag)
                         faulty_frames = 0
                         first_frame = frame
                         csv_file.close()
@@ -120,7 +124,11 @@ def select_log_file():
                     csv_file.writelines(line)
                     faulty_frames += 1
             if (faulty_frames > 1):
-                show_text(csv_basename + ': %i frames out of bounds (%i, %i)' % (faulty_frames-1, first_encoded_frame, total_encoded_frames))
+                if (faulty_frames * 100) > total_encoded_frames:
+                    tag = 'warning'
+                else:
+                    tag = 'None'
+                show_text(csv_basename + ': %i frames out of bounds (%i, %i)' % (faulty_frames-1, first_encoded_frame, total_encoded_frames), tag)
             else:
                 show_text(csv_basename + ': No frames out of bounds (%i, %i)'%(first_encoded_frame, total_encoded_frames))
             csv_file.close()
@@ -188,14 +196,18 @@ def build_ui():
                       height=1, command=exit_app, activebackground='red',
                       activeforeground='white')
     Exit_btn.pack(side=TOP, padx=2, pady=2, anchor=W)
-    # Text box to display results
-    text_box = Text(main_frame, height=20, width=70)
-    text_box.pack(side=LEFT, expand=True, padx=2, pady=2)
     # job listbox scrollbars
     text_box_scrollbar_y = Scrollbar(main_frame, orient="vertical")
-    text_box_scrollbar_y.config(command=text_box.yview)
     text_box_scrollbar_y.pack(side=RIGHT, fill=Y)
-    text_box.config(yscrollcommand=text_box_scrollbar_y.set)
+    text_box_scrollbar_x = Scrollbar(main_frame, orient="horizontal")
+    text_box_scrollbar_x.pack(side=BOTTOM, fill=X)
+    # Text box to display results
+    text_box = Text(main_frame, height=20, width=70, wrap=NONE,
+                    xscrollcommand=text_box_scrollbar_x.set,
+                    yscrollcommand=text_box_scrollbar_y.set)
+    text_box.tag_configure("warning", foreground="red")
+    text_box.pack(side=LEFT, expand=True, padx=2, pady=2)
+    text_box_scrollbar_x.config(command=text_box.xview)
     text_box_scrollbar_y.config(command=text_box.yview)
 
     win.update_idletasks()
