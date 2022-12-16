@@ -112,7 +112,7 @@ def select_log_file():
                             tag = 'warning'
                         else:
                             tag = 'None'
-                        show_text(csv_basename + ': %i frames out of bounds (%i, %i)' % (faulty_frames, first_encoded_frame, total_encoded_frames), tag)
+                        show_text(csv_basename + ': %i frames out of bounds (%i, %i) - %2.2f%%' % (faulty_frames, first_encoded_frame, total_encoded_frames,faulty_frames*100/total_encoded_frames), tag)
                         faulty_frames = 0
                         first_frame = frame
                         csv_file.close()
@@ -128,7 +128,9 @@ def select_log_file():
                     tag = 'warning'
                 else:
                     tag = 'None'
-                show_text(csv_basename + ': %i frames out of bounds (%i, %i)' % (faulty_frames-1, first_encoded_frame, total_encoded_frames), tag)
+                show_text(csv_basename + ': %i frames out of bounds (%i, %i) - %2.2f%%' % (
+                        faulty_frames-1, first_encoded_frame, total_encoded_frames,
+                        faulty_frames * 100 / total_encoded_frames), tag)
             else:
                 show_text(csv_basename + ': No frames out of bounds (%i, %i)'%(first_encoded_frame, total_encoded_frames))
             csv_file.close()
@@ -141,6 +143,13 @@ def select_csv_file():
         return
     general_config["CurrentDir"] = os.path.split(filename)[0]
     display_plot(filename)
+
+
+def clear_entries():
+    global text_box
+    text_box.config(state='normal')
+    text_box.delete('1.0', 'end')
+    text_box.config(state='disabled')
 
 
 def save_general_config():
@@ -184,29 +193,37 @@ def build_ui():
                                height=1, command=select_log_file,
                                activebackground='green',
                                activeforeground='white')
-    select_log_file_btn.pack(side=TOP, padx=2, pady=2, anchor=W)
+    select_log_file_btn.grid(row=0, column=0, padx=2, pady=2)
     # Select csv file button
     select_csv_file_btn = Button(main_frame, text='Select CSV File', width=20,
                                height=1, command=select_csv_file,
                                activebackground='green',
                                activeforeground='white')
-    select_csv_file_btn.pack(side=TOP, padx=2, pady=2, anchor=W)
+    select_csv_file_btn.grid(row=1, column=0, padx=2, pady=2)
+    # Clear entries button
+    Clear_btn = Button(main_frame, text="Delete all entries", width=20,
+                      height=1, command=clear_entries, activebackground='red',
+                      activeforeground='white')
+    Clear_btn.grid(row=0, column=1, padx=2, pady=2)
     # Application Exit button
     Exit_btn = Button(main_frame, text="Exit", width=20,
                       height=1, command=exit_app, activebackground='red',
                       activeforeground='white')
-    Exit_btn.pack(side=TOP, padx=2, pady=2, anchor=W)
-    # job listbox scrollbars
-    text_box_scrollbar_y = Scrollbar(main_frame, orient="vertical")
+    Exit_btn.grid(row=1, column=1, padx=2, pady=2)
+    # Frame for listbox and scrollbars
+    listbox_frame = Frame(main_frame)
+    listbox_frame.grid(row=2, column=0, columnspan=2)
+    # Listbox scrollbars
+    text_box_scrollbar_y = Scrollbar(listbox_frame, orient="vertical")
     text_box_scrollbar_y.pack(side=RIGHT, fill=Y)
-    text_box_scrollbar_x = Scrollbar(main_frame, orient="horizontal")
+    text_box_scrollbar_x = Scrollbar(listbox_frame, orient="horizontal")
     text_box_scrollbar_x.pack(side=BOTTOM, fill=X)
     # Text box to display results
-    text_box = Text(main_frame, height=20, width=70, wrap=NONE,
+    text_box = Text(listbox_frame, height=20, width=90, wrap=NONE,
                     xscrollcommand=text_box_scrollbar_x.set,
                     yscrollcommand=text_box_scrollbar_y.set)
     text_box.tag_configure("warning", foreground="red")
-    text_box.pack(side=LEFT, expand=True, padx=2, pady=2)
+    text_box.pack(side=LEFT, expand=True)
     text_box_scrollbar_x.config(command=text_box.xview)
     text_box_scrollbar_y.config(command=text_box.yview)
 
@@ -219,7 +236,7 @@ def app_init():
 
     load_general_config()
 
-    app_width = 620
+    app_width = 750
     app_height = 500
 
     win.title('AfterScan ' + __version__)  # setting title of the window
