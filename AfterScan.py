@@ -271,7 +271,7 @@ def set_project_defaults():
     frame_slider.set(project_config["CurrentFrame"])
     project_config["EncodeAllFrames"] = True
     encode_all_frames.set(project_config["EncodeAllFrames"])
-    project_config["FramesFrom"] = "0"
+    project_config["FrameFrom"] = "0"
     frame_from_str.set(project_config["FrameFrom"])
     project_config["FrameTo"] = "0"
     frame_to_str.set(project_config["FrameTo"])
@@ -1144,7 +1144,6 @@ def force_4_3_selection():
     global perform_cropping, perform_cropping
     global generate_video_checkbox
     global ui_init_done
-    global stabilization_bounds_alert_checkbox
     global force_4_3_crop, Force43
     global force_16_9_crop, Force169
 
@@ -1159,7 +1158,6 @@ def force_16_9_selection():
     global perform_cropping, perform_cropping
     global generate_video_checkbox
     global ui_init_done
-    global stabilization_bounds_alert_checkbox
     global force_4_3_crop, Force43
     global force_16_9_crop, Force169
 
@@ -1805,7 +1803,8 @@ def stabilize_image(img):
     global expected_pattern_pos, film_hole_template
     global StabilizationThreshold
     global CropTopLeft, CropBottomRight, win
-    global stabilization_bounds_alert
+    global stabilization_bounds_alert, stabilization_bounds_alert_counter
+    global stabilization_bounds_alert_checkbox
     global project_name
 
     # Get image dimensions to perform image shift later
@@ -1846,6 +1845,8 @@ def stabilize_image(img):
     # Items logged: Tag, project id, Frame number, missing pixel rows, location (bottom/top), Vertical shift
     if ConvertLoopRunning and (missing_bottom < 0 or missing_top < 0):
         if ExpertMode and stabilization_bounds_alert.get():
+            stabilization_bounds_alert_counter += 1
+            stabilization_bounds_alert_checkbox.config(text = 'Alert when image out of bounds (%i)' % stabilization_bounds_alert_counter)
             win.bell()
         # Tag evolution
         # FrameAlignTag: project_name, CurrentFrame, missing rows, top/bottom, move_y)
@@ -1854,7 +1855,9 @@ def stabilize_image(img):
             missing_rows = -missing_bottom
         if missing_top < 0:
             missing_rows = missing_top
-        logging.warning("FrameAlignTag-2, %s, %i, %i, %i, %i", project_name, CurrentFrame, missing_rows, move_y, move_x)
+        project_name_tag = project_name + '(' + video_filename_name.get() + ')'
+        project_name_tag = project_name_tag.replace(',', ';')   # To avoid problem with AfterScanAnalysis
+        logging.warning("FrameAlignTag-2, %s, %i, %i, %i, %i", project_name_tag, CurrentFrame, missing_rows, move_y, move_x)
     # Create the translation matrix using move_x and move_y (NumPy array)
     translation_matrix = np.array([
         [1, 0, move_x],
@@ -2066,11 +2069,18 @@ def start_convert():
     global project_name
     global BatchJobRunning
     global job_list, CurrentJobEntry
+    global stabilization_bounds_alert_counter
 
 
     if ConvertLoopRunning:
         ConvertLoopExitRequested = True
     else:
+        # Save current project status
+        save_general_config()
+        save_project_config()
+        save_job_list()
+        # Reset frames out of bounds counter
+        stabilization_bounds_alert_counter = 0
         # Centralize 'frames_to_encode' update here
         if encode_all_frames.get():
             StartFrame = 0
@@ -2130,6 +2140,7 @@ def start_convert():
                 ConvertLoopExitRequested = True
             else:
                 project_name_tag = project_name + '(' + video_filename_name.get() + ')'
+                project_name_tag = project_name_tag.replace(',', ';')  # To avoid problem with AfterScanAnalysis
                 # Log header line for project, to allow AfterScanAnalysis in case there are no out of bounds frames
                 logging.warning("FrameAlignTag, %s, %i, %i, 9999, 9999", project_name_tag, StartFrame, frames_to_encode)
 
@@ -2395,6 +2406,11 @@ def video_generation_loop():
                     status_str = "Status: Generating video %.1f%%" % (encoded_frame*100/frames_to_encode)
                     app_status_label.config(text=status_str, fg='black')
                     display_output_frame_by_number(encoded_frame)
+                else:
+                    app_status_label.config(text=line, fg='red')
+            else:
+                status_str = "No feedback from ffmpeg"
+                app_status_label.config(text=status_str, fg='red')
             win.after(200, video_generation_loop)
     elif ffmpeg_encoding_status == ffmpeg_state.Completed:
         status_str = "Status: Generating video 100%"
@@ -3089,7 +3105,7 @@ def build_ui():
         # Checkbox - Beep if stabilization forces image out of cropping bounds
         stabilization_bounds_alert = tk.BooleanVar(value=False)
         stabilization_bounds_alert_checkbox = tk.Checkbutton(right_area_frame,
-                                               text='Cropping alert when image out of bounds',
+                                               text='Alert when image out of bounds',
                                                variable=stabilization_bounds_alert,
                                                onvalue=True, offvalue=False,
                                                width=40)
