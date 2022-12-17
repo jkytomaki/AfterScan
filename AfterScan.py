@@ -2397,7 +2397,7 @@ def video_generation_loop():
             line = ffmpeg_process.stdout.readline().strip()
             logging.debug(line)
             if line:
-                frame_str = str(line)[:-1].split()[1]
+                frame_str = str(line)[:-1].replace('=', ' ').split()[1]
                 if is_a_number(frame_str):  # Sometimes ffmpeg output might be corrupted on the way
                     encoded_frame = int(frame_str)
                     frame_slider.set(StartFrame + first_absolute_frame + encoded_frame)
@@ -2407,7 +2407,8 @@ def video_generation_loop():
                     app_status_label.config(text=status_str, fg='black')
                     display_output_frame_by_number(encoded_frame)
                 else:
-                    app_status_label.config(text=line, fg='red')
+                    app_status_label.config(text='Error, ffmpeg sync lost', fg='red')
+                    logging.error("Error, ffmpeg sync lost. Line parsed: %s", line)
             else:
                 status_str = "No feedback from ffmpeg"
                 app_status_label.config(text=status_str, fg='red')
