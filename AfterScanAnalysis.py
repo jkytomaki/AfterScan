@@ -32,7 +32,7 @@ from operator import itemgetter
 global win
 general_config = {
 }
-
+csv_file_list = []
 
 # Configuration & support file vars
 script_dir = os.path.realpath(sys.argv[0])
@@ -63,11 +63,10 @@ def display_plot(filename):
     plt.show()
 
 
-def show_text(message, tags=None):
-    global text_box
-    text_box.config(state='normal')
-    text_box.insert('end', message + '\n', tags)
-    text_box.config(state='disabled')
+def show_text(message, color='black'):
+    global list_box
+    list_box.insert('end', message)
+    list_box.itemconfig("end", fg=color)
 
 
 def select_log_file():
@@ -97,6 +96,8 @@ def select_log_file():
         with open(log_filename) as log_file:
             csv_basename = project + '.' + str(csv_index) + '.csv'
             csv_filename = temp = os.path.dirname(log_filename) + '/' + csv_basename
+            if csv_filename not in csv_file_list:
+                csv_file_list.append((csv_basename, csv_filename))
             csv_file = open(csv_filename, 'w')
             for line in log_file:
                 if 'FrameAlignTag' in line and project in line:
@@ -109,30 +110,34 @@ def select_log_file():
                         first_frame = frame
                     if (frame < last_frame):
                         if (faulty_frames * 100) > total_encoded_frames:
-                            tag = 'warning'
+                            color = 'red'
                         else:
-                            tag = 'None'
-                        show_text(csv_basename + ': %i frames out of bounds (%i, %i) - %2.2f%%' % (faulty_frames, first_encoded_frame, total_encoded_frames,faulty_frames*100/total_encoded_frames), tag)
+                            color = 'black'
+                        show_text((csv_basename, ': %i frames out of bounds (%i, %i) - %2.2f%%' % (
+                            faulty_frames, first_encoded_frame, total_encoded_frames,
+                            faulty_frames*100/total_encoded_frames)), color)
                         faulty_frames = 0
                         first_frame = frame
                         csv_file.close()
                         csv_index += 1
                         csv_basename = project + '.' + str(csv_index) + '.csv'
                         csv_filename = temp = os.path.dirname(log_filename) + '/' + csv_basename
+                        if csv_filename not in csv_file_list:
+                            csv_file_list.append((csv_basename, csv_filename))
                         csv_file = open(csv_filename, 'w')
                     last_frame = frame
                     csv_file.writelines(line)
                     faulty_frames += 1
             if (faulty_frames > 1):
                 if (faulty_frames * 100) > total_encoded_frames:
-                    tag = 'warning'
+                    color = 'red'
                 else:
-                    tag = 'None'
-                show_text(csv_basename + ': %i frames out of bounds (%i, %i) - %2.2f%%' % (
+                    color = 'black'
+                show_text((csv_basename, ': %i frames out of bounds (%i, %i) - %2.2f%%' % (
                         faulty_frames-1, first_encoded_frame, total_encoded_frames,
-                        faulty_frames * 100 / total_encoded_frames), tag)
+                        faulty_frames * 100 / total_encoded_frames)), color)
             else:
-                show_text(csv_basename + ': No frames out of bounds (%i, %i)'%(first_encoded_frame, total_encoded_frames))
+                show_text((csv_basename, ': No frames out of bounds (%i, %i)'%(first_encoded_frame, total_encoded_frames)))
             csv_file.close()
 
 
@@ -145,11 +150,18 @@ def select_csv_file():
     display_plot(filename)
 
 
+def display_chart(event):
+    basename = list_box.get(list_box.curselection())[0]
+    idx = next((i for i, v in enumerate(csv_file_list) if v[0] == basename), None)
+    filename = csv_file_list[idx][1]
+    if not filename:
+        return
+    general_config["CurrentDir"] = os.path.split(filename)[0]
+    display_plot(filename)
+
 def clear_entries():
-    global text_box
-    text_box.config(state='normal')
-    text_box.delete('1.0', 'end')
-    text_box.config(state='disabled')
+    global list_box
+    list_box.delete(0, 'end')
 
 
 def save_general_config():
@@ -179,13 +191,16 @@ def load_general_config():
 
 
 def exit_app():
+    # Delete work csv files
+    for file in csv_file_list:
+        os.remove(file[1])
     save_general_config()
     win.destroy()
 
 
 def build_ui():
     global win
-    global text_box
+    global list_box
     main_frame = Frame(win)
     main_frame.pack(side=TOP, padx=5, pady=5)
     # Select log file button
@@ -214,18 +229,18 @@ def build_ui():
     listbox_frame = Frame(main_frame)
     listbox_frame.grid(row=2, column=0, columnspan=2)
     # Listbox scrollbars
-    text_box_scrollbar_y = Scrollbar(listbox_frame, orient="vertical")
-    text_box_scrollbar_y.pack(side=RIGHT, fill=Y)
-    text_box_scrollbar_x = Scrollbar(listbox_frame, orient="horizontal")
-    text_box_scrollbar_x.pack(side=BOTTOM, fill=X)
-    # Text box to display results
-    text_box = Text(listbox_frame, height=20, width=90, wrap=NONE,
-                    xscrollcommand=text_box_scrollbar_x.set,
-                    yscrollcommand=text_box_scrollbar_y.set)
-    text_box.tag_configure("warning", foreground="red")
-    text_box.pack(side=LEFT, expand=True)
-    text_box_scrollbar_x.config(command=text_box.xview)
-    text_box_scrollbar_y.config(command=text_box.yview)
+    list_box_scrollbar_y = Scrollbar(listbox_frame, orient="vertical")
+    list_box_scrollbar_y.pack(side=RIGHT, fill=Y)
+    list_box_scrollbar_x = Scrollbar(listbox_frame, orient="horizontal")
+    list_box_scrollbar_x.pack(side=BOTTOM, fill=X)
+    # Listbox to display results
+    list_box = Listbox(listbox_frame, height=20, width=90,
+                    xscrollcommand=list_box_scrollbar_x.set,
+                    yscrollcommand=list_box_scrollbar_y.set)
+    list_box.pack(side=LEFT, expand=True)
+    list_box.bind('<Double-1>', display_chart)
+    list_box_scrollbar_x.config(command=list_box.xview)
+    list_box_scrollbar_y.config(command=list_box.yview)
 
     win.update_idletasks()
 
