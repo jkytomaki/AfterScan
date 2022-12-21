@@ -653,7 +653,7 @@ def decode_project_config():
         else:
             fill_borders_mode.set('smear')
 
-    widget_state_refresh()
+    widget_status_update(NORMAL)
 
     win.update()
 
@@ -769,7 +769,7 @@ def load_job_list():
 def start_processing_job_list():
     global BatchJobRunning, start_batch_btn
     BatchJobRunning = True
-    button_status_change_except(start_batch_btn, DISABLED)
+    widget_status_update(DISABLED, start_batch_btn)
     job_processing_loop()
 
 
@@ -945,113 +945,85 @@ UI support commands & functions
 """
 
 
-def button_status_change_except(except_button, button_status):
-    global source_folder_btn, target_folder_btn
-    global perform_stabilization_checkbox
-    global perform_cropping_checkbox, Crop_btn
-    global force_4_3_crop_checkbox, force_16_9_crop_checkbox
-    global Go_btn
-    global Exit_btn
-
-    if except_button != source_folder_btn:
-        source_folder_btn.config(state=button_status)
-    if except_button != target_folder_btn:
-        target_folder_btn.config(state=button_status)
-    if not is_demo and except_button != perform_cropping_checkbox and not ExpertMode:
-        perform_cropping_checkbox.config(state=button_status)
-    if except_button != force_4_3_crop_checkbox:
-        force_4_3_crop_checkbox.config(state=button_status)
-    if except_button != force_16_9_crop_checkbox:
-        force_16_9_crop_checkbox.config(state=button_status)
-    # if except_button != Crop_btn:
-    #    Crop_btn.config(state=DISABLED if active else NORMAL)
-    if except_button != Go_btn:
-        Go_btn.config(state=button_status)
-    if except_button != Exit_btn:
-        Exit_btn.config(state=button_status)
-    if not is_demo and except_button != perform_stabilization_checkbox and not ExpertMode:
-        perform_stabilization_checkbox.config(state=button_status)
-
-    if not CropAreaDefined:
-        perform_cropping_checkbox.config(state=DISABLED)
-    if ExpertMode:
-        if except_button != start_batch_btn:
-            start_batch_btn.config(state=button_status)
-        if except_button != add_job_btn:
-            add_job_btn.config(state=button_status)
-        if except_button != delete_job_btn:
-            delete_job_btn.config(state=button_status)
-        if except_button != rerun_job_btn:
-            rerun_job_btn.config(state=button_status)
-
-
-def widget_state_refresh():
-    global perform_cropping_checkbox, perform_cropping, CropAreaDefined
+def widget_status_update(widget_state=0, button_action=0):
     global CropTopLeft, CropBottomRight
-    global ffmpeg_installed, perform_cropping
-    global generate_video, generate_video_checkbox
-    global fill_borders, fill_borders_checkbox
-    global fill_borders_thickness_slider, fill_borders_mode_label
-    global fill_borders_mode_label_dropdown
-    global video_fps_dropdown, video_fps_label, video_filename_name
-    global resolution_dropdown, resolution_label
-    global ffmpeg_preset_rb1, ffmpeg_preset_rb2, ffmpeg_preset_rb3
-    global ExpertMode
-    global video_target_dir, video_target_folder_btn, video_filename_label
-    global stabilization_bounds_alert_checkbox
+    global frame_slider, Go_btn, Exit_btn
+    global frames_source_dir, source_folder_btn
+    global frames_target_dir, target_folder_btn
+    global frame_input_filename_pattern
+    global encode_all_frames, encode_all_frames_checkbox
+    global frame_from_entry, frame_to_entry
+    global frames_to_encode_label
+    global rotation_angle_label
+    global perform_rotation_checkbox, rotation_angle_spinbox
+    global perform_stabilization
+    global perform_stabilization_checkbox, stabilization_threshold_spinbox
+    global perform_cropping_checkbox
+    global force_4_3_crop_checkbox, force_16_9_crop_checkbox
     global custom_stabilization_btn
-    global film_type_S8_rb, film_type_R8_rb
-    global encode_all_frames, frame_from_entry, frame_to_entry
+    global stabilization_threshold_label
+    global generate_video_checkbox, skip_frame_regeneration_cb
+    global video_target_dir, video_target_folder_btn
+    global video_filename_label
+    global video_fps_dropdown
+    global resolution_dropdown
+    global video_filename_name
+    global ffmpeg_preset_rb1, ffmpeg_preset_rb2, ffmpeg_preset_rb3
+    global start_batch_btn
+    global add_job_btn, delete_job_btn, rerun_job_btn
+    global fill_borders_checkbox, fill_borders_thickness_slider
+    global fill_borders_mode_label_dropdown
+    global stabilization_bounds_alert_checkbox
 
-    if CropTopLeft != (0, 0) and CropBottomRight != (0, 0):
-        CropAreaDefined = True
-    frame_from_entry.config(state=NORMAL if not encode_all_frames.get() else DISABLED)
-    frame_to_entry.config(state=NORMAL if not encode_all_frames.get() else DISABLED)
-    perform_cropping_checkbox.config(
-        state=NORMAL if CropAreaDefined else DISABLED)
-    generate_video_checkbox.config(
-        state=NORMAL if ffmpeg_installed else DISABLED)
-    skip_frame_regeneration_cb.config(
-        state=NORMAL if project_config["GenerateVideo"] else DISABLED)
-    video_target_dir.config(
-        state=NORMAL if project_config["GenerateVideo"] else DISABLED)
-    video_target_folder_btn.config(
-        state=NORMAL if project_config["GenerateVideo"] else DISABLED)
-    video_filename_label.config(
-        state=NORMAL if project_config["GenerateVideo"] else DISABLED)
-    video_fps_dropdown.config(
-        state=NORMAL if project_config["GenerateVideo"] else DISABLED)
-    video_fps_label.config(
-        state=NORMAL if project_config["GenerateVideo"] else DISABLED)
-    resolution_dropdown.config(
-        state=NORMAL if project_config["GenerateVideo"] else DISABLED)
-    resolution_label.config(
-        state=NORMAL if project_config["GenerateVideo"] else DISABLED)
-    video_filename_name.config(
-        state=NORMAL if project_config["GenerateVideo"] else DISABLED)
-    ffmpeg_preset_rb1.config(
-        state=NORMAL if project_config["GenerateVideo"] else DISABLED)
-    ffmpeg_preset_rb2.config(
-        state=NORMAL if project_config["GenerateVideo"] else DISABLED)
-    ffmpeg_preset_rb3.config(
-        state=NORMAL if project_config["GenerateVideo"] else DISABLED)
-    custom_stabilization_btn.config(
-        relief=SUNKEN if CustomTemplateDefined else RAISED)
-    film_type_S8_rb.config(
-        state=DISABLED if CustomTemplateDefined else NORMAL)
-    film_type_R8_rb.config(
-        state=DISABLED if CustomTemplateDefined else NORMAL)
-    if ExpertMode:
-        fill_borders_checkbox.config(
-            state=NORMAL if project_config["GenerateVideo"] else DISABLED)
-        fill_borders_thickness_slider.config(
-            state=NORMAL if project_config["GenerateVideo"] else DISABLED)
-        fill_borders_mode_label.config(
-            state=NORMAL if project_config["GenerateVideo"] else DISABLED)
-        fill_borders_mode_label_dropdown.config(
-            state=NORMAL if project_config["GenerateVideo"] else DISABLED)
-        stabilization_bounds_alert_checkbox.config(
-            state=NORMAL if perform_stabilization.get() and perform_cropping.get() else DISABLED)
+    if widget_state != 0:
+        CropAreaDefined = CropTopLeft != (0, 0) and CropBottomRight != (0, 0)
+        frame_slider.config(state=widget_state)
+        Go_btn.config(state=widget_state if button_action != Go_btn else NORMAL)
+        Exit_btn.config(state=widget_state)
+        frames_source_dir.config(state=widget_state)
+        source_folder_btn.config(state=widget_state)
+        frames_target_dir.config(state=widget_state)
+        target_folder_btn.config(state=widget_state)
+        frame_input_filename_pattern.config(state=widget_state)
+        encode_all_frames_checkbox.config(state=widget_state)
+        frame_from_entry.config(state=widget_state if not encode_all_frames.get() else DISABLED)
+        frame_to_entry.config(state=widget_state if not encode_all_frames.get() else DISABLED)
+        frames_to_encode_label.config(state=widget_state if not encode_all_frames.get() else DISABLED)
+        perform_rotation_checkbox.config(state=widget_state)
+        rotation_angle_spinbox.config(state=widget_state)
+        rotation_angle_label.config(state=widget_state if not encode_all_frames.get() else DISABLED)
+        perform_stabilization_checkbox.config(state=widget_state if not is_demo else NORMAL)
+        stabilization_threshold_spinbox.config(state=widget_state)
+        stabilization_threshold_label.config(state=widget_state if not encode_all_frames.get() else DISABLED)
+        perform_cropping_checkbox.config(state=widget_state if perform_stabilization.get() and CropAreaDefined and not is_demo else NORMAL)
+        cropping_btn.config(state=widget_state if perform_stabilization.get() else DISABLED)
+        force_4_3_crop_checkbox.config(state=widget_state if perform_stabilization.get() else DISABLED)
+        force_16_9_crop_checkbox.config(state=widget_state if perform_stabilization.get() else DISABLED)
+        film_type_S8_rb.config(state=DISABLED if CustomTemplateDefined else widget_state)
+        film_type_R8_rb.config(state=DISABLED if CustomTemplateDefined else widget_state)
+        custom_stabilization_btn.config(state=widget_state)
+        generate_video_checkbox.config(state=widget_state if ffmpeg_installed else DISABLED)
+        skip_frame_regeneration_cb.config(state=widget_state if project_config["GenerateVideo"] else DISABLED)
+        video_target_dir.config(state=widget_state if project_config["GenerateVideo"] else DISABLED)
+        video_target_folder_btn.config(state=widget_state if project_config["GenerateVideo"] else DISABLED)
+        video_filename_label.config(state=widget_state if project_config["GenerateVideo"] else DISABLED)
+        video_fps_dropdown.config(state=widget_state if project_config["GenerateVideo"] else DISABLED)
+        resolution_dropdown.config(state=widget_state if project_config["GenerateVideo"] else DISABLED)
+        video_filename_name.config(state=widget_state if project_config["GenerateVideo"] else DISABLED)
+        ffmpeg_preset_rb1.config(state=widget_state if project_config["GenerateVideo"] else DISABLED)
+        ffmpeg_preset_rb2.config(state=widget_state if project_config["GenerateVideo"] else DISABLED)
+        ffmpeg_preset_rb3.config(state=widget_state if project_config["GenerateVideo"] else DISABLED)
+        start_batch_btn.config(state=widget_state if button_action != start_batch_btn else NORMAL)
+        add_job_btn.config(state=widget_state)
+        delete_job_btn.config(state=widget_state)
+        rerun_job_btn.config(state=widget_state)
+        if ExpertMode:
+            fill_borders_checkbox.config(state=widget_state if project_config["GenerateVideo"] else DISABLED)
+            fill_borders_thickness_slider.config(state=widget_state if project_config["GenerateVideo"] else DISABLED)
+            fill_borders_mode_label_dropdown.config(state=widget_state if project_config["GenerateVideo"] else DISABLED)
+            # stabilization_bounds_alert_checkbox.config(state=widget_state if perform_stabilization.get() and perform_cropping.get() else DISABLED)
+
+    custom_stabilization_btn.config(relief=SUNKEN if CustomTemplateDefined else RAISED)
 
 
 def frame_input_filename_pattern_focus_out(event):
@@ -1105,9 +1077,7 @@ def perform_stabilization_selection():
     stabilization_threshold_spinbox.config(
         state=NORMAL if perform_stabilization.get() else DISABLED)
     project_config["PerformStabilization"] = perform_stabilization.get()
-    if ExpertMode:
-        stabilization_bounds_alert_checkbox.config(
-            state=NORMAL if perform_stabilization.get() and perform_cropping.get() else DISABLED)
+    widget_status_update()
 
 
 def stabilization_threshold_selection(updown):
@@ -1126,6 +1096,7 @@ def stabilization_threshold_spinbox_focus_out(event):
 
 def perform_cropping_selection():
     global perform_cropping, perform_cropping
+    global perform_stabilization
     global generate_video_checkbox
     global ui_init_done
     global stabilization_bounds_alert_checkbox
@@ -1135,9 +1106,6 @@ def perform_cropping_selection():
     project_config["PerformCropping"] = perform_cropping.get()
     if ui_init_done:
         scale_display_update()
-    if ExpertMode:
-        stabilization_bounds_alert_checkbox.config(
-            state=NORMAL if perform_stabilization.get() and perform_cropping.get() else DISABLED)
 
 
 def force_4_3_selection():
@@ -1171,7 +1139,7 @@ def force_16_9_selection():
 def encode_all_frames_selection():
     global encode_all_frames
     project_config["EncodeAllFrames"] = encode_all_frames.get()
-    widget_state_refresh()
+    widget_status_update(NORMAL)
 
 def fill_borders_selection():
     global fill_borders
@@ -1197,7 +1165,7 @@ def generate_video_selection():
     global generate_video
 
     project_config["GenerateVideo"] = generate_video.get()
-    widget_state_refresh()
+    widget_status_update(NORMAL)
 
 def set_fps(selected):
     global VideoFps
@@ -1468,21 +1436,21 @@ def select_cropping_area():
     global RectangleTopLeft, RectangleBottomRight
 
     # Disable all buttons in main window
-    button_status_change_except(0, DISABLED)
+    widget_status_update(DISABLED,0)
     win.update()
 
     RectangleWindowTitle = CropWindowTitle
 
     if select_rectangle_area(is_cropping=True):
         CropAreaDefined = True
-        button_status_change_except(0, NORMAL)
+        widget_status_update(NORMAL, 0)
         CropTopLeft = RectangleTopLeft
         CropBottomRight = RectangleBottomRight
         logging.debug("Crop area: (%i,%i) - (%i, %i)", CropTopLeft[0],
                       CropTopLeft[1], CropBottomRight[0], CropBottomRight[1])
     else:
         CropAreaDefined = False
-        button_status_change_except(0, DISABLED)
+        widget_status_update(DISABLED, 0)
         perform_cropping.set(False)
         perform_cropping.set(False)
         generate_video_checkbox.config(state=NORMAL if ffmpeg_installed
@@ -1495,7 +1463,7 @@ def select_cropping_area():
                                      else DISABLED)
 
     # Enable all buttons in main window
-    button_status_change_except(0, NORMAL)
+    widget_status_update(NORMAL, 0)
 
     scale_display_update()
     win.update()
@@ -1525,13 +1493,13 @@ def select_custom_template():
                 "Please select a source folder before proceeding.")
             return
         # Disable all buttons in main window
-        button_status_change_except(0, DISABLED)
+        widget_status_update(DISABLED, 0)
         win.update()
 
         RectangleWindowTitle = CustomTemplateTitle
 
         if select_rectangle_area(False) and CurrentFrame < len(SourceDirFileList):
-            button_status_change_except(0, NORMAL)
+            widget_status_update(NORMAL, 0)
             logging.debug("Custom template area: (%i,%i) - (%i, %i)", RectangleTopLeft[0],
                           RectangleTopLeft[1], RectangleBottomRight[0], RectangleBottomRight[1])
             CustomTemplateDefined = True
@@ -1560,14 +1528,14 @@ def select_custom_template():
                 os.remove(pattern_filename_custom)
             CustomTemplateDefined = False
             custom_stabilization_btn.config(relief=RAISED)
-            button_status_change_except(0, DISABLED)
+            widget_status_update(DISABLED, 0)
 
     project_config["CustomTemplateDefined"] = CustomTemplateDefined
     set_film_type()
 
     # Enable all buttons in main window
-    button_status_change_except(0, NORMAL)
-    widget_state_refresh()
+    widget_status_update(NORMAL, 0)
+    widget_status_update()
     win.update()
 
 
@@ -1844,10 +1812,11 @@ def stabilize_image(img):
     # Log frame alignment info for analysis (only when in convert loop)
     # Items logged: Tag, project id, Frame number, missing pixel rows, location (bottom/top), Vertical shift
     if ConvertLoopRunning and (missing_bottom < 0 or missing_top < 0):
-        if ExpertMode and stabilization_bounds_alert.get():
+        if ExpertMode:
             stabilization_bounds_alert_counter += 1
             stabilization_bounds_alert_checkbox.config(text = 'Alert when image out of bounds (%i)' % stabilization_bounds_alert_counter)
-            win.bell()
+            if stabilization_bounds_alert.get():
+                win.bell()
         # Tag evolution
         # FrameAlignTag: project_name, CurrentFrame, missing rows, top/bottom, move_y)
         # FrameAlignTag-2: project_name, CurrentFrame, +/- missing rows, move_y, move_x)
@@ -2102,11 +2071,11 @@ def start_convert():
         if BatchJobRunning:
             start_batch_btn.config(text="Stop batch", bg='red', fg='white')
             # Disable all buttons in main window
-            button_status_change_except(start_batch_btn, DISABLED)
+            widget_status_update(DISABLED, start_batch_btn)
         else:
             Go_btn.config(text="Stop", bg='red', fg='white')
             # Disable all buttons in main window
-            button_status_change_except(Go_btn, DISABLED)
+            widget_status_update(DISABLED, Go_btn)
         win.update()
 
         if project_config["GenerateVideo"]:
@@ -2178,7 +2147,7 @@ def generation_exit():
         Go_btn.config(text="Start", bg=save_bg, fg=save_fg)
     ConvertLoopExitRequested = False  # Reset flags
     # Enable all buttons in main window
-    button_status_change_except(0, NORMAL)
+    widget_status_update(NORMAL, 0)
     win.update()
 
 
@@ -2564,17 +2533,17 @@ def build_ui():
     global fill_borders_thickness, fill_borders_thickness_slider
     global fill_borders_thickness_slider, fill_borders_mode_label
     global fill_borders_mode_label_dropdown, fill_borders_mode
-    global encode_all_frames
-    global frames_to_encode_str, frames_to_encode
+    global encode_all_frames, encode_all_frames_checkbox
+    global frames_to_encode_str, frames_to_encode, frames_to_encode_label
     global save_bg, save_fg
     global source_folder_btn, target_folder_btn
     global perform_stabilization, perform_stabilization_checkbox
     global stabilization_threshold_spinbox, stabilization_threshold_str
     global StabilizationThreshold
-    global perform_rotation, perform_rotation_checkbox
+    global perform_rotation, perform_rotation_checkbox, rotation_angle_label
     global rotation_angle_spinbox, rotation_angle_str
     global RotationAngle
-    global custom_stabilization_btn
+    global custom_stabilization_btn, stabilization_threshold_label
     global perform_cropping_checkbox, Crop_btn
     global force_4_3_crop_checkbox, force_4_3_crop
     global force_16_9_crop_checkbox, force_16_9_crop
@@ -2729,11 +2698,11 @@ def build_ui():
     frame_from_str = tk.StringVar(value=str(from_frame))
     frame_from_entry = Entry(postprocessing_frame, textvariable=frame_from_str, width=6, borderwidth=1)
     frame_from_entry.grid(row=postprocessing_row, column=1)
-    frame_from_entry.config(state=DISABLED)
+    frame_from_entry.config(state=NORMAL)
     frame_to_str = tk.StringVar(value=str(from_frame))
     frame_to_entry = Entry(postprocessing_frame, textvariable=frame_to_str, width=6, borderwidth=1)
     frame_to_entry.grid(row=postprocessing_row, column=2, sticky=W)
-    frame_to_entry.config(state=DISABLED)
+    frame_to_entry.config(state=NORMAL)
 
     postprocessing_row += 1
 
@@ -3111,8 +3080,6 @@ def build_ui():
                                                onvalue=True, offvalue=False,
                                                width=40)
         stabilization_bounds_alert_checkbox.pack(side=TOP)
-        stabilization_bounds_alert_checkbox.config(state=NORMAL if perform_stabilization.get() and
-                                     perform_cropping.get() else DISABLED)
 
 
 def exit_app():  # Exit Application
