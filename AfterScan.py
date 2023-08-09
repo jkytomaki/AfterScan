@@ -3214,6 +3214,9 @@ def main(argv):
         cropping_btn.config(state=DISABLED)
         frame_slider.config(state=DISABLED)
     else:
+        Go_btn.config(state=NORMAL)
+        cropping_btn.config(state=NORMAL)
+        frame_slider.config(state=NORMAL)
         frame_slider.set(CurrentFrame)
 
     init_display()
