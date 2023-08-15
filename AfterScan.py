@@ -1077,7 +1077,7 @@ def perform_stabilization_selection():
     stabilization_threshold_spinbox.config(
         state=NORMAL if perform_stabilization.get() else DISABLED)
     project_config["PerformStabilization"] = perform_stabilization.get()
-    widget_status_update()
+    widget_status_update(NORMAL)
 
 
 def stabilization_threshold_selection(updown):
