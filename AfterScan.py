@@ -255,7 +255,7 @@ Configuration file support functions
 
 def set_project_defaults():
     global project_config
-    global perform_cropping, generate_video, resolution_dropdown_selected
+    global perform_cropping, perform_fake_fill, generate_video, resolution_dropdown_selected
     global frame_slider, encode_all_frames, frames_to_encode_str
     global perform_stabilization, skip_frame_regeneration, ffmpeg_preset
     global video_filename_name, fill_borders
@@ -263,6 +263,8 @@ def set_project_defaults():
 
     project_config["PerformCropping"] = False
     perform_cropping.set(project_config["PerformCropping"])
+    project_config["PerformFakeFill"] = False
+    perform_fake_fill.set(project_config["PerformFakeFill"])
     project_config["GenerateVideo"] = False
     generate_video.set(project_config["GenerateVideo"])
     project_config["VideoResolution"] = "Unchanged"
@@ -403,6 +405,7 @@ def save_project_config():
     project_config["FFmpegPreset"] = ffmpeg_preset.get()
     project_config["ProjectConfigDate"] = str(datetime.now())
     project_config["PerformCropping"] = perform_cropping.get()
+    project_config["PerformFakeFill"] = perform_fake_fill.get()
     project_config["VideoFilename"] = video_filename_name.get()
     project_config["FrameFrom"] = int(frame_from_str.get())
     project_config["FrameTo"] = int(frame_to_str.get())
@@ -468,6 +471,7 @@ def decode_project_config():
     global skip_frame_regeneration
     global generate_video, video_filename_name
     global CropTopLeft, CropBottomRight, perform_cropping
+    global perform_fake_fill
     global StabilizeAreaDefined, film_hole_height, film_type
     global ExpertMode
     global StabilizationThreshold
@@ -581,6 +585,10 @@ def decode_project_config():
         force_16_9_crop.set(False)
     if force_4_3_crop.get():    # 4:3 has priority if both set
         force_16_9_crop.set(False)
+    if 'PerformFakeFill' in project_config:
+        perform_fake_fill.set(project_config["PerformFakeFill"])
+    else:
+        perform_fake_fill.set(False)
     if 'GenerateVideo' in project_config:
         generate_video.set(project_config["GenerateVideo"])
     else:
@@ -999,6 +1007,7 @@ def widget_status_update(widget_state=0, button_action=0):
         cropping_btn.config(state=widget_state if perform_stabilization.get() else DISABLED)
         force_4_3_crop_checkbox.config(state=widget_state if perform_stabilization.get() else DISABLED)
         force_16_9_crop_checkbox.config(state=widget_state if perform_stabilization.get() else DISABLED)
+        perform_cropping_checkbox.config(state=widget_state)
         film_type_S8_rb.config(state=DISABLED if CustomTemplateDefined else widget_state)
         film_type_R8_rb.config(state=DISABLED if CustomTemplateDefined else widget_state)
         custom_stabilization_btn.config(state=widget_state)
@@ -1095,7 +1104,7 @@ def stabilization_threshold_spinbox_focus_out(event):
 
 
 def perform_cropping_selection():
-    global perform_cropping, perform_cropping
+    global perform_cropping
     global perform_stabilization
     global generate_video_checkbox
     global ui_init_done
@@ -1109,7 +1118,7 @@ def perform_cropping_selection():
 
 
 def force_4_3_selection():
-    global perform_cropping, perform_cropping
+    global perform_cropping
     global generate_video_checkbox
     global ui_init_done
     global force_4_3_crop, Force43
@@ -1123,7 +1132,7 @@ def force_4_3_selection():
 
 
 def force_16_9_selection():
-    global perform_cropping, perform_cropping
+    global perform_cropping
     global generate_video_checkbox
     global ui_init_done
     global force_4_3_crop, Force43
@@ -1134,6 +1143,15 @@ def force_16_9_selection():
         force_4_3_crop.set(False)
     project_config["Force_4/3"] = force_4_3_crop.get()
     project_config["Force_16/9"] = force_16_9_crop.get()
+
+
+def perform_fake_fill_selection():
+    global perform_fake_fill
+    global ui_init_done
+
+    project_config["PerformFakeFill"] = perform_fake_fill.get()
+    if ui_init_done:
+        scale_display_update()
 
 
 def encode_all_frames_selection():
@@ -1774,6 +1792,7 @@ def stabilize_image(img):
     global stabilization_bounds_alert, stabilization_bounds_alert_counter
     global stabilization_bounds_alert_checkbox
     global project_name
+    global perform_fake_fill
 
     # Get image dimensions to perform image shift later
     width = img.shape[1]
@@ -1807,8 +1826,14 @@ def stabilize_image(img):
     # at the bottom, or the top
     # missing_bottom = top_left[1] - CropTopLeft[1] + crop_height - height - move_y
     # missing_top = top_left[1] - CropTopLeft[1]
-    missing_bottom = height - CropBottomRight[1] + move_y
-    missing_top = CropTopLeft[1] - move_y
+    if move_y < 0:
+        missing_bottom = -(CropBottomRight[1] - move_y - height)
+    else:
+        missing_bottom = 0
+    if move_y > 0:
+        missing_top = CropTopLeft[1] - move_y
+    else:
+        missing_top = 0
     # Log frame alignment info for analysis (only when in convert loop)
     # Items logged: Tag, project id, Frame number, missing pixel rows, location (bottom/top), Vertical shift
     if ConvertLoopRunning and (missing_bottom < 0 or missing_top < 0):
@@ -1827,6 +1852,34 @@ def stabilize_image(img):
         project_name_tag = project_name + '(' + video_filename_name.get() + ')'
         project_name_tag = project_name_tag.replace(',', ';')   # To avoid problem with AfterScanAnalysis
         logging.warning("FrameAlignTag-2, %s, %i, %i, %i, %i", project_name_tag, CurrentFrame, missing_rows, move_y, move_x)
+    # Check if fake fill is enabled, and required: Extract missing fragment
+    if perform_fake_fill.get() and ConvertLoopRunning and (missing_bottom < 0 or missing_top < 0):
+        # Debug code starts
+        # cv2.namedWindow('Original image')
+        # img_s = resize_image(img, 50)
+        # cv2.imshow('Original image', img_s)
+        # cv2.waitKey(0)
+        # cv2.destroyWindow('Original image')
+        # Debug code ends
+        # Perform temporary horizontal stabilization only first, to extract missing fragment
+        translation_matrix = np.array([
+            [1, 0, move_x],
+            [0, 1, 0]
+        ], dtype=np.float32)
+        # Apply the translation to the image
+        translated_image = cv2.warpAffine(src=img, M=translation_matrix,
+                                          dsize=(width, height))
+        if missing_top < 0:
+            missing_fragment = translated_image[CropBottomRight[1]+missing_top:CropBottomRight[1],0:width]
+        elif missing_bottom < 0:
+            missing_fragment = translated_image[CropTopLeft[1]:CropTopLeft[1]-missing_bottom, 0:width]
+        # Debug code starts
+        # cv2.namedWindow('Missing fragment')
+        # missing_fragment_s = resize_image(missing_fragment, 50)
+        # cv2.imshow('Missing fragment', missing_fragment_s)
+        # cv2.waitKey(0)
+        # cv2.destroyWindow('Missing fragment')
+        # Debug code ends
     # Create the translation matrix using move_x and move_y (NumPy array)
     translation_matrix = np.array([
         [1, 0, move_x],
@@ -1835,6 +1888,21 @@ def stabilize_image(img):
     # Apply the translation to the image
     translated_image = cv2.warpAffine(src=img, M=translation_matrix,
                                       dsize=(width, height))
+
+    # Check if fake fill is enabled, and required: Add missing fragment
+    if perform_fake_fill.get() and ConvertLoopRunning and (missing_bottom < 0 or missing_top < 0):
+        if missing_top < 0:
+            translated_image[CropTopLeft[1]:CropTopLeft[1]-missing_top,0:width] = missing_fragment
+        elif missing_bottom < 0:
+            translated_image[CropBottomRight[1]+missing_bottom:CropBottomRight[1],0:width] = missing_fragment
+
+        # Debug code starts
+        # cv2.namedWindow('Fake filled image')
+        # translated_image_s = resize_image(translated_image, 50)
+        # cv2.imshow('Fake filled image', translated_image_s)
+        # cv2.waitKey(0)
+        # cv2.destroyWindow('Fake filled image')
+        # Debug code ends
 
     if ConvertLoopRunning:
         logging.debug("FrameStabilizeTag, %s, %i, %ix%i, %i, %i",
@@ -2573,6 +2641,7 @@ def build_ui():
     global film_type_S8_rb, film_type_R8_rb
     global frame_from_str, frame_to_str, frame_from_entry, frame_to_entry
     global suspend_on_joblist_end
+    global perform_fake_fill
 
     # Create a frame to add a border to the preview
     left_area_frame = Frame(win)
@@ -2706,7 +2775,7 @@ def build_ui():
 
     postprocessing_row += 1
 
-    # Check box to do rorate image
+    # Check box to do rotate image
     perform_rotation = tk.BooleanVar(value=False)
     perform_rotation_checkbox = tk.Checkbutton(
         postprocessing_frame, text='Rotate image:',
@@ -2810,6 +2879,21 @@ def build_ui():
                                       activeforeground='white')
     custom_stabilization_btn.config(relief=SUNKEN if CustomTemplateDefined else RAISED)
     custom_stabilization_btn.grid(row=postprocessing_row, column=0, columnspan=3, pady=5)
+    postprocessing_row += 1
+
+    # This checkbox enables 'fake' frame completion when, due to stabilization process, part of the frame is lost at the
+    # top or at the bottom. It is named 'fake' because to fill in the missing part, a fragment of the previous or next
+    # frame is used. Not perfect, but better than leaving the missing part blank, as it happens today.
+    # And yes, in theory we could pick the missing fragment of the same frame by picking the picture of the
+    # next/previous frame, BUT it is not given that it will be there, as the next/previous frame might have been
+    # captured without the required part.
+    perform_fake_fill = tk.BooleanVar(value=False)
+    perform_fake_fill_checkbox = tk.Checkbutton(
+        postprocessing_frame, text='Fake fill', variable=perform_fake_fill,
+        onvalue=True, offvalue=False, command=perform_fake_fill_selection,
+        width=8)
+    perform_fake_fill_checkbox.grid(row=postprocessing_row, column=0, sticky=W)
+    perform_fake_fill_checkbox.config(state=NORMAL)
     postprocessing_row += 1
 
     # Define video generating area ************************************
