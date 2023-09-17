@@ -1839,14 +1839,18 @@ def stabilize_image(img):
     # missing_bottom = top_left[1] - CropTopLeft[1] + crop_height - height - move_y
     # missing_top = top_left[1] - CropTopLeft[1]
     missing_rows = 0
+    missing_bottom = 0
+    missing_top = 0
     if move_y < 0:
         missing_bottom = -(CropBottomRight[1] - move_y - height)
-    else:
-        missing_bottom = 0
+        missing_rows = -missing_bottom
     if move_y > 0:
         missing_top = CropTopLeft[1] - move_y
-    else:
-        missing_top = 0
+        missing_rows = -missing_top
+
+    if missing_rows > 0 and perform_rotation.get():
+        missing_rows = missing_rows + 10  # If image is rotated, add 50 to cover gap between image and fake fill
+
     # Log frame alignment info for analysis (only when in convert loop)
     # Items logged: Tag, project id, Frame number, missing pixel rows, location (bottom/top), Vertical shift
     if ConvertLoopRunning and (missing_bottom < 0 or missing_top < 0):
@@ -1858,12 +1862,6 @@ def stabilize_image(img):
         # Tag evolution
         # FrameAlignTag: project_name, CurrentFrame, missing rows, top/bottom, move_y)
         # FrameAlignTag-2: project_name, CurrentFrame, +/- missing rows, move_y, move_x)
-        if missing_bottom < 0:
-            missing_rows = -missing_bottom
-        if missing_top < 0:
-            missing_rows = missing_top
-        if missing_rows > 0 and perform_rotation.get():
-            missing_rows = missing_rows + 50    # If image is rotated, add 50 to cover gap between image and fake fill
         project_name_tag = project_name + '(' + video_filename_name.get() + ')'
         project_name_tag = project_name_tag.replace(',', ';')   # To avoid problem with AfterScanAnalysis
         logging.warning("FrameAlignTag-2, %s, %i, %i, %i, %i", project_name_tag, CurrentFrame, missing_rows, move_y, move_x)
