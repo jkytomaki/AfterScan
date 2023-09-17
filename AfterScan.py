@@ -2886,9 +2886,9 @@ def build_ui():
     # captured without the required part.
     perform_fake_fill = tk.BooleanVar(value=False)
     perform_fake_fill_checkbox = tk.Checkbutton(
-        postprocessing_frame, text='Fake fill', variable=perform_fake_fill,
+        postprocessing_frame, text='Fake Frame Fill', variable=perform_fake_fill,
         onvalue=True, offvalue=False, command=perform_fake_fill_selection,
-        width=8)
+        width=12)
     perform_fake_fill_checkbox.grid(row=postprocessing_row, column=0, sticky=W)
     perform_fake_fill_checkbox.config(state=NORMAL)
     postprocessing_row += 1
