@@ -226,6 +226,7 @@ IsLinux = False
 IsMac = False
 
 is_demo = False
+debug_enabled = False
 
 """
 #################
@@ -1704,6 +1705,17 @@ Support functions for core business
 ###################################
 """
 
+def debug_display_image(window_name, img):
+    if debug_enabled:
+        cv2.namedWindow(window_name)
+        if img.shape[0] >= 2 and img.shape[1] >= 2:
+            img_s = resize_image(img, 50)
+        else:
+            img_s = img
+        cv2.imshow(window_name, img_s)
+        cv2.waitKey(0)
+        cv2.destroyWindow(window_name)
+
 
 def display_image(img):
     global PreviewWidth, PreviewHeight
@@ -1826,6 +1838,7 @@ def stabilize_image(img):
     # at the bottom, or the top
     # missing_bottom = top_left[1] - CropTopLeft[1] + crop_height - height - move_y
     # missing_top = top_left[1] - CropTopLeft[1]
+    missing_rows = 0
     if move_y < 0:
         missing_bottom = -(CropBottomRight[1] - move_y - height)
     else:
@@ -1849,18 +1862,14 @@ def stabilize_image(img):
             missing_rows = -missing_bottom
         if missing_top < 0:
             missing_rows = missing_top
+        if missing_rows > 0 and perform_rotation.get():
+            missing_rows = missing_rows + 50    # If image is rotated, add 50 to cover gap between image and fake fill
         project_name_tag = project_name + '(' + video_filename_name.get() + ')'
         project_name_tag = project_name_tag.replace(',', ';')   # To avoid problem with AfterScanAnalysis
         logging.warning("FrameAlignTag-2, %s, %i, %i, %i, %i", project_name_tag, CurrentFrame, missing_rows, move_y, move_x)
     # Check if fake fill is enabled, and required: Extract missing fragment
-    if perform_fake_fill.get() and ConvertLoopRunning and (missing_bottom < 0 or missing_top < 0):
-        # Debug code starts
-        # cv2.namedWindow('Original image')
-        # img_s = resize_image(img, 50)
-        # cv2.imshow('Original image', img_s)
-        # cv2.waitKey(0)
-        # cv2.destroyWindow('Original image')
-        # Debug code ends
+    if perform_fake_fill.get() and ConvertLoopRunning and missing_rows > 0:
+        debug_display_image('Original image', img)
         # Perform temporary horizontal stabilization only first, to extract missing fragment
         translation_matrix = np.array([
             [1, 0, move_x],
@@ -1870,16 +1879,10 @@ def stabilize_image(img):
         translated_image = cv2.warpAffine(src=img, M=translation_matrix,
                                           dsize=(width, height))
         if missing_top < 0:
-            missing_fragment = translated_image[CropBottomRight[1]+missing_top:CropBottomRight[1],0:width]
+            missing_fragment = translated_image[CropBottomRight[1]-missing_rows:CropBottomRight[1],0:width]
         elif missing_bottom < 0:
-            missing_fragment = translated_image[CropTopLeft[1]:CropTopLeft[1]-missing_bottom, 0:width]
-        # Debug code starts
-        # cv2.namedWindow('Missing fragment')
-        # missing_fragment_s = resize_image(missing_fragment, 50)
-        # cv2.imshow('Missing fragment', missing_fragment_s)
-        # cv2.waitKey(0)
-        # cv2.destroyWindow('Missing fragment')
-        # Debug code ends
+            missing_fragment = translated_image[CropTopLeft[1]:CropTopLeft[1]+missing_rows, 0:width]
+        debug_display_image('Missing fragment', missing_fragment)
     # Create the translation matrix using move_x and move_y (NumPy array)
     translation_matrix = np.array([
         [1, 0, move_x],
@@ -1890,19 +1893,13 @@ def stabilize_image(img):
                                       dsize=(width, height))
 
     # Check if fake fill is enabled, and required: Add missing fragment
-    if perform_fake_fill.get() and ConvertLoopRunning and (missing_bottom < 0 or missing_top < 0):
+    if perform_fake_fill.get() and ConvertLoopRunning and missing_rows > 0:
         if missing_top < 0:
-            translated_image[CropTopLeft[1]:CropTopLeft[1]-missing_top,0:width] = missing_fragment
+            translated_image[CropTopLeft[1]:CropTopLeft[1]+missing_rows,0:width] = missing_fragment
         elif missing_bottom < 0:
-            translated_image[CropBottomRight[1]+missing_bottom:CropBottomRight[1],0:width] = missing_fragment
+            translated_image[CropBottomRight[1]-missing_rows:CropBottomRight[1],0:width] = missing_fragment
 
-        # Debug code starts
-        # cv2.namedWindow('Fake filled image')
-        # translated_image_s = resize_image(translated_image, 50)
-        # cv2.imshow('Fake filled image', translated_image_s)
-        # cv2.waitKey(0)
-        # cv2.destroyWindow('Fake filled image')
-        # Debug code ends
+        debug_display_image('Fake filled image', translated_image)
 
     if ConvertLoopRunning:
         logging.debug("FrameStabilizeTag, %s, %i, %ix%i, %i, %i",
