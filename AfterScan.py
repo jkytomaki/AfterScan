@@ -48,6 +48,7 @@ from glob import glob
 import platform
 import threading
 import re
+import shutil
 from enum import Enum
 
 # Frame vars
@@ -73,9 +74,12 @@ project_config_filename = ""
 project_config_from_file = True
 project_name = "No Project"
 job_list_filename = os.path.join(script_dir, "AfterScan_job_list.json")
-pattern_filename_r8 = os.path.join(script_dir, "Pattern.R8.jpg")
-pattern_filename_s8 = os.path.join(script_dir, "Pattern.S8.jpg")
-pattern_filename_custom = os.path.join(script_dir, "Pattern.custom.jpg")
+aux_dir = os.path.join(script_dir, "aux")
+if not os.path.exists(aux_dir):
+    os.mkdir(aux_dir)
+pattern_filename_r8 = os.path.join(aux_dir, "Pattern.R8.jpg")
+pattern_filename_s8 = os.path.join(aux_dir, "Pattern.S8.jpg")
+pattern_filename_custom = os.path.join(aux_dir, "Pattern.custom.jpg")
 pattern_filename = pattern_filename_s8
 frame_hdr_filename_pattern = "hdrpic*.jpg"
 files_to_delete = []
@@ -116,8 +120,8 @@ expected_pattern_pos_custom = (0, 0)
 expected_pattern_pos = expected_pattern_pos_s8
 default_hole_height_s8 = 344
 default_interhole_height_r8 = 808
-pattern_bw_filename = os.path.join(script_dir, "Pattern_BW.jpg")
-pattern_wb_filename = os.path.join(script_dir, "Pattern_WB.jpg")
+pattern_bw_filename = os.path.join(aux_dir, "Pattern_BW.jpg")
+pattern_wb_filename = os.path.join(aux_dir, "Pattern_WB.jpg")
 film_hole_height = 0
 film_hole_template = None
 HoleSearchTopLeft = (0, 0)
@@ -723,6 +727,12 @@ def job_list_add_current():
     else:
         save_project_config()  # Make sure all current settings are in project_config
         job_list[entry_name] = {'project': project_config.copy(), 'done': False}
+        # If a custom pattern is used, copy it with the name of the job, and change it in the joblist/project item
+        if CustomTemplateDefined and os.path.isfile(pattern_filename_custom):
+            CustomTemplateDir = os.path.dirname(pattern_filename_custom)    # should be aux_dir, but better be safe
+            TargetTemplateFile = os.path.join(CustomTemplateDir, job_list[entry_name]['project']['VideoFilename'])
+            shutil.copyfile(pattern_filename_custom, TargetTemplateFile)
+            job_list[entry_name]['project']['CustomTemplateFilename'] = TargetTemplateFile
         job_list_listbox.insert('end', entry_name)
         job_list_listbox.itemconfig('end', fg='black')
 
@@ -776,10 +786,13 @@ def load_job_list():
 
 
 def start_processing_job_list():
-    global BatchJobRunning, start_batch_btn
-    BatchJobRunning = True
-    widget_status_update(DISABLED, start_batch_btn)
-    job_processing_loop()
+    global BatchJobRunning, start_batch_btn, ConvertLoopExitRequested
+    if BatchJobRunning:
+        ConvertLoopExitRequested = True
+    else:
+        BatchJobRunning = True
+        widget_status_update(DISABLED, start_batch_btn)
+        job_processing_loop()
 
 
 def job_processing_loop():
@@ -1493,7 +1506,7 @@ def select_custom_template():
     global perform_cropping
     global CropTopLeft, CropBottomRight
     global CustomTemplateDefined
-    global CurrentFrame, SourceDirFileList, SourceDir, script_dir
+    global CurrentFrame, SourceDirFileList, SourceDir, aux_dir
     global expected_pattern_pos_custom, pattern_filename_custom
     global StabilizationThreshold
     global custom_stabilization_btn
@@ -1528,7 +1541,7 @@ def select_custom_template():
             img = crop_image(img, RectangleTopLeft, RectangleBottomRight)
             img_grey = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
             img_bw = cv2.threshold(img_grey, float(StabilizationThreshold), 255, cv2.THRESH_BINARY)[1]
-            pattern_filename_custom = os.path.join(script_dir, "Pattern.custom." + os.path.split(SourceDir)[-1] + ".jpg")
+            pattern_filename_custom = os.path.join(aux_dir, "Pattern.custom." + os.path.split(SourceDir)[-1] + ".jpg")
             project_config["CustomTemplateFilename"] = pattern_filename_custom
             cv2.imwrite(pattern_filename_custom, img_bw)
             expected_pattern_pos_custom = RectangleTopLeft
@@ -2526,7 +2539,7 @@ def afterscan_init():
     global BigSize
 
     # Initialize logging
-    log_path = os.path.dirname(__file__)
+    log_path = aux_dir
     if log_path == "":
         log_path = os.getcwd()
     log_file_fullpath = log_path + "/AfterScan." + time.strftime("%Y%m%d") + ".log"
