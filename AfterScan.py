@@ -731,7 +731,7 @@ def job_list_add_current():
         # If a custom pattern is used, copy it with the name of the job, and change it in the joblist/project item
         if CustomTemplateDefined and os.path.isfile(pattern_filename_custom):
             CustomTemplateDir = os.path.dirname(pattern_filename_custom)    # should be aux_dir, but better be safe
-            TargetTemplateFile = os.path.join(CustomTemplateDir, job_list[entry_name]['project']['VideoFilename'])
+            TargetTemplateFile = os.path.join(CustomTemplateDir, os.path.splitext(job_list[entry_name]['project']['VideoFilename'])[0]+'.jpg' )
             shutil.copyfile(pattern_filename_custom, TargetTemplateFile)
             job_list[entry_name]['project']['CustomTemplateFilename'] = TargetTemplateFile
         job_list_listbox.insert('end', entry_name)
