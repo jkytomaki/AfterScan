@@ -720,10 +720,11 @@ def job_list_add_current():
         entry_name = entry_name + ", " + resolution_dropdown_selected.get()
 
     if entry_name in job_list:
-        tk.messagebox.showerror(
-            "Error: Job already exists",
-            "A job named " + entry_name + " exists already in the job list. "
-            "Please delete existing job or rename this one before retrying.")
+        if not tk.messagebox.askyesno(
+                "Job already exists",
+                "A job named " + entry_name + " exists already in the job list. "
+                "Do you want to overwrite it?."):
+            return
     else:
         save_project_config()  # Make sure all current settings are in project_config
         job_list[entry_name] = {'project': project_config.copy(), 'done': False}
@@ -737,6 +738,31 @@ def job_list_add_current():
         job_list_listbox.itemconfig('end', fg='black')
 
 
+# gets currently selected job list item adn loads it in the UI fields (to allow editing)
+def job_list_load_selected():
+    global job_list
+    global CurrentFrame, StartFrame, frames_to_encode
+    global project_config, video_filename_name
+    global job_list_listbox
+    global encode_all_frames, SourceDirFileList
+    global frame_from_str, frame_to_str
+    global resolution_dropdown_selected
+    global CustomTemplateDefined, pattern_filename_custom
+
+    selected = job_list_listbox.curselection()
+    if selected != ():
+        entry_name = job_list_listbox.get(selected[0])
+
+        if entry_name in job_list:
+            project_config = job_list[entry_name]['project']
+
+            if os.path.isfile(project_config['CustomTemplateFilename']):
+                CustomTemplateDefined = True
+                pattern_filename_custom = project_config['CustomTemplateFilename']
+
+            decode_project_config()
+
+
 def job_list_delete_selected():
     global job_list
     global job_list_listbox
@@ -744,6 +770,10 @@ def job_list_delete_selected():
     if selected != ():
         job_list.pop(job_list_listbox.get(selected))
         job_list_listbox.delete(selected)
+        if selected[0] < job_list_listbox.size():
+            job_list_listbox.select_set(selected[0])
+        elif job_list_listbox.size() > 0:
+            job_list_listbox.select_set(selected[0]-1)
 
 
 def job_list_rerun_selected():
@@ -833,6 +863,13 @@ def job_processing_loop():
         if suspend_on_joblist_end.get():
             system_suspend()
 
+
+def job_list_delete_current(event):
+    job_list_delete_selected()
+
+
+def job_list_load_current(event):
+    job_list_load_selected()
 
 """
 ###############################
@@ -3043,7 +3080,10 @@ def build_ui():
     # job listbox
     job_list_listbox = Listbox(job_list_frame, width=67 if BigSize else 42, height=9)
     job_list_listbox.grid(column=0, row=0, padx=5, pady=2, ipadx=5)
-
+    job_list_listbox.bind("<Delete>", job_list_delete_current)
+    job_list_listbox.bind("<Return>", job_list_load_current)
+    job_list_listbox.bind("<KP_Enter>", job_list_load_current)
+    job_list_listbox.bind("<Double - Button - 1>", job_list_load_current)
     # job listbox scrollbars
     job_list_listbox_scrollbar_y = Scrollbar(job_list_frame, orient="vertical")
     job_list_listbox_scrollbar_y.config(command=job_list_listbox.yview)
