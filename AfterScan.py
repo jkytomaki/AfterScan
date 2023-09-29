@@ -719,23 +719,31 @@ def job_list_add_current():
     if resolution_dropdown_selected.get():
         entry_name = entry_name + ", " + resolution_dropdown_selected.get()
 
+    save_project = True
     if entry_name in job_list:
-        if not tk.messagebox.askyesno(
+        if tk.messagebox.askyesno(
                 "Job already exists",
                 "A job named " + entry_name + " exists already in the job list. "
                 "Do you want to overwrite it?."):
-            return
-    else:
+            item_index = job_list_listbox.get(0, "end").index(entry_name)
+            job_list.pop(job_list_listbox.get(item_index))
+            job_list_listbox.delete(item_index)
+        else:
+            save_project = False
+    if save_project:
         save_project_config()  # Make sure all current settings are in project_config
         job_list[entry_name] = {'project': project_config.copy(), 'done': False}
+        job_list[entry_name]['project']['Done'] = False    # Set Done to False in case of editing an existing job
         # If a custom pattern is used, copy it with the name of the job, and change it in the joblist/project item
         if CustomTemplateDefined and os.path.isfile(pattern_filename_custom):
             CustomTemplateDir = os.path.dirname(pattern_filename_custom)    # should be aux_dir, but better be safe
             TargetTemplateFile = os.path.join(CustomTemplateDir, os.path.splitext(job_list[entry_name]['project']['VideoFilename'])[0]+'.jpg' )
-            shutil.copyfile(pattern_filename_custom, TargetTemplateFile)
+            if pattern_filename_custom != TargetTemplateFile:
+                shutil.copyfile(pattern_filename_custom, TargetTemplateFile)
             job_list[entry_name]['project']['CustomTemplateFilename'] = TargetTemplateFile
         job_list_listbox.insert('end', entry_name)
         job_list_listbox.itemconfig('end', fg='black')
+        job_list_listbox.select_set('end')
 
 
 # gets currently selected job list item adn loads it in the UI fields (to allow editing)
