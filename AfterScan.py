@@ -1638,6 +1638,7 @@ def select_hole_height(work_image):
     # Find hole height
     film_hole_height = determine_hole_height(work_image)
     if film_hole_height < 0:
+        debug_display_image('Hole', work_image)
         film_hole_height = 0
         StabilizeAreaDefined = False
         perform_stabilization.set(False)
@@ -1661,8 +1662,8 @@ def determine_hole_height(img):
         template_2 = film_wb_template
         other_film_type = 'R8'
     search_img = get_image_left_stripe(img)
-    top_left_1 = match_template(template_1, search_img, 230)
-    top_left_2 = match_template(template_2, search_img, 230)
+    top_left_1 = match_template(template_1, search_img, 250)
+    top_left_2 = match_template(template_2, search_img, 250)
     if top_left_1[1] > top_left_2[1]:
         if not BatchJobRunning:
             if tk.messagebox.askyesno(
@@ -1745,6 +1746,10 @@ def match_template(template, img, thres):
     best_match_idx = 0
     w = template.shape[1]
     h = template.shape[0]
+    if h > 200:
+        loops = 3
+    else:
+        loops = 1   # Search only full template when looking for frame holes (R8/S8 check)
     if (w >= img.shape[1] or h >= img.shape[0]):
         logging.error("Template (%ix%i) bigger than image  (%ix%i)",
                       w, h, img.shape[1], img.shape[0])
@@ -1753,7 +1758,7 @@ def match_template(template, img, thres):
     #   - Match full template
     #   - Match upper half
     #   - Match lower half
-    for i in range(0, 3):
+    for i in range(0, loops):
         if i == 0:
             aux_template = template
         elif i == 1:
@@ -1766,19 +1771,7 @@ def match_template(template, img, thres):
         #img_bw = cv2.threshold(img_blur, thres, 255, cv2.THRESH_BINARY)[1]
         #img_edges = cv2.Canny(image=img_bw, threshold1=100, threshold2=20)  # Canny Edge Detection
         result.append(cv2.matchTemplate(img_blur, aux_template, cv2.TM_CCOEFF_NORMED))
-        # Debug code starts
-        # cv2.namedWindow('Template')
-        # cv2.namedWindow('Image left strip')
-        # img_bw_s = resize_image(img_bw, 50)
-        # template_s = resize_image(template, 50)
-        # cv2.imshow('Template', template_s)
-        # cv2.imshow('Image left strip', img_bw_s)
-        # cv2.waitKey(0)
-        # cv2.destroyWindow('Image left strip')
-        # cv2.destroyWindow('Template')
-        # Debug code ends
         # Best match
-        print(CurrentFrame, np.amax(result[i]))
         if np.amax(result[i]) > best_match:
             best_match_idx = i
             best_match = np.amax(result[i])
