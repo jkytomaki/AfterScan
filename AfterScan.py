@@ -61,6 +61,7 @@ from_frame = 0
 to_frame = 0
 CurrentFrame = 0
 StartFrame = 0
+frame_selected = 0
 global work_image, base_image, original_image
 
 # Configuration & support file vars
@@ -104,7 +105,8 @@ default_project_config = {
     "VideoFilename": "",
     "FillBorders": False,
     "FillBordersThickness": 5,
-    "FillBordersMode": "smear"
+    "FillBordersMode": "smear",
+    "FakeFillType": "none"
 }
 
 general_config = {
@@ -136,7 +138,8 @@ FrameFilenameOutputPattern = "picture_out-%05d.jpg"
 FrameCheckFilenameOutputPattern = "picture_out-*.jpg"  # Req. for ffmpeg gen.
 SourceDirFileList = []
 TargetDirFileList = []
-global film_type
+film_type = 'S8'
+frame_fill_type = 'none'
 
 # Flow control vars
 ConvertLoopExitRequested = False
@@ -260,16 +263,17 @@ Configuration file support functions
 
 def set_project_defaults():
     global project_config
-    global perform_cropping, perform_fake_fill, generate_video, resolution_dropdown_selected
+    global perform_cropping, generate_video, resolution_dropdown_selected
     global frame_slider, encode_all_frames, frames_to_encode_str
     global perform_stabilization, skip_frame_regeneration, ffmpeg_preset
     global video_filename_name, fill_borders
     global frame_from_str, frame_to_str
+    global frame_fill_type
 
     project_config["PerformCropping"] = False
     perform_cropping.set(project_config["PerformCropping"])
-    project_config["PerformFakeFill"] = False
-    perform_fake_fill.set(project_config["PerformFakeFill"])
+    project_config["FrameFillType"] = 'none'
+    frame_fill_type.set(project_config["FrameFillType"])
     project_config["GenerateVideo"] = False
     generate_video.set(project_config["GenerateVideo"])
     project_config["VideoResolution"] = "Unchanged"
@@ -410,7 +414,7 @@ def save_project_config():
     project_config["FFmpegPreset"] = ffmpeg_preset.get()
     project_config["ProjectConfigDate"] = str(datetime.now())
     project_config["PerformCropping"] = perform_cropping.get()
-    project_config["PerformFakeFill"] = perform_fake_fill.get()
+    project_config["FrameFillType"] = frame_fill_type.get()
     project_config["VideoFilename"] = video_filename_name.get()
     project_config["FrameFrom"] = int(frame_from_str.get())
     project_config["FrameTo"] = int(frame_to_str.get())
@@ -476,7 +480,6 @@ def decode_project_config():
     global skip_frame_regeneration
     global generate_video, video_filename_name
     global CropTopLeft, CropBottomRight, perform_cropping
-    global perform_fake_fill
     global StabilizeAreaDefined, film_hole_height, film_type
     global ExpertMode
     global StabilizationThreshold
@@ -488,6 +491,7 @@ def decode_project_config():
     global frame_from_str, frame_to_str
     global project_name
     global force_4_3_crop, force_16_9_crop
+    global frame_fill_type
 
     if IgnoreConfig:
         return
@@ -590,10 +594,12 @@ def decode_project_config():
         force_16_9_crop.set(False)
     if force_4_3_crop.get():    # 4:3 has priority if both set
         force_16_9_crop.set(False)
-    if 'PerformFakeFill' in project_config:
-        perform_fake_fill.set(project_config["PerformFakeFill"])
+    if 'FrameFillType' in project_config:
+        frame_fill_type.set(project_config["FrameFillType"])
     else:
-        perform_fake_fill.set(False)
+        project_config["FrameFillType"] = 'none'
+        frame_fill_type.set(project_config["FrameFillType"])
+
     if 'GenerateVideo' in project_config:
         generate_video.set(project_config["GenerateVideo"])
     else:
@@ -769,6 +775,15 @@ def job_list_load_selected():
                 pattern_filename_custom = project_config['CustomTemplateFilename']
 
             decode_project_config()
+            # Load matching file list from newly selected dir
+            get_source_dir_file_list()  # first_absolute_frame is set here
+
+            # Enable Start and Crop buttons, plus slider, once we have files to handle
+            cropping_btn.config(state=NORMAL)
+            frame_slider.config(state=NORMAL)
+            Go_btn.config(state=NORMAL)
+            frame_slider.set(CurrentFrame)
+            init_display()
 
 
 def job_list_delete_selected():
@@ -878,6 +893,11 @@ def job_list_delete_current(event):
 
 def job_list_load_current(event):
     job_list_load_selected()
+
+
+def job_list_rerun_current(event):
+    job_list_rerun_selected()
+
 
 """
 ###############################
@@ -1145,6 +1165,7 @@ def perform_stabilization_selection():
     stabilization_threshold_spinbox.config(
         state=NORMAL if perform_stabilization.get() else DISABLED)
     project_config["PerformStabilization"] = perform_stabilization.get()
+    scale_display_update()
     widget_status_update(NORMAL)
 
 
@@ -1202,15 +1223,6 @@ def force_16_9_selection():
         force_4_3_crop.set(False)
     project_config["Force_4/3"] = force_4_3_crop.get()
     project_config["Force_16/9"] = force_16_9_crop.get()
-
-
-def perform_fake_fill_selection():
-    global perform_fake_fill
-    global ui_init_done
-
-    project_config["PerformFakeFill"] = perform_fake_fill.get()
-    if ui_init_done:
-        scale_display_update()
 
 
 def encode_all_frames_selection():
@@ -1728,32 +1740,63 @@ def validate_template_size():
 
 
 def match_template(template, img, thres):
+    result = []
+    best_match = 0
+    best_match_idx = 0
     w = template.shape[1]
     h = template.shape[0]
     if (w >= img.shape[1] or h >= img.shape[0]):
         logging.error("Template (%ix%i) bigger than image  (%ix%i)",
                       w, h, img.shape[1], img.shape[0])
         return (0, 0)
-    # convert img to grey
-    img_grey = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    img_blur = cv2.GaussianBlur(img_grey, (3, 3), 0)
-    #img_bw = cv2.threshold(img_blur, thres, 255, cv2.THRESH_BINARY)[1]
-    #img_edges = cv2.Canny(image=img_bw, threshold1=100, threshold2=20)  # Canny Edge Detection
-    res = cv2.matchTemplate(img_blur, template, cv2.TM_CCOEFF_NORMED)
-    # Debug code starts
-    # cv2.namedWindow('Template')
-    # cv2.namedWindow('Image left strip')
-    # img_bw_s = resize_image(img_bw, 50)
-    # template_s = resize_image(template, 50)
-    # cv2.imshow('Template', template_s)
-    # cv2.imshow('Image left strip', img_bw_s)
-    # cv2.waitKey(0)
-    # cv2.destroyWindow('Image left strip')
-    # cv2.destroyWindow('Template')
-    # Debug code ends
-    # Best match
-    min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(res)
+    # In order to deal with extremely misaligned frames, where part of thw template is off-frame, we make 3 attempts:
+    #   - Match full template
+    #   - Match upper half
+    #   - Match lower half
+    for i in range(0, 3):
+        if i == 0:
+            aux_template = template
+        elif i == 1:
+            aux_template = template[0:int(h/2)]
+        elif i==2:
+            aux_template = template[int(h/2):h]
+        # convert img to grey
+        img_grey = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        img_blur = cv2.GaussianBlur(img_grey, (3, 3), 0)
+        #img_bw = cv2.threshold(img_blur, thres, 255, cv2.THRESH_BINARY)[1]
+        #img_edges = cv2.Canny(image=img_bw, threshold1=100, threshold2=20)  # Canny Edge Detection
+        result.append(cv2.matchTemplate(img_blur, aux_template, cv2.TM_CCOEFF_NORMED))
+        # Debug code starts
+        # cv2.namedWindow('Template')
+        # cv2.namedWindow('Image left strip')
+        # img_bw_s = resize_image(img_bw, 50)
+        # template_s = resize_image(template, 50)
+        # cv2.imshow('Template', template_s)
+        # cv2.imshow('Image left strip', img_bw_s)
+        # cv2.waitKey(0)
+        # cv2.destroyWindow('Image left strip')
+        # cv2.destroyWindow('Template')
+        # Debug code ends
+        # Best match
+        print(CurrentFrame, np.amax(result[i]))
+        if np.amax(result[i]) > best_match:
+            best_match_idx = i
+            best_match = np.amax(result[i])
+
+    min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result[best_match_idx])
     top_left = max_loc
+    if best_match_idx == 1 and top_left[1] > int(h / 2):   # Discard it, top half of template in lower half of  frame
+        if np.amax(result[0]) > np.amax(result[2]):
+            best_match_idx = 0
+            min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result[0])
+        else:
+            best_match_idx = 2
+            min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result[2])
+        top_left = max_loc
+
+    if best_match_idx == 2:
+        top_left = (top_left[0],top_left[1]-int(h/2))  # if using lower half of template, adjust coordinates accordingly
+
     return top_left
 
 
@@ -1855,6 +1898,7 @@ def rotate_image(img):
 
 def stabilize_image(img):
     global SourceDirFileList, CurrentFrame
+    global first_absolute_frame
     global HoleSearchTopLeft, HoleSearchBottomRight
     global expected_pattern_pos, film_hole_template
     global StabilizationThreshold
@@ -1862,7 +1906,7 @@ def stabilize_image(img):
     global stabilization_bounds_alert, stabilization_bounds_alert_counter
     global stabilization_bounds_alert_checkbox
     global project_name
-    global perform_fake_fill
+    global frame_fill_type
 
     # Get image dimensions to perform image shift later
     width = img.shape[1]
@@ -1875,23 +1919,26 @@ def stabilize_image(img):
 
     # Search film hole pattern
     top_left = match_template(film_hole_template, left_stripe_image, float(StabilizationThreshold))
-    # The coordinates returned by match template are relative to the
-    # cropped image. In order to calculate the correct values to provide
-    # to the translation matrix, need to convert to absolute coordinates
-    top_left = (top_left[0] + HoleSearchTopLeft[0],
-                top_left[1] + HoleSearchTopLeft[1])
-    # According to tests done during the development, the ideal top left
-    # position for a match of the hole template used (63*339 pixels) should
-    # be situated at 12% of the horizontal axis, and 38% of the vertical
-    # axis. Calculate shift, according to those proportions
+    if top_left[1] != -1:
+        # The coordinates returned by match template are relative to the
+        # cropped image. In order to calculate the correct values to provide
+        # to the translation matrix, need to convert to absolute coordinates
+        top_left = (top_left[0] + HoleSearchTopLeft[0],
+                    top_left[1] + HoleSearchTopLeft[1])
+        # According to tests done during the development, the ideal top left
+        # position for a match of the hole template used (63*339 pixels) should
+        # be situated at 12% of the horizontal axis, and 38% of the vertical
+        # axis. Calculate shift, according to those proportions
 
-    if CustomTemplateDefined:   # For custom template, expected position is absolute
-        move_x = expected_pattern_pos[0] - top_left[0]
-        move_y = expected_pattern_pos[1] - top_left[1]
+        if CustomTemplateDefined:   # For custom template, expected position is absolute
+            move_x = expected_pattern_pos[0] - top_left[0]
+            move_y = expected_pattern_pos[1] - top_left[1]
+        else:
+            move_x = round((expected_pattern_pos[0] * width / 100)) - top_left[0]
+            move_y = round((expected_pattern_pos[1] * height / 100)) - top_left[1]
     else:
-        move_x = round((expected_pattern_pos[0] * width / 100)) - top_left[0]
-        move_y = round((expected_pattern_pos[1] * height / 100)) - top_left[1]
-
+        move_x = 0
+        move_y = 0
     # Experimental: Try to figure out if there will be a part missing
     # at the bottom, or the top
     # missing_bottom = top_left[1] - CropTopLeft[1] + crop_height - height - move_y
@@ -1900,14 +1947,16 @@ def stabilize_image(img):
     missing_bottom = 0
     missing_top = 0
     if move_y < 0:
-        missing_bottom = -(CropBottomRight[1] - move_y - height)
+        if height + move_y < CropBottomRight[1]:
+            missing_bottom = -(CropBottomRight[1] - (height + move_y))
         missing_rows = -missing_bottom
     if move_y > 0:
-        missing_top = CropTopLeft[1] - move_y
+        if move_y > CropTopLeft[1]:
+            missing_top = CropTopLeft[1] - move_y
         missing_rows = -missing_top
 
     if missing_rows > 0 and perform_rotation.get():
-        missing_rows = missing_rows + 10  # If image is rotated, add 50 to cover gap between image and fake fill
+        missing_rows = missing_rows + 10  # If image is rotated, add 10 to cover gap between image and fill
 
     # Log frame alignment info for analysis (only when in convert loop)
     # Items logged: Tag, project id, Frame number, missing pixel rows, location (bottom/top), Vertical shift
@@ -1922,9 +1971,9 @@ def stabilize_image(img):
         # FrameAlignTag-2: project_name, CurrentFrame, +/- missing rows, move_y, move_x)
         project_name_tag = project_name + '(' + video_filename_name.get() + ')'
         project_name_tag = project_name_tag.replace(',', ';')   # To avoid problem with AfterScanAnalysis
-        logging.warning("FrameAlignTag-2, %s, %i, %i, %i, %i", project_name_tag, CurrentFrame, missing_rows, move_y, move_x)
-    # Check if fake fill is enabled, and required: Extract missing fragment
-    if perform_fake_fill.get() and ConvertLoopRunning and missing_rows > 0:
+        logging.warning("FrameAlignTag-2, %s, %i, %i, %i, %i", project_name_tag, first_absolute_frame+CurrentFrame, missing_rows, move_y, move_x)
+    # Check if frame fill is enabled, and required: Extract missing fragment
+    if frame_fill_type.get() == 'fake' and ConvertLoopRunning and missing_rows > 0:
         debug_display_image('Original image', img)
         # Perform temporary horizontal stabilization only first, to extract missing fragment
         translation_matrix = np.array([
@@ -1948,14 +1997,25 @@ def stabilize_image(img):
     translated_image = cv2.warpAffine(src=img, M=translation_matrix,
                                       dsize=(width, height))
 
-    # Check if fake fill is enabled, and required: Add missing fragment
-    if perform_fake_fill.get() and ConvertLoopRunning and missing_rows > 0:
-        if missing_top < 0:
-            translated_image[CropTopLeft[1]:CropTopLeft[1]+missing_rows,0:width] = missing_fragment
-        elif missing_bottom < 0:
-            translated_image[CropBottomRight[1]-missing_rows:CropBottomRight[1],0:width] = missing_fragment
-
-        debug_display_image('Fake filled image', translated_image)
+    # Check if frame fill is enabled, and required: Add missing fragment
+    # Check if there is a gap in the frame, if so, and one of the 'fill' functions is enabled, fill accordingly
+    if missing_rows > 0 and ConvertLoopRunning:
+        if frame_fill_type.get() == 'fake':
+            if missing_top < 0:
+                translated_image[CropTopLeft[1]:CropTopLeft[1]+missing_rows,0:width] = missing_fragment
+            elif missing_bottom < 0:
+                translated_image[CropBottomRight[1]-missing_rows:CropBottomRight[1],0:width] = missing_fragment
+            debug_display_image('Fake filled image', translated_image)
+        elif frame_fill_type.get() == 'dumb':
+            if missing_top < 0:
+                translated_image = translated_image[missing_rows+CropTopLeft[1]:height,0:width]
+                translated_image = cv2.copyMakeBorder(src=translated_image, top=missing_rows+CropTopLeft[1], bottom=0, left=0, right=0,
+                                                      borderType=cv2.BORDER_REPLICATE)
+            elif missing_bottom < 0:
+                translated_image = translated_image[0:CropBottomRight[1]-missing_rows, 0:width]
+                translated_image = cv2.copyMakeBorder(src=translated_image, top=0, bottom=CropBottomRight[1]-missing_rows, left=0, right=0,
+                                                      borderType=cv2.BORDER_REPLICATE)
+            debug_display_image('Filled image', translated_image)
 
     if ConvertLoopRunning:
         logging.debug("FrameStabilizeTag, %s, %i, %ix%i, %i, %i",
@@ -2293,7 +2353,7 @@ def frame_generation_loop():
     global CropTopLeft, CropBottomRight
     global TargetDir
     global CurrentFrame, first_absolute_frame
-    global StartFrame, frames_to_encode
+    global StartFrame, frames_to_encode, frame_selected
     global FrameFilenameOutputPattern
     global BatchJobRunning
     global ffmpeg_success, ffmpeg_encoding_status
@@ -2351,6 +2411,7 @@ def frame_generation_loop():
             target_file = os.path.join(TargetDir, FrameFilenameOutputPattern % (first_absolute_frame + CurrentFrame))
             cv2.imwrite(target_file, img)
 
+        frame_selected.set(CurrentFrame)
         frame_slider.set(CurrentFrame)
         frame_slider.config(label='Global:'+
                             str(CurrentFrame+first_absolute_frame))
@@ -2436,6 +2497,7 @@ def video_generation_loop():
     global app_status_label
     global BatchJobRunning
     global StartFrame, first_absolute_frame
+    global frame_selected
 
     if ffmpeg_encoding_status == ffmpeg_state.Pending:
         # Check for special cases first
@@ -2490,6 +2552,7 @@ def video_generation_loop():
                 frame_str = str(line)[:-1].replace('=', ' ').split()[1]
                 if is_a_number(frame_str):  # Sometimes ffmpeg output might be corrupted on the way
                     encoded_frame = int(frame_str)
+                    frame_selected.set(encoded_frame)
                     frame_slider.set(StartFrame + first_absolute_frame + encoded_frame)
                     frame_slider.config(label='Global:' +
                                               str(StartFrame + first_absolute_frame + encoded_frame))
@@ -2680,7 +2743,7 @@ def build_ui():
     global ExpertMode
     global pattern_filename
     global frame_input_filename_pattern
-    global frame_slider, CurrentFrame
+    global frame_slider, CurrentFrame, frame_selected
     global film_type, film_hole_template
     global job_list_listbox
     global app_status_label
@@ -2694,7 +2757,7 @@ def build_ui():
     global film_type_S8_rb, film_type_R8_rb
     global frame_from_str, frame_to_str, frame_from_entry, frame_to_entry
     global suspend_on_joblist_end
-    global perform_fake_fill
+    global frame_fill_type
 
     # Create a frame to add a border to the preview
     left_area_frame = Frame(win)
@@ -2936,17 +2999,23 @@ def build_ui():
 
     # This checkbox enables 'fake' frame completion when, due to stabilization process, part of the frame is lost at the
     # top or at the bottom. It is named 'fake' because to fill in the missing part, a fragment of the previous or next
-    # frame is used. Not perfect, but better than leaving the missing part blank, as it happens today.
+    # frame is used. Not perfect, but better than leaving the missing part blank, as it would happen without this.
+    # Also, for this to work the cropping rectangle should encompass the full frame, top to bottom.
     # And yes, in theory we could pick the missing fragment of the same frame by picking the picture of the
     # next/previous frame, BUT it is not given that it will be there, as the next/previous frame might have been
     # captured without the required part.
-    perform_fake_fill = tk.BooleanVar(value=False)
-    perform_fake_fill_checkbox = tk.Checkbutton(
-        postprocessing_frame, text='Fake Frame Fill', variable=perform_fake_fill,
-        onvalue=True, offvalue=False, command=perform_fake_fill_selection,
-        width=12)
-    perform_fake_fill_checkbox.grid(row=postprocessing_row, column=0, sticky=W)
-    perform_fake_fill_checkbox.config(state=NORMAL)
+    frame_fill_type = StringVar()
+    perform_fill_none_rb = Radiobutton(postprocessing_frame, text='No frame fill',
+                                    variable=frame_fill_type, value='none')
+    perform_fill_none_rb.grid(row=postprocessing_row, column=0, sticky=W)
+    perform_fill_fake_rb = Radiobutton(postprocessing_frame, text='Fake fill',
+                                    variable=frame_fill_type, value='fake')
+    perform_fill_fake_rb.grid(row=postprocessing_row, column=1, sticky=W)
+    perform_fill_dumb_rb = Radiobutton(postprocessing_frame, text='Dumb fill',
+                                    variable=frame_fill_type, value='dumb')
+    perform_fill_dumb_rb.grid(row=postprocessing_row, column=2, sticky=W)
+    frame_fill_type.set('none')
+
     postprocessing_row += 1
 
     # Define video generating area ************************************
@@ -3092,6 +3161,7 @@ def build_ui():
     job_list_listbox.bind("<Return>", job_list_load_current)
     job_list_listbox.bind("<KP_Enter>", job_list_load_current)
     job_list_listbox.bind("<Double - Button - 1>", job_list_load_current)
+    job_list_listbox.bind("r", job_list_rerun_current)
     # job listbox scrollbars
     job_list_listbox_scrollbar_y = Scrollbar(job_list_frame, orient="vertical")
     job_list_listbox_scrollbar_y.config(command=job_list_listbox.yview)
