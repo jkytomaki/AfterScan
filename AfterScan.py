@@ -492,6 +492,7 @@ def decode_project_config():
     global project_name
     global force_4_3_crop, force_16_9_crop
     global frame_fill_type
+    global Force43, Force169
 
     if IgnoreConfig:
         return
@@ -594,6 +595,8 @@ def decode_project_config():
         force_16_9_crop.set(False)
     if force_4_3_crop.get():    # 4:3 has priority if both set
         force_16_9_crop.set(False)
+    Force43 = force_4_3_crop.get()
+    Force169 = force_16_9_crop.get()
     if 'FrameFillType' in project_config:
         frame_fill_type.set(project_config["FrameFillType"])
     else:
@@ -1638,7 +1641,6 @@ def select_hole_height(work_image):
     # Find hole height
     film_hole_height = determine_hole_height(work_image)
     if film_hole_height < 0:
-        debug_display_image('Hole', work_image)
         film_hole_height = 0
         StabilizeAreaDefined = False
         perform_stabilization.set(False)
@@ -1653,6 +1655,7 @@ def select_hole_height(work_image):
 def determine_hole_height(img):
     global film_hole_template, film_bw_template, film_wb_template
 
+    debug_display_image('Film hole', img)
     if project_config["FilmType"] == 'R8':
         template_1 = film_wb_template
         template_2 = film_bw_template
@@ -1954,11 +1957,10 @@ def stabilize_image(img):
     # Log frame alignment info for analysis (only when in convert loop)
     # Items logged: Tag, project id, Frame number, missing pixel rows, location (bottom/top), Vertical shift
     if ConvertLoopRunning and (missing_bottom < 0 or missing_top < 0):
-        if ExpertMode:
-            stabilization_bounds_alert_counter += 1
-            stabilization_bounds_alert_checkbox.config(text = 'Alert when image out of bounds (%i)' % stabilization_bounds_alert_counter)
-            if stabilization_bounds_alert.get():
-                win.bell()
+        stabilization_bounds_alert_counter += 1
+        stabilization_bounds_alert_checkbox.config(text = 'Alert when image out of bounds (%i)' % stabilization_bounds_alert_counter)
+        if stabilization_bounds_alert.get():
+            win.bell()
         # Tag evolution
         # FrameAlignTag: project_name, CurrentFrame, missing rows, top/bottom, move_y)
         # FrameAlignTag-2: project_name, CurrentFrame, +/- missing rows, move_y, move_x)
@@ -2127,9 +2129,10 @@ def get_source_dir_file_list():
     # it is not so good. Take a frame 10% ahead in the set
     sample_frame = CurrentFrame + int((len(SourceDirFileList) - CurrentFrame) * 0.1)
     work_image = cv2.imread(SourceDirFileList[sample_frame], cv2.IMREAD_UNCHANGED)
-    set_hole_search_area(work_image)
-    select_hole_height(work_image)
-    set_film_type()
+    if not BatchJobRunning:     # Only try to analyze film type if interactive run, not batch
+        set_hole_search_area(work_image)
+        select_hole_height(work_image)
+        set_film_type()
     # Select area window should be proportional to screen height
     # Deduct 120 pixels (approximately) for taskbar + window title
     area_select_image_factor = (screen_height - 200) / work_image.shape[0]
@@ -3011,6 +3014,17 @@ def build_ui():
 
     postprocessing_row += 1
 
+    # Checkbox - Beep if stabilization forces image out of cropping bounds
+    stabilization_bounds_alert = tk.BooleanVar(value=False)
+    stabilization_bounds_alert_checkbox = tk.Checkbutton(postprocessing_frame,
+                                                         text='Alert when image out of bounds',
+                                                         variable=stabilization_bounds_alert,
+                                                         onvalue=True, offvalue=False,
+                                                         width=40)
+    stabilization_bounds_alert_checkbox.grid(row=postprocessing_row, column=0, columnspan=3, sticky=W)
+
+    postprocessing_row += 1
+
     # Define video generating area ************************************
     video_frame = LabelFrame(right_area_frame,
                              text='Video generation',
@@ -3140,6 +3154,16 @@ def build_ui():
     resolution_dropdown.config(state=DISABLED)
     video_row += 1
 
+    # Custom ffmpeg path
+    custom_ffmpeg_path_label = Label(video_frame, text='Custom FFMpeg path:')
+    custom_ffmpeg_path_label.grid(row=video_row, column=0, sticky=W)
+    custom_ffmpeg_path = Entry(video_frame, width=26, borderwidth=1)
+    custom_ffmpeg_path.grid(row=video_row, column=1, columnspan=2, sticky=W)
+    custom_ffmpeg_path.delete(0, 'end')
+    custom_ffmpeg_path.insert('end', FfmpegBinName)
+    custom_ffmpeg_path.bind("<FocusOut>", custom_ffmpeg_path_focus_out)
+    video_row += 1
+
     # Define job list area ***************************************************
     job_list_frame = LabelFrame(left_area_frame,
                              text='Job List',
@@ -3211,16 +3235,6 @@ def build_ui():
         #expert_frame = Frame(win, width=900, height=150)
         #expert_frame.grid(row=1, column=0, padx=5, pady=5, sticky=NW)
 
-        # Custom ffmpeg path
-        custom_ffmpeg_path_frame = LabelFrame(right_area_frame, text='Custom FFMpeg path',
-                                     width=26, height=8)
-        custom_ffmpeg_path_frame.pack(side=TOP)
-        custom_ffmpeg_path = Entry(custom_ffmpeg_path_frame, width=26, borderwidth=1)
-        custom_ffmpeg_path.pack(padx=5, pady=5)
-        custom_ffmpeg_path.delete(0, 'end')
-        custom_ffmpeg_path.insert('end', FfmpegBinName)
-        custom_ffmpeg_path.bind("<FocusOut>", custom_ffmpeg_path_focus_out)
-
         # Video filters area
         video_filters_frame = LabelFrame(right_area_frame, text='Video Filters Area',
                                      width=26, height=8)
@@ -3274,15 +3288,6 @@ def build_ui():
         fill_borders_mode_label_dropdown.config(state=DISABLED)
 
         video_row += 1
-
-        # Checkbox - Beep if stabilization forces image out of cropping bounds
-        stabilization_bounds_alert = tk.BooleanVar(value=False)
-        stabilization_bounds_alert_checkbox = tk.Checkbutton(right_area_frame,
-                                               text='Alert when image out of bounds',
-                                               variable=stabilization_bounds_alert,
-                                               onvalue=True, offvalue=False,
-                                               width=40)
-        stabilization_bounds_alert_checkbox.pack(side=TOP)
 
 
 def exit_app():  # Exit Application
