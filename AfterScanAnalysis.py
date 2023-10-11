@@ -48,12 +48,8 @@ def display_plot(filename):
         plots = csv.reader(csvfile, delimiter=',')
 
         for row in plots:
-            x.append(int(row[3]))
-            y.append(int(row[4]))
-        for i in range(1, x[-1]):
-            if i not in x:
-                x.append(i)
-                y.append(0)
+            x.append(int(row[0]))
+            y.append(int(row[1]))
 
     plt.bar(x, y, color='g', width=1, label="Missing rows")
     plt.xlabel('Frame')
@@ -105,6 +101,9 @@ def select_log_file():
                     if chunks[5].strip() == '9999':
                         first_encoded_frame = int(chunks[3].strip())
                         total_encoded_frames = int(chunks[4].strip())
+                    else:
+                        csv_line = chunks[3].strip() + ',' + chunks[4].strip() + '\n'
+                        csv_file.writelines(csv_line)
                     frame = int(chunks[3].strip())
                     if first_frame == -1:
                         first_frame = frame
@@ -126,7 +125,6 @@ def select_log_file():
                             csv_file_list.append((csv_basename, csv_filename))
                         csv_file = open(csv_filename, 'w')
                     last_frame = frame
-                    csv_file.writelines(line)
                     faulty_frames += 1
             if (faulty_frames > 1):
                 if (faulty_frames * 100) > total_encoded_frames:
