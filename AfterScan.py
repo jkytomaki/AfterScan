@@ -508,6 +508,7 @@ def decode_project_config():
 
     if 'SourceDir' in project_config:
         SourceDir = project_config["SourceDir"]
+        project_name = os.path.split(SourceDir)[-1].replace(',', ';')
         # If directory in configuration does not exist, set current working dir
         if not os.path.isdir(SourceDir):
             SourceDir = ""
