@@ -1135,6 +1135,26 @@ def widget_status_update(widget_state=0, button_action=0):
     custom_stabilization_btn.config(relief=SUNKEN if CustomTemplateDefined else RAISED)
 
 
+def update_frame_from(event):
+    global frame_from_str, frame_slider
+    global CurrentFrame
+    if len(frame_from_str.get()) == 0:
+        frame_from_str.set(CurrentFrame)
+    else:
+        select_scale_frame(frame_from_str.get())
+        frame_slider.set(frame_from_str.get())
+
+
+def update_frame_to(event):
+    global frame_to_str, frame_slider
+    global CurrentFrame
+    if len(frame_to_str.get()) == 0:
+        frame_to_str.set(CurrentFrame)
+    else:
+        select_scale_frame(frame_to_str.get())
+        frame_slider.set(frame_to_str.get())
+
+
 def frame_input_filename_pattern_focus_out(event):
     global frame_input_filename_pattern
 
@@ -3001,10 +3021,12 @@ def build_ui():
     frame_from_entry = Entry(postprocessing_frame, textvariable=frame_from_str, width=6, borderwidth=1)
     frame_from_entry.grid(row=postprocessing_row, column=1)
     frame_from_entry.config(state=NORMAL)
+    frame_from_entry.bind("<Double - Button - 1>", update_frame_from)
     frame_to_str = tk.StringVar(value=str(from_frame))
     frame_to_entry = Entry(postprocessing_frame, textvariable=frame_to_str, width=6, borderwidth=1)
     frame_to_entry.grid(row=postprocessing_row, column=2, sticky=W)
     frame_to_entry.config(state=NORMAL)
+    frame_to_entry.bind("<Double - Button - 1>", update_frame_to)
 
     postprocessing_row += 1
 
