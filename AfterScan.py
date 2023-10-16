@@ -271,7 +271,7 @@ def set_project_defaults():
     global perform_cropping, generate_video, resolution_dropdown_selected
     global frame_slider, encode_all_frames, frames_to_encode_str
     global perform_stabilization, skip_frame_regeneration, ffmpeg_preset
-    global video_filename_name, fill_borders
+    global video_filename_name
     global frame_from_str, frame_to_str
     global frame_fill_type
 
@@ -304,7 +304,6 @@ def set_project_defaults():
     video_title_name.delete(0, 'end')
     video_title_name.insert('end', project_config["VideoTitle"])
     project_config["FillBorders"] = False
-    fill_borders.set(project_config["FillBorders"])
 
 
 def save_general_config():
@@ -430,10 +429,6 @@ def save_project_config():
     if StabilizeAreaDefined:
         project_config["HoleHeight"] = film_hole_height
         project_config["PerformStabilization"] = perform_stabilization.get()
-    if ExpertMode:
-        project_config["FillBorders"] = fill_borders.get()
-        project_config["FillBordersThickness"] = fill_borders_thickness.get()
-        project_config["FillBordersMode"] = fill_borders_mode.get()
 
     # No longer saving to dedicated file, all project settings in common file now
     # with open(project_config_filename, 'w+') as f:
@@ -674,22 +669,6 @@ def decode_project_config():
     else:
         resolution_dropdown_selected.set('Unchanged')
         project_config["VideoResolution"] = 'Unchanged'
-
-
-    if ExpertMode:
-        if 'FillBorders' in project_config:
-            fill_borders.set(project_config["FillBorders"])
-        else:
-            fill_borders.set(False)
-        if 'FillBordersThickness' in project_config:
-            fill_borders_thickness.set(project_config["FillBordersThickness"])
-        else:
-            fill_borders_thickness.set(5)
-
-        if 'FillBordersMode' in project_config:
-            fill_borders_mode.set(project_config["FillBordersMode"])
-        else:
-            fill_borders_mode.set('smear')
 
     widget_status_update(NORMAL)
 
@@ -1077,8 +1056,6 @@ def widget_status_update(widget_state=0, button_action=0):
     global ffmpeg_preset_rb1, ffmpeg_preset_rb2, ffmpeg_preset_rb3
     global start_batch_btn
     global add_job_btn, delete_job_btn, rerun_job_btn
-    global fill_borders_checkbox, fill_borders_thickness_slider
-    global fill_borders_mode_label_dropdown
     global stabilization_bounds_alert_checkbox
 
     if widget_state != 0:
@@ -1126,11 +1103,6 @@ def widget_status_update(widget_state=0, button_action=0):
         add_job_btn.config(state=widget_state)
         delete_job_btn.config(state=widget_state)
         rerun_job_btn.config(state=widget_state)
-        if ExpertMode:
-            fill_borders_checkbox.config(state=widget_state if project_config["GenerateVideo"] else DISABLED)
-            fill_borders_thickness_slider.config(state=widget_state if project_config["GenerateVideo"] else DISABLED)
-            fill_borders_mode_label_dropdown.config(state=widget_state if project_config["GenerateVideo"] else DISABLED)
-            # stabilization_bounds_alert_checkbox.config(state=widget_state if perform_stabilization.get() and perform_cropping.get() else DISABLED)
 
     custom_stabilization_btn.config(relief=SUNKEN if CustomTemplateDefined else RAISED)
 
@@ -1270,25 +1242,6 @@ def encode_all_frames_selection():
     global encode_all_frames
     project_config["EncodeAllFrames"] = encode_all_frames.get()
     widget_status_update(NORMAL)
-
-def fill_borders_selection():
-    global fill_borders
-    project_config["FillBorders"] = fill_borders.get()
-
-
-def fill_borders_set_mode(selected):
-    global fill_borders_mode
-
-    fill_borders_mode.set(selected)
-    project_config["FillBordersMode"] = fill_borders_mode.get()
-
-
-def fill_borders_set_thickness_scale(selected_thickness):
-    global fill_borders_thickness
-
-    fill_borders_thickness_slider.focus()
-    fill_borders_thickness.set(selected_thickness)
-    project_config["FillBordersThinkness"] = fill_borders_thickness.get()
 
 
 def generate_video_selection():
@@ -2529,7 +2482,7 @@ def video_create_title():
         myFont, num_lines = get_adjusted_font(img, TargetVideoTitle)
         if myFont == 0:
             return
-        title_frame_idx = 0
+        title_frame_idx = StartFrame + first_absolute_frame
         title_first_frame = random.randint(StartFrame + first_absolute_frame, StartFrame + first_absolute_frame + frames_to_encode - title_num_frames - 1)
         for i in range (title_first_frame, title_first_frame + title_num_frames):
             status_str = "Status: Generating title %.1f%%" % (((i - title_first_frame) * 100 / title_num_frames))
@@ -2575,16 +2528,6 @@ def call_ffmpeg():
                                 + 'x' + str(out_frame_height)]
     if frames_to_encode > 0:
         extra_output_options += ['-frames:v', str(frames_to_encode+title_num_frames)]
-    if ExpertMode and fill_borders.get():
-        extra_output_options += [
-             '-filter_complex',
-             '[0:v] fillborders='
-             'left=' + str(fill_borders_thickness.get()) + ':'
-             'right=' + str(fill_borders_thickness.get()) + ':'
-             'top=' + str(fill_borders_thickness.get()) + ':'
-             'bottom=' + str(fill_borders_thickness.get()) + ':'
-             'mode=' + fill_borders_mode.get() + ' [v]',
-             '-map', '[v]']
     if resolution_dict[project_config["VideoResolution"]] != '':
         extra_output_options += ['-vf',
                                  'scale=' + resolution_dict[project_config["VideoResolution"]]]
@@ -2850,10 +2793,6 @@ def build_ui():
     global frames_source_dir, frames_target_dir, video_target_dir
     global perform_cropping, cropping_btn
     global generate_video, generate_video_checkbox
-    global fill_borders, fill_borders_checkbox
-    global fill_borders_thickness, fill_borders_thickness_slider
-    global fill_borders_thickness_slider, fill_borders_mode_label
-    global fill_borders_mode_label_dropdown, fill_borders_mode
     global encode_all_frames, encode_all_frames_checkbox
     global frames_to_encode_str, frames_to_encode, frames_to_encode_label
     global save_bg, save_fg
@@ -3382,65 +3321,6 @@ def build_ui():
 
     postprocessing_bottom_frame = Frame(video_frame, width=30)
     postprocessing_bottom_frame.grid(row=video_row, column=0)
-
-    if ExpertMode:
-        # Frame for expert widgets
-        #expert_frame = Frame(win, width=900, height=150)
-        #expert_frame.grid(row=1, column=0, padx=5, pady=5, sticky=NW)
-
-        # Video filters area
-        video_filters_frame = LabelFrame(right_area_frame, text='Video Filters Area',
-                                     width=26, height=8)
-        video_filters_frame.pack(side=TOP, ipadx=5)
-
-        # Check box - Fill borders
-        fill_borders = tk.BooleanVar(value=False)
-        fill_borders_checkbox = tk.Checkbutton(video_filters_frame,
-                                               text='Fill borders',
-                                               variable=fill_borders,
-                                               onvalue=True, offvalue=False,
-                                               command=fill_borders_selection,
-                                               width=9)
-        fill_borders_checkbox.grid(row=0, column=0, columnspan=1, sticky=W)
-        fill_borders_checkbox.config(state=NORMAL if ffmpeg_installed and
-                                     perform_cropping.get() else DISABLED)
-        # Fill border thickness
-        fill_borders_thickness = IntVar(value=20)
-        fill_borders_thickness_slider = Scale(
-            video_filters_frame, orient=HORIZONTAL, from_=5, to=50,
-            variable=fill_borders_thickness,
-            command=fill_borders_set_thickness_scale, length=80)
-        fill_borders_thickness_slider.grid(row=0, column=1, sticky=W)
-        fill_borders_thickness_slider.config(state=DISABLED)
-        # Fill border mode
-        # Dropdown menu options
-        fill_borders_mode_list = [
-            "smear",
-            "mirror",
-            "fixed"
-        ]
-
-        # datatype of menu text
-        fill_borders_mode = StringVar()
-
-        # initial menu text
-        fill_borders_mode.set("smear")
-
-        # Create fill border mode Dropdown menu
-        fill_borders_mode_frame = Frame(video_filters_frame)
-        fill_borders_mode_frame.grid(row=0, column=2, sticky=W)
-        fill_borders_mode_label = Label(fill_borders_mode_frame, text='Mode:')
-        fill_borders_mode_label.pack(side=LEFT, anchor=W)
-        fill_borders_mode_label.config(state=DISABLED)
-        fill_borders_mode_label_dropdown = OptionMenu(
-            fill_borders_mode_frame,
-            fill_borders_mode,
-            *fill_borders_mode_list,
-            command=fill_borders_set_mode)
-        fill_borders_mode_label_dropdown.pack(side=LEFT, anchor=E)
-        fill_borders_mode_label_dropdown.config(state=DISABLED)
-
-        video_row += 1
 
 
 def exit_app():  # Exit Application
