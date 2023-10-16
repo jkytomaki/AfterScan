@@ -140,7 +140,7 @@ TargetDir = ""
 VideoTargetDir = ""
 FrameFilenameOutputPattern = "picture_out-%05d.jpg"
 TitleFilenameOutputPattern = "picture_out(title)-%05d.jpg"
-FrameCheckFilenameOutputPattern = "picture_out*.jpg"  # Req. for ffmpeg gen.
+FrameCheckFilenameOutputPattern = "picture_out-?????.jpg"  # Req. for ffmpeg gen.
 SourceDirFileList = []
 TargetDirFileList = []
 film_type = 'S8'
@@ -2521,39 +2521,50 @@ def call_ffmpeg():
     global out_frame_width, out_frame_height
     global title_num_frames
 
-    extra_input_options = []
-    extra_output_options = []
     if resolution_dict[project_config["VideoResolution"]] != '':
-        extra_input_options += ['-s:v', str(out_frame_width)
-                                + 'x' + str(out_frame_height)]
-    if frames_to_encode > 0:
-        extra_output_options += ['-frames:v', str(frames_to_encode+title_num_frames)]
-    if resolution_dict[project_config["VideoResolution"]] != '':
-        extra_output_options += ['-vf',
-                                 'scale=' + resolution_dict[project_config["VideoResolution"]]]
+        video_width = resolution_dict[project_config["VideoResolution"]].split(':')[0]
+        video_height = resolution_dict[project_config["VideoResolution"]].split(':')[1]
     cmd_ffmpeg = [FfmpegBinName,
                   '-y',
                   '-loglevel', 'error',
                   '-stats',
                   '-flush_packets', '1',
                   '-f', 'image2',
-                  '-framerate', str(VideoFps)]
-    if title_num_frames == 0:
-        cmd_ffmpeg.extend(['-start_number', str(StartFrame + first_absolute_frame)])
-    cmd_ffmpeg.extend(extra_input_options)
-    if title_num_frames == 0:
-        cmd_ffmpeg.extend(['-i', os.path.join(TargetDir, FrameFilenameOutputPattern)])
-    else:
-        cmd_ffmpeg.extend(
-                ['-pattern_type', 'glob',
-                '-i', os.path.join(TargetDir, FrameCheckFilenameOutputPattern)])
-    cmd_ffmpeg.extend(extra_output_options)
+                  '-framerate', str(VideoFps),
+                  '-start_number', str(StartFrame + first_absolute_frame)]
+    cmd_ffmpeg.extend(['-i', os.path.join(TargetDir, FrameFilenameOutputPattern)])
+    if title_num_frames > 0:   # There is a title
+        cmd_ffmpeg.extend(['-f', 'image2',
+                           '-framerate', str(VideoFps),
+                           '-start_number', str(StartFrame + first_absolute_frame),
+                           '-i', os.path.join(TargetDir, TitleFilenameOutputPattern)])
+    # Create filter_complex or one or two inputs
+    filter_complex_options=''
+    # Main video
+    # trim filter: I had problems with some prime numbers here (specially with 14657, which caused the encoding to extend till the end)
+    # Therefore, we always add an odd number, just in case
+    frames_to_encode_trim = frames_to_encode - frames_to_encode % 2 # Do not add, in case we are at the end
+    filter_complex_options+='[0:v]trim=start_frame=0:end_frame='+str(frames_to_encode_trim)+'[v0];'  # Limit number of frames of main video
+    filter_complex_options+='[v0]'
+    if (out_frame_width != 0 and out_frame_height != 0):
+        filter_complex_options+='scale=w='+video_width+':h='+video_height+':'
+    filter_complex_options+='force_original_aspect_ratio=decrease,pad='+video_width+':'+video_height+':(ow-iw)/2:(oh-ih)/2,setsar=1[v00];'
+    # Title sequence
+    if title_num_frames > 0:   # There is a title
+        filter_complex_options+='[1:v]'
+        if (out_frame_width != 0 and out_frame_height != 0):
+            filter_complex_options+='scale=w='+video_width+':h='+video_height+':'
+        filter_complex_options+='force_original_aspect_ratio=decrease,pad='+video_width+':'+video_height+':(ow-iw)/2:(oh-ih)/2,setsar=1[v1];[v1]'
+    filter_complex_options+='[v00]concat=n='+str(2 if title_num_frames>0 else 1)+':v=1[v]'
+    cmd_ffmpeg.extend(['-filter_complex', filter_complex_options])
+
     cmd_ffmpeg.extend(
         ['-an',  # no audio
          '-vcodec', 'libx264',
          '-preset', ffmpeg_preset.get(),
          '-crf', '18',
          '-pix_fmt', 'yuv420p',
+         '-map', '[v]',
          os.path.join(VideoTargetDir,
                       TargetVideoFilename)])
 
