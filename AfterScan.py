@@ -680,6 +680,21 @@ def decode_project_config():
 Job list support functions
 ##########################
 """
+
+def job_list_process_selection(evt):
+    global job_list
+    global job_list_listbox
+    global rerun_job_btn
+
+    # Note here that Tkinter passes an event object to onselect()
+    # w = evt.widget - We already know the widget
+
+    selected = int(job_list_listbox.curselection()[0])
+    entry = job_list_listbox.get(selected)
+
+    rerun_job_btn.config(text='Rerun job' if job_list[entry]['done'] else rerun_job_btn.config(text='Mark as run'))
+
+
 def job_list_add_current():
     global job_list
     global CurrentFrame, StartFrame, frames_to_encode
@@ -800,14 +815,13 @@ def job_list_delete_selected():
 def job_list_rerun_selected():
     global job_list
     global job_list_listbox
-    selected = job_list_listbox.curselection()
-    #job_list.get(selected)['done'] = False
-    idx = 0
-    for entry in job_list:
-        if idx == selected[0]:
-            job_list[entry]['done'] = False
-        idx += 1
-    job_list_listbox.itemconfig(selected, fg='black')
+
+    selected = int(job_list_listbox.curselection()[0])
+    entry = job_list_listbox.get(selected)
+
+    job_list[entry]['done'] = not job_list[entry]['done']
+    job_list_listbox.itemconfig(selected, fg='green' if job_list[entry]['done'] else 'black')
+    rerun_job_btn.config(text='Rerun job' if job_list[entry]['done'] else 'Mark as run')
 
 
 def save_job_list():
@@ -3282,6 +3296,7 @@ def build_ui():
     job_list_listbox.bind("<KP_Enter>", job_list_load_current)
     job_list_listbox.bind("<Double - Button - 1>", job_list_load_current)
     job_list_listbox.bind("r", job_list_rerun_current)
+    job_list_listbox.bind('<<ListboxSelect>>', job_list_process_selection)
     # job listbox scrollbars
     job_list_listbox_scrollbar_y = Scrollbar(job_list_frame, orient="vertical")
     job_list_listbox_scrollbar_y.config(command=job_list_listbox.yview)
