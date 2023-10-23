@@ -1970,7 +1970,8 @@ def stabilize_image(img):
     # Items logged: Tag, project id, Frame number, missing pixel rows, location (bottom/top), Vertical shift
     if ConvertLoopRunning and (missing_bottom < 0 or missing_top < 0):
         stabilization_bounds_alert_counter += 1
-        stabilization_bounds_alert_checkbox.config(text = 'Alert when image out of bounds (%i, %.1f%%)' % (stabilization_bounds_alert_counter, stabilization_bounds_alert_counter/CurrentFrame*100))
+        if CurrentFrame > 0:
+            stabilization_bounds_alert_checkbox.config(text = 'Alert when image out of bounds (%i, %.1f%%)' % (stabilization_bounds_alert_counter, stabilization_bounds_alert_counter/CurrentFrame*100))
         if stabilization_bounds_alert.get():
             win.bell()
         # Tag evolution
