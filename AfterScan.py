@@ -170,6 +170,7 @@ RectangleWindowTitle = ""
 RotationAngle = 0.0
 StabilizeAreaDefined = False
 StabilizationThreshold = 240.0
+stabilization_bounds_alert_counter = 0
 CropAreaDefined = False
 RectangleTopLeft = (0, 0)
 RectangleBottomRight = (0, 0)
@@ -239,6 +240,11 @@ IsMac = False
 
 is_demo = False
 debug_enabled = False
+GenerateCsv = False
+CsvFilename = ""
+CsvPathName = ""
+CsvFile = 0
+CsvFramesOffPercent = 0
 
 """
 #################
@@ -1908,6 +1914,7 @@ def stabilize_image(img):
     global stabilization_bounds_alert_checkbox
     global project_name
     global frame_fill_type
+    global CsvFile, GenerateCsv, CsvFramesOffPercent
 
     # Get image dimensions to perform image shift later
     width = img.shape[1]
@@ -1963,7 +1970,7 @@ def stabilize_image(img):
     # Items logged: Tag, project id, Frame number, missing pixel rows, location (bottom/top), Vertical shift
     if ConvertLoopRunning and (missing_bottom < 0 or missing_top < 0):
         stabilization_bounds_alert_counter += 1
-        stabilization_bounds_alert_checkbox.config(text = 'Alert when image out of bounds (%i)' % stabilization_bounds_alert_counter)
+        stabilization_bounds_alert_checkbox.config(text = 'Alert when image out of bounds (%i, %.1f%%)' % (stabilization_bounds_alert_counter, stabilization_bounds_alert_counter/CurrentFrame*100))
         if stabilization_bounds_alert.get():
             win.bell()
         # Tag evolution
@@ -1972,6 +1979,12 @@ def stabilize_image(img):
         project_name_tag = project_name + '(' + video_filename_name.get() + ')'
         project_name_tag = project_name_tag.replace(',', ';')   # To avoid problem with AfterScanAnalysis
         logging.warning("FrameAlignTag-2, %s, %i, %i, %i, %i", project_name_tag, first_absolute_frame+CurrentFrame, missing_rows, move_y, move_x)
+        if GenerateCsv:
+            CsvFile.write('%i, %i\n' % (first_absolute_frame+CurrentFrame, missing_rows))
+    if CurrentFrame > 0:
+        CsvFramesOffPercent = stabilization_bounds_alert_counter / CurrentFrame * 100
+    stabilization_bounds_alert_checkbox.config(text='Alert when image out of bounds (%i, %.1f%%)' % (
+            stabilization_bounds_alert_counter, CsvFramesOffPercent))
     # Check if frame fill is enabled, and required: Extract missing fragment
     if frame_fill_type.get() == 'fake' and ConvertLoopRunning and missing_rows > 0:
         debug_display_image('Original image', img)
@@ -2221,6 +2234,7 @@ def start_convert():
     global BatchJobRunning
     global job_list, CurrentJobEntry
     global stabilization_bounds_alert_counter
+    global CsvFilename, CsvPathName, GenerateCsv, CsvFile
 
 
     if ConvertLoopRunning:
@@ -2294,6 +2308,18 @@ def start_convert():
                 project_name_tag = project_name_tag.replace(',', ';')  # To avoid problem with AfterScanAnalysis
                 # Log header line for project, to allow AfterScanAnalysis in case there are no out of bounds frames
                 logging.warning("FrameAlignTag, %s, %i, %i, 9999, 9999", project_name_tag, StartFrame, frames_to_encode)
+                # Check if CSV option selected
+                if GenerateCsv:
+                    CsvFilename = video_filename_name.get()
+                    name, ext = os.path.splitext(CsvFilename)
+                    if name == "":  # Assign default if no filename
+                        name = "AfterScan-"
+                    CsvFilename = datetime.now().strftime("%Y_%m_%d-%H-%M-%S_") + name + '.csv'
+                    CsvPathName = aux_dir
+                    if CsvPathName == "":
+                        CsvPathName = os.getcwd()
+                    CsvPathName = os.path.join(CsvPathName, CsvFilename)
+                    CsvFile = open(CsvPathName, "w")
 
             win.after(1, frame_generation_loop)
         elif generate_video.get():
@@ -2359,6 +2385,7 @@ def frame_generation_loop():
     global BatchJobRunning
     global ffmpeg_success, ffmpeg_encoding_status
     global TargetDirFileList
+    global GenerateCsv, CsvFile
 
     if CurrentFrame >= StartFrame + frames_to_encode:
         status_str = "Status: Frame generation OK"
@@ -2366,6 +2393,11 @@ def frame_generation_loop():
         # Refresh Target dir file list
         TargetDirFileList = sorted(list(glob(os.path.join(
             TargetDir, FrameCheckFilenameOutputPattern))))
+        if GenerateCsv:
+            CsvFile.close()
+            name, ext = os.path.splitext(CsvPathName)
+            name = name + ' (%d frames, %.1f%% KO)' % (frames_to_encode, CsvFramesOffPercent) + '.csv'
+            os.rename(CsvPathName, name)
         if generate_video.get():
             ffmpeg_success = False
             ffmpeg_encoding_status = ffmpeg_state.Pending
@@ -2377,6 +2409,11 @@ def frame_generation_loop():
 
     if ConvertLoopExitRequested:  # Stop button pressed
         status_str = "Status: Cancelled by user"
+        if GenerateCsv:
+            CsvFile.close()
+            name, ext = os.path.splitext(CsvPathName)
+            name = name + ' (%d frames, %.1f%% KO)' % (frames_to_encode, CsvFramesOffPercent) + '.csv'
+            os.rename(CsvPathName, name)
         app_status_label.config(text=status_str, fg='red')
         generation_exit()
         return
@@ -3372,6 +3409,7 @@ def main(argv):
     global project_settings
     global default_project_config
     global is_demo
+    global GenerateCsv
 
     LoggingMode = "warning"
 
@@ -3395,11 +3433,13 @@ def main(argv):
     film_bw_template =  cv2.imread(pattern_bw_filename, 0)
     film_wb_template =  cv2.imread(pattern_wb_filename, 0)
 
-    opts, args = getopt.getopt(argv, "hiel:d")
+    opts, args = getopt.getopt(argv, "hiel:dc")
 
     for opt, arg in opts:
         if opt == '-l':
             LoggingMode = arg
+        elif opt == '-c':
+            GenerateCsv = True
         elif opt == '-e':
             ExpertMode = True
         elif opt == '-i':
@@ -3410,6 +3450,7 @@ def main(argv):
             print("AfterScan")
             print("  -l <log mode>  Set log level:")
             print("      <log mode> = [DEBUG|INFO|WARNING|ERROR]")
+            print("  -c             Generate CSV file with misaligned frames")
             print("  -e             Enable expert mode")
             print("  -i             Ignore existing config")
             print("  -s             Smaller font")
