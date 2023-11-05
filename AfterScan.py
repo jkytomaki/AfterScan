@@ -1905,7 +1905,7 @@ def rotate_image(img):
 
 def stabilize_image(img):
     global SourceDirFileList, CurrentFrame
-    global first_absolute_frame
+    global first_absolute_frame, StartFrame
     global HoleSearchTopLeft, HoleSearchBottomRight
     global expected_pattern_pos, film_hole_template
     global StabilizationThreshold
@@ -1970,8 +1970,6 @@ def stabilize_image(img):
     # Items logged: Tag, project id, Frame number, missing pixel rows, location (bottom/top), Vertical shift
     if ConvertLoopRunning and (missing_bottom < 0 or missing_top < 0):
         stabilization_bounds_alert_counter += 1
-        if CurrentFrame > 0:
-            stabilization_bounds_alert_checkbox.config(text = 'Alert when image out of bounds (%i, %.1f%%)' % (stabilization_bounds_alert_counter, stabilization_bounds_alert_counter/CurrentFrame*100))
         if stabilization_bounds_alert.get():
             win.bell()
         # Tag evolution
@@ -1982,8 +1980,8 @@ def stabilize_image(img):
         logging.warning("FrameAlignTag-2, %s, %i, %i, %i, %i", project_name_tag, first_absolute_frame+CurrentFrame, missing_rows, move_y, move_x)
         if GenerateCsv:
             CsvFile.write('%i, %i\n' % (first_absolute_frame+CurrentFrame, missing_rows))
-    if CurrentFrame > 0:
-        CsvFramesOffPercent = stabilization_bounds_alert_counter / CurrentFrame * 100
+    if CurrentFrame-StartFrame > 0:
+        CsvFramesOffPercent = stabilization_bounds_alert_counter * 100 / (CurrentFrame-StartFrame)
     stabilization_bounds_alert_checkbox.config(text='Alert when image out of bounds (%i, %.1f%%)' % (
             stabilization_bounds_alert_counter, CsvFramesOffPercent))
     # Check if frame fill is enabled, and required: Extract missing fragment
@@ -2452,8 +2450,8 @@ def frame_generation_loop():
 
         frame_selected.set(CurrentFrame)
         frame_slider.set(CurrentFrame)
-        frame_slider.config(label='Global:'+
-                            str(CurrentFrame+first_absolute_frame))
+        frame_slider.config(label='Processed:'+
+                            str(CurrentFrame+first_absolute_frame-StartFrame))
         status_str = "Status: Generating frames %.1f%%" % ((CurrentFrame-StartFrame)*100/frames_to_encode)
         app_status_label.config(text=status_str, fg='black')
 
