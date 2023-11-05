@@ -1855,19 +1855,16 @@ def display_output_frame_by_number(frame_number):
     global StartFrame
     global TargetDirFileList
 
+    found = False
+
     for file_path in TargetDirFileList:
         if os.path.basename(file_path) == FrameFilenameOutputPattern % (StartFrame + frame_number):
+            found = True
             break
 
-    # if StartFrame + frame_number >= len(TargetDirFileList):
-    #     return  # Do nothing if asked to go out of bounds
-    # # Get current file
-    # file = TargetDirFileList[StartFrame + frame_number]
-    # read image
-    # img = cv2.imread(file, cv2.IMREAD_UNCHANGED)
-    img = cv2.imread(file_path, cv2.IMREAD_UNCHANGED)
-
-    display_image(img)
+    if found:
+        img = cv2.imread(file_path, cv2.IMREAD_UNCHANGED)
+        display_image(img)
 
 def clear_image():
     global draw_capture_canvas
