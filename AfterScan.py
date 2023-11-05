@@ -1855,12 +1855,17 @@ def display_output_frame_by_number(frame_number):
     global StartFrame
     global TargetDirFileList
 
-    if StartFrame + frame_number >= len(TargetDirFileList):
-        return  # Do nothing if asked to go out of bounds
-    # Get current file
-    file = TargetDirFileList[StartFrame + frame_number]
+    for file_path in TargetDirFileList:
+        if os.path.basename(file_path) == FrameFilenameOutputPattern % (StartFrame + frame_number):
+            break
+
+    # if StartFrame + frame_number >= len(TargetDirFileList):
+    #     return  # Do nothing if asked to go out of bounds
+    # # Get current file
+    # file = TargetDirFileList[StartFrame + frame_number]
     # read image
-    img = cv2.imread(file, cv2.IMREAD_UNCHANGED)
+    # img = cv2.imread(file, cv2.IMREAD_UNCHANGED)
+    img = cv2.imread(file_path, cv2.IMREAD_UNCHANGED)
 
     display_image(img)
 
@@ -2385,6 +2390,7 @@ def frame_generation_loop():
     global ffmpeg_success, ffmpeg_encoding_status
     global TargetDirFileList
     global GenerateCsv, CsvFile
+    global frame_slider
 
     if CurrentFrame >= StartFrame + frames_to_encode:
         status_str = "Status: Frame generation OK"
@@ -2637,6 +2643,7 @@ def video_generation_loop():
     global BatchJobRunning
     global StartFrame, first_absolute_frame
     global frame_selected
+    global frame_slider
 
     if ffmpeg_encoding_status == ffmpeg_state.Pending:
         # Check for special cases first
@@ -2693,10 +2700,10 @@ def video_generation_loop():
                 frame_str = str(line)[:-1].replace('=', ' ').split()[1]
                 if is_a_number(frame_str):  # Sometimes ffmpeg output might be corrupted on the way
                     encoded_frame = int(frame_str)
-                    frame_selected.set(encoded_frame)
+                    frame_selected.set(StartFrame + first_absolute_frame + encoded_frame)
                     frame_slider.set(StartFrame + first_absolute_frame + encoded_frame)
-                    frame_slider.config(label='Global:' +
-                                              str(StartFrame + first_absolute_frame + encoded_frame))
+                    frame_slider.config(label='Processed:' +
+                                              str(encoded_frame))
                     status_str = "Status: Generating video %.1f%%" % (encoded_frame*100/(frames_to_encode+title_num_frames))
                     app_status_label.config(text=status_str, fg='black')
                     display_output_frame_by_number(encoded_frame)
