@@ -1855,16 +1855,13 @@ def display_output_frame_by_number(frame_number):
     global StartFrame
     global TargetDirFileList
 
-    found = False
-
-    for file_path in TargetDirFileList:
-        if os.path.basename(file_path) == FrameFilenameOutputPattern % (StartFrame + frame_number):
-            found = True
-            break
-
-    if found:
-        img = cv2.imread(file_path, cv2.IMREAD_UNCHANGED)
+    pattern = r'\d+'  # This regular expression matches one or more digits
+    match = re.search(pattern, os.path.basename(TargetDirFileList[0]))
+    last = re.search(pattern, os.path.basename(TargetDirFileList[-1]))
+    if match and last and StartFrame + frame_number < int(last.group()):
+        img = cv2.imread(TargetDirFileList[StartFrame + frame_number - int(match.group())], cv2.IMREAD_UNCHANGED)
         display_image(img)
+
 
 def clear_image():
     global draw_capture_canvas
