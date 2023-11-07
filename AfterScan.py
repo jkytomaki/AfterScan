@@ -1677,8 +1677,8 @@ def determine_hole_height(img):
         template_2 = film_wb_template
         other_film_type = 'R8'
     search_img = get_image_left_stripe(img)
-    top_left_1 = match_template(template_1, search_img, 250)
-    top_left_2 = match_template(template_2, search_img, 250)
+    top_left_1, _ = match_template(template_1, search_img, 250)
+    top_left_2, _ = match_template(template_2, search_img, 250)
     if top_left_1[1] > top_left_2[1]:
         if not BatchJobRunning:
             if tk.messagebox.askyesno(
@@ -1755,6 +1755,15 @@ def validate_template_size():
         return True
 
 
+def color_interpolation(t):
+    c1 = (255, 0, 0)  # Red
+    c2 = (0, 255, 0)  # Green
+    r = int(c1[0] * (1 - t) + c2[0] * t)
+    g = int(c1[1] * (1 - t) + c2[1] * t)
+    b = int(c1[2] * (1 - t) + c2[2] * t)
+    return "#%02x%02x%02x" % (r, g, b)
+
+
 def match_template(template, img, thres):
     result = []
     best_match = 0
@@ -1769,6 +1778,14 @@ def match_template(template, img, thres):
         logging.error("Template (%ix%i) bigger than image  (%ix%i)",
                       w, h, img.shape[1], img.shape[0])
         return (0, 0)
+
+    # convert img to grey
+    img_grey = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    img_blur = cv2.GaussianBlur(img_grey, (3, 3), 0)
+    img_bw = cv2.threshold(img_blur, thres, 255, cv2.THRESH_BINARY)[1]
+    # img_edges = cv2.Canny(image=img_bw, threshold1=100, threshold2=20)  # Canny Edge Detection
+    img_final = img_bw
+
     # In order to deal with extremely misaligned frames, where part of thw template is off-frame, we make 3 attempts:
     #   - Match full template
     #   - Match upper half
@@ -1780,12 +1797,6 @@ def match_template(template, img, thres):
             aux_template = template[0:int(h/2)]
         elif i==2:
             aux_template = template[int(h/2):h]
-        # convert img to grey
-        img_grey = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        img_blur = cv2.GaussianBlur(img_grey, (3, 3), 0)
-        img_bw = cv2.threshold(img_blur, thres, 255, cv2.THRESH_BINARY)[1]
-        # img_edges = cv2.Canny(image=img_bw, threshold1=100, threshold2=20)  # Canny Edge Detection
-        img_final = img_bw
         result.append(cv2.matchTemplate(img_final, aux_template, cv2.TM_CCOEFF_NORMED))
         # Best match
         if np.amax(result[i]) > best_match:
@@ -1806,7 +1817,7 @@ def match_template(template, img, thres):
     if best_match_idx == 2:
         top_left = (top_left[0],top_left[1]-int(h/2))  # if using lower half of template, adjust coordinates accordingly
 
-    return top_left
+    return top_left, round(np.amax(result[best_match_idx]),2)
 
 
 """
@@ -1915,6 +1926,7 @@ def stabilize_image(img):
     global project_name
     global frame_fill_type
     global CsvFile, GenerateCsv, CsvFramesOffPercent
+    global stabilization_threshold_match_label
 
     # Get image dimensions to perform image shift later
     width = img.shape[1]
@@ -1926,7 +1938,7 @@ def stabilize_image(img):
     left_stripe_image = get_image_left_stripe(img)
 
     # Search film hole pattern
-    top_left = match_template(film_hole_template, left_stripe_image, float(StabilizationThreshold))
+    top_left, match_level = match_template(film_hole_template, left_stripe_image, float(StabilizationThreshold))
     if top_left[1] != -1:
         # The coordinates returned by match template are relative to the
         # cropped image. In order to calculate the correct values to provide
@@ -1968,18 +1980,20 @@ def stabilize_image(img):
 
     # Log frame alignment info for analysis (only when in convert loop)
     # Items logged: Tag, project id, Frame number, missing pixel rows, location (bottom/top), Vertical shift
-    if ConvertLoopRunning and (missing_bottom < 0 or missing_top < 0):
-        stabilization_bounds_alert_counter += 1
-        if stabilization_bounds_alert.get():
-            win.bell()
-        # Tag evolution
-        # FrameAlignTag: project_name, CurrentFrame, missing rows, top/bottom, move_y)
-        # FrameAlignTag-2: project_name, CurrentFrame, +/- missing rows, move_y, move_x)
-        project_name_tag = project_name + '(' + video_filename_name.get() + ')'
-        project_name_tag = project_name_tag.replace(',', ';')   # To avoid problem with AfterScanAnalysis
-        logging.warning("FrameAlignTag-2, %s, %i, %i, %i, %i", project_name_tag, first_absolute_frame+CurrentFrame, missing_rows, move_y, move_x)
-        if GenerateCsv:
-            CsvFile.write('%i, %i\n' % (first_absolute_frame+CurrentFrame, missing_rows))
+    if ConvertLoopRunning:
+        stabilization_threshold_match_label.config(fg='white', bg=color_interpolation(match_level), text=str(match_level))
+        if missing_bottom < 0 or missing_top < 0:
+            stabilization_bounds_alert_counter += 1
+            if stabilization_bounds_alert.get():
+                win.bell()
+            # Tag evolution
+            # FrameAlignTag: project_name, CurrentFrame, missing rows, top/bottom, move_y)
+            # FrameAlignTag-2: project_name, CurrentFrame, +/- missing rows, move_y, move_x)
+            project_name_tag = project_name + '(' + video_filename_name.get() + ')'
+            project_name_tag = project_name_tag.replace(',', ';')   # To avoid problem with AfterScanAnalysis
+            logging.warning("FrameAlignTag-2, %s, %i, %i, %i, %i", project_name_tag, first_absolute_frame+CurrentFrame, missing_rows, move_y, move_x)
+            if GenerateCsv:
+                CsvFile.write('%i, %i, %i\n' % (first_absolute_frame+CurrentFrame, missing_rows, match_level))
     if CurrentFrame-StartFrame > 0:
         CsvFramesOffPercent = stabilization_bounds_alert_counter * 100 / (CurrentFrame-StartFrame)
     stabilization_bounds_alert_checkbox.config(text='Alert when image out of bounds (%i, %.1f%%)' % (
@@ -2402,6 +2416,7 @@ def frame_generation_loop():
         else:
             generation_exit()
         CurrentFrame -= 1  # Prevent being out of range
+        stabilization_threshold_match_label.config(fg='lightgray', bg='lightgray', text='')
         return
 
     if ConvertLoopExitRequested:  # Stop button pressed
@@ -2413,6 +2428,7 @@ def frame_generation_loop():
             os.rename(CsvPathName, name)
         app_status_label.config(text=status_str, fg='red')
         generation_exit()
+        stabilization_threshold_match_label.config(fg='lightgray', bg='lightgray', text='')
         return
 
     # Get current file
@@ -2860,6 +2876,7 @@ def build_ui():
     global perform_stabilization, perform_stabilization_checkbox
     global stabilization_threshold_spinbox, stabilization_threshold_str
     global StabilizationThreshold
+    global stabilization_threshold_match_label
     global perform_rotation, perform_rotation_checkbox, rotation_angle_label
     global rotation_angle_spinbox, rotation_angle_str
     global RotationAngle
@@ -3045,17 +3062,17 @@ def build_ui():
         rotation_angle_selection)
     rotation_angle_spinbox = tk.Spinbox(
         postprocessing_frame,
-        command=(rotation_angle_selection_aux, '%d'), width=3,
+        command=(rotation_angle_selection_aux, '%d'), width=5,
         textvariable=rotation_angle_str, from_=-5, to=5,
         format="%.1f", increment=0.1)
-    rotation_angle_spinbox.grid(row=postprocessing_row, column=1, sticky=E)
+    rotation_angle_spinbox.grid(row=postprocessing_row, column=1, sticky=W)
     rotation_angle_spinbox.bind("<FocusOut>", rotation_angle_spinbox_focus_out)
     rotation_angle_selection('down')
     rotation_angle_label = tk.Label(postprocessing_frame,
-                                      text='degrees',
-                                      width=8)
-    rotation_angle_label.grid(row=postprocessing_row, column=2,
-                                columnspan=1, sticky=W)
+                                      text='°       ',
+                                      width=4)
+    rotation_angle_label.grid(row=postprocessing_row, column=1,
+                                columnspan=1, sticky=E)
     postprocessing_row += 1
 
     # Check box to do stabilization or not
@@ -3079,10 +3096,12 @@ def build_ui():
         stabilization_threshold_selection)
     stabilization_threshold_spinbox = tk.Spinbox(
         postprocessing_frame,
-        command=(stabilization_threshold_selection_aux, '%d'), width=8,
+        command=(stabilization_threshold_selection_aux, '%d'), width=6,
         textvariable=stabilization_threshold_str, from_=0, to=255)
     stabilization_threshold_spinbox.grid(row=postprocessing_row, column=2, sticky=W)
     stabilization_threshold_spinbox.bind("<FocusOut>", stabilization_threshold_spinbox_focus_out)
+    stabilization_threshold_match_label = Label(postprocessing_frame, width=5, borderwidth=2)
+    stabilization_threshold_match_label.grid(row=postprocessing_row, column=2, sticky=E)
     stabilization_threshold_selection('down')
     postprocessing_row += 1
 
