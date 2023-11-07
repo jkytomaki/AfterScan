@@ -1612,16 +1612,18 @@ def select_custom_template():
             img = crop_image(img, RectangleTopLeft, RectangleBottomRight)
             img_grey = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
             img_bw = cv2.threshold(img_grey, float(StabilizationThreshold), 255, cv2.THRESH_BINARY)[1]
+            # img_edges = cv2.Canny(image=img_bw, threshold1=100, threshold2=20)  # Canny Edge Detection
+            img_final = img_bw
             pattern_filename_custom = os.path.join(aux_dir, "Pattern.custom." + os.path.split(SourceDir)[-1] + ".jpg")
             project_config["CustomTemplateFilename"] = pattern_filename_custom
-            cv2.imwrite(pattern_filename_custom, img_bw)
+            cv2.imwrite(pattern_filename_custom, img_final)
             expected_pattern_pos_custom = RectangleTopLeft
             CustomTemplateWindowTitle = "Captured custom template. Press any key to continue."
             project_config['CustomTemplateExpectedPos'] = expected_pattern_pos_custom
-            win_x = int(img_bw.shape[1] * area_select_image_factor)
-            win_y = int(img_bw.shape[0] * area_select_image_factor)
+            win_x = int(img_final.shape[1] * area_select_image_factor)
+            win_y = int(img_final.shape[0] * area_select_image_factor)
             cv2.namedWindow(CustomTemplateWindowTitle, flags=cv2.WINDOW_KEEPRATIO)
-            cv2.imshow(CustomTemplateWindowTitle, img_bw)
+            cv2.imshow(CustomTemplateWindowTitle, img_final)
             cv2.resizeWindow(CustomTemplateWindowTitle, 600, round(win_y/2))
             cv2.moveWindow(CustomTemplateWindowTitle, win.winfo_x()+100, win.winfo_y()+30)
             cv2.waitKey(0)
@@ -1666,7 +1668,6 @@ def select_hole_height(work_image):
 def determine_hole_height(img):
     global film_hole_template, film_bw_template, film_wb_template
 
-    debug_display_image('Film hole', img)
     if project_config["FilmType"] == 'R8':
         template_1 = film_wb_template
         template_2 = film_bw_template
@@ -1782,9 +1783,10 @@ def match_template(template, img, thres):
         # convert img to grey
         img_grey = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         img_blur = cv2.GaussianBlur(img_grey, (3, 3), 0)
-        #img_bw = cv2.threshold(img_blur, thres, 255, cv2.THRESH_BINARY)[1]
-        #img_edges = cv2.Canny(image=img_bw, threshold1=100, threshold2=20)  # Canny Edge Detection
-        result.append(cv2.matchTemplate(img_blur, aux_template, cv2.TM_CCOEFF_NORMED))
+        img_bw = cv2.threshold(img_blur, thres, 255, cv2.THRESH_BINARY)[1]
+        # img_edges = cv2.Canny(image=img_bw, threshold1=100, threshold2=20)  # Canny Edge Detection
+        img_final = img_bw
+        result.append(cv2.matchTemplate(img_final, aux_template, cv2.TM_CCOEFF_NORMED))
         # Best match
         if np.amax(result[i]) > best_match:
             best_match_idx = i
@@ -1984,7 +1986,6 @@ def stabilize_image(img):
             stabilization_bounds_alert_counter, CsvFramesOffPercent))
     # Check if frame fill is enabled, and required: Extract missing fragment
     if frame_fill_type.get() == 'fake' and ConvertLoopRunning and missing_rows > 0:
-        debug_display_image('Original image', img)
         # Perform temporary horizontal stabilization only first, to extract missing fragment
         translation_matrix = np.array([
             [1, 0, move_x],
@@ -1997,7 +1998,6 @@ def stabilize_image(img):
             missing_fragment = translated_image[CropBottomRight[1]-missing_rows:CropBottomRight[1],0:width]
         elif missing_bottom < 0:
             missing_fragment = translated_image[CropTopLeft[1]:CropTopLeft[1]+missing_rows, 0:width]
-        debug_display_image('Missing fragment', missing_fragment)
     # Create the translation matrix using move_x and move_y (NumPy array)
     translation_matrix = np.array([
         [1, 0, move_x],
@@ -2015,7 +2015,6 @@ def stabilize_image(img):
                 translated_image[CropTopLeft[1]:CropTopLeft[1]+missing_rows,0:width] = missing_fragment
             elif missing_bottom < 0:
                 translated_image[CropBottomRight[1]-missing_rows:CropBottomRight[1],0:width] = missing_fragment
-            debug_display_image('Fake filled image', translated_image)
         elif frame_fill_type.get() == 'dumb':
             if missing_top < 0:
                 translated_image = translated_image[missing_rows+CropTopLeft[1]:height,0:width]
@@ -2025,7 +2024,6 @@ def stabilize_image(img):
                 translated_image = translated_image[0:CropBottomRight[1]-missing_rows, 0:width]
                 translated_image = cv2.copyMakeBorder(src=translated_image, top=0, bottom=CropBottomRight[1]-missing_rows, left=0, right=0,
                                                       borderType=cv2.BORDER_REPLICATE)
-            debug_display_image('Filled image', translated_image)
 
     if ConvertLoopRunning:
         logging.debug("FrameStabilizeTag, %s, %i, %ix%i, %i, %i",
@@ -2317,11 +2315,12 @@ def start_convert():
                         CsvPathName = os.getcwd()
                     CsvPathName = os.path.join(CsvPathName, CsvFilename)
                     CsvFile = open(CsvPathName, "w")
-
+            clear_image()
             win.after(1, frame_generation_loop)
         elif generate_video.get():
             ffmpeg_success = False
             ffmpeg_encoding_status = ffmpeg_state.Pending
+            clear_image()
             win.after(1, video_generation_loop)
 
 
