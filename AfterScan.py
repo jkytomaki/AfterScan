@@ -1057,10 +1057,10 @@ def widget_status_update(widget_state=0, button_action=0):
     global frames_target_dir, target_folder_btn
     global frame_input_filename_pattern
     global encode_all_frames, encode_all_frames_checkbox
-    global frame_from_entry, frame_to_entry
+    global frame_from_entry, frame_to_entry, frames_separator_label
     global frames_to_encode_label
     global rotation_angle_label
-    global perform_rotation_checkbox, rotation_angle_spinbox
+    global perform_rotation_checkbox, rotation_angle_spinbox, perform_rotation
     global perform_stabilization
     global perform_stabilization_checkbox, stabilization_threshold_spinbox
     global perform_cropping_checkbox
@@ -1092,12 +1092,13 @@ def widget_status_update(widget_state=0, button_action=0):
         frame_from_entry.config(state=widget_state if not encode_all_frames.get() else DISABLED)
         frame_to_entry.config(state=widget_state if not encode_all_frames.get() else DISABLED)
         frames_to_encode_label.config(state=widget_state if not encode_all_frames.get() else DISABLED)
+        frames_separator_label.config(state=widget_state if not encode_all_frames.get() else DISABLED)
         perform_rotation_checkbox.config(state=widget_state)
         rotation_angle_spinbox.config(state=widget_state)
-        rotation_angle_label.config(state=widget_state if not encode_all_frames.get() else DISABLED)
+        rotation_angle_label.config(state=widget_state if perform_rotation.get() else DISABLED)
         perform_stabilization_checkbox.config(state=widget_state if not is_demo else NORMAL)
         stabilization_threshold_spinbox.config(state=widget_state)
-        stabilization_threshold_label.config(state=widget_state if not encode_all_frames.get() else DISABLED)
+        #stabilization_threshold_label.config(state=widget_state if not encode_all_frames.get() else DISABLED)
         perform_cropping_checkbox.config(state=widget_state if perform_stabilization.get() and CropAreaDefined and not is_demo else NORMAL)
         cropping_btn.config(state=widget_state if perform_stabilization.get() else DISABLED)
         force_4_3_crop_checkbox.config(state=widget_state if perform_stabilization.get() else DISABLED)
@@ -2910,7 +2911,7 @@ def build_ui():
     global start_batch_btn, add_job_btn, delete_job_btn, rerun_job_btn
     global stabilization_bounds_alert_checkbox, stabilization_bounds_alert
     global film_type_S8_rb, film_type_R8_rb
-    global frame_from_str, frame_to_str, frame_from_entry, frame_to_entry
+    global frame_from_str, frame_to_str, frame_from_entry, frame_to_entry, frames_separator_label
     global suspend_on_joblist_end
     global frame_fill_type
 
@@ -3037,10 +3038,12 @@ def build_ui():
     frames_to_encode_label.grid(row=postprocessing_row, column=0, columnspan=2, sticky=W)
     frame_from_str = tk.StringVar(value=str(from_frame))
     frame_from_entry = Entry(postprocessing_frame, textvariable=frame_from_str, width=6, borderwidth=1)
-    frame_from_entry.grid(row=postprocessing_row, column=1)
+    frame_from_entry.grid(row=postprocessing_row, column=1, sticky=W)
     frame_from_entry.config(state=NORMAL)
     frame_from_entry.bind("<Double - Button - 1>", update_frame_from)
     frame_to_str = tk.StringVar(value=str(from_frame))
+    frames_separator_label = tk.Label(postprocessing_frame, text='to', width=6)
+    frames_separator_label.grid(row=postprocessing_row, column=1, sticky=E)
     frame_to_entry = Entry(postprocessing_frame, textvariable=frame_to_str, width=6, borderwidth=1)
     frame_to_entry.grid(row=postprocessing_row, column=2, sticky=W)
     frame_to_entry.config(state=NORMAL)
@@ -3102,7 +3105,7 @@ def build_ui():
         textvariable=stabilization_threshold_str, from_=0, to=255)
     stabilization_threshold_spinbox.grid(row=postprocessing_row, column=2, sticky=W)
     stabilization_threshold_spinbox.bind("<FocusOut>", stabilization_threshold_spinbox_focus_out)
-    stabilization_threshold_match_label = Label(postprocessing_frame, width=5, borderwidth=2)
+    stabilization_threshold_match_label = Label(postprocessing_frame, width=5, borderwidth=1, relief='sunken')
     stabilization_threshold_match_label.grid(row=postprocessing_row, column=2, sticky=E)
     stabilization_threshold_selection('down')
     postprocessing_row += 1
