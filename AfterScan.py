@@ -1240,6 +1240,7 @@ def force_4_3_selection():
     Force43 = force_4_3_crop.get()
     if Force43:
         force_16_9_crop.set(False)
+        Force169 = False
     project_config["Force_4/3"] = force_4_3_crop.get()
     project_config["Force_16/9"] = force_16_9_crop.get()
 
@@ -1254,6 +1255,7 @@ def force_16_9_selection():
     Force169 = force_16_9_crop.get()
     if Force169:
         force_4_3_crop.set(False)
+        Force43= False
     project_config["Force_4/3"] = force_4_3_crop.get()
     project_config["Force_16/9"] = force_16_9_crop.get()
 
@@ -1369,18 +1371,18 @@ def draw_rectangle(event, x, y, flags, param):
         copy = work_image.copy()
         if Force43 and IsCropping:
             w = x - ix
-            h = y -iy
-            if y * 1.33 > x:
-                x = int(y * 1.33)
+            h = y - iy
+            if h * 1.33 > w:
+                x = int(h * 1.33) + ix
             else:
-                y = int(x / 1.33)
+                y = int(w / 1.33) + iy
         elif Force169 and IsCropping:
             w = x - ix
-            h = y -iy
-            if y * 1.78 > x:
-                x = int(y * 1.78)
+            h = y - iy
+            if h * 1.78 > w:
+                x = int(h * 1.78) + ix
             else:
-                y = int(x / 1.78)
+                y = int(w / 1.78) + iy
         x_, y_ = x, y
         cv2.rectangle(copy, (ix, iy), (x_, y_), (0, 255, 0), line_thickness)
         cv2.imshow(RectangleWindowTitle, copy)
@@ -1391,17 +1393,17 @@ def draw_rectangle(event, x, y, flags, param):
         if Force43 and IsCropping:
             w = x - ix
             h = y -iy
-            if y * 1.33 > x:
-                x = int(y * 1.33)
+            if h * 1.33 > w:
+                x = int(h * 1.33) + ix
             else:
-                y = int(x / 1.33)
+                y = int(w / 1.33) + iy
         elif Force169 and IsCropping:
             w = x - ix
             h = y -iy
-            if y * 1.78 > x:
-                x = int(y * 1.78)
+            if h * 1.78 > w:
+                x = int(h * 1.78) + ix
             else:
-                y = int(x / 1.78)
+                y = int(w / 1.78) + iy
         cv2.rectangle(copy, (ix, iy), (x, y), (0, 255, 0), line_thickness)
         # Update global variables with area
         # Need to account for the fact area calculated with 50% reduced image
