@@ -3042,7 +3042,7 @@ def build_ui():
     frame_from_entry.config(state=NORMAL)
     frame_from_entry.bind("<Double - Button - 1>", update_frame_from)
     frame_to_str = tk.StringVar(value=str(from_frame))
-    frames_separator_label = tk.Label(postprocessing_frame, text='to', width=6)
+    frames_separator_label = tk.Label(postprocessing_frame, text='to', width=4)
     frames_separator_label.grid(row=postprocessing_row, column=1, sticky=E)
     frame_to_entry = Entry(postprocessing_frame, textvariable=frame_to_str, width=6, borderwidth=1)
     frame_to_entry.grid(row=postprocessing_row, column=2, sticky=W)
