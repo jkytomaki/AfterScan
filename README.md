@@ -34,7 +34,7 @@ Sprocket holes in 8mm films are expected to be in a very precise location for ea
    - Quality/speed choice: Three options available, from high quality (slow) to Fast (low quality)
    
 ## Additional information
-You can find a description of the UI eolements in the [wiki](https://github.com/jareff-g/AfterScan/wiki/AfterScan-UI-description).
+You can find a description of the UI elements in the [wiki](https://github.com/jareff-g/AfterScan/wiki/AfterScan-UI-description).
 
 
 
