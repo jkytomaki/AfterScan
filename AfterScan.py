@@ -94,6 +94,7 @@ default_project_config = {
     "FrameInputFilenamePattern": "picture-*.jpg",
     "FilmType": "S8",
     "PerformCropping": False,
+    "PerformDenoise": False,
     "GenerateVideo": False,
     "VideoFps": "18",
     "VideoResolution": "Unchanged",
@@ -283,6 +284,8 @@ def set_project_defaults():
 
     project_config["PerformCropping"] = False
     perform_cropping.set(project_config["PerformCropping"])
+    project_config["PerformDenoise"] = False
+    perform_denoise.set(project_config["PerformDenoise"])
     project_config["FrameFillType"] = 'none'
     frame_fill_type.set(project_config["FrameFillType"])
     project_config["GenerateVideo"] = False
@@ -427,6 +430,7 @@ def save_project_config():
     project_config["FFmpegPreset"] = ffmpeg_preset.get()
     project_config["ProjectConfigDate"] = str(datetime.now())
     project_config["PerformCropping"] = perform_cropping.get()
+    project_config["PerformDenoise"] = perform_denoise.get()
     project_config["FrameFillType"] = frame_fill_type.get()
     project_config["VideoFilename"] = video_filename_name.get()
     project_config["VideoTitle"] = video_title_name.get()
@@ -589,6 +593,10 @@ def decode_project_config():
         perform_cropping.set(project_config["PerformCropping"])
     else:
         perform_cropping.set(False)
+    if 'PerformDenoise' in project_config:
+        perform_denoise.set(project_config["PerformDenoise"])
+    else:
+        perform_denoise.set(False)
     if 'CropRectangle' in project_config:
         CropBottomRight = tuple(project_config["CropRectangle"][1])
         CropTopLeft = tuple(project_config["CropRectangle"][0])
@@ -1063,7 +1071,7 @@ def widget_status_update(widget_state=0, button_action=0):
     global perform_rotation_checkbox, rotation_angle_spinbox, perform_rotation
     global perform_stabilization
     global perform_stabilization_checkbox, stabilization_threshold_spinbox
-    global perform_cropping_checkbox
+    global perform_cropping_checkbox, perform_denoise_checkbox
     global force_4_3_crop_checkbox, force_16_9_crop_checkbox
     global custom_stabilization_btn
     global stabilization_threshold_label
@@ -1104,6 +1112,7 @@ def widget_status_update(widget_state=0, button_action=0):
         force_4_3_crop_checkbox.config(state=widget_state if perform_stabilization.get() else DISABLED)
         force_16_9_crop_checkbox.config(state=widget_state if perform_stabilization.get() else DISABLED)
         perform_cropping_checkbox.config(state=widget_state)
+        perform_denoise_checkbox.config(state=widget_state)
         film_type_S8_rb.config(state=DISABLED if CustomTemplateDefined else widget_state)
         film_type_R8_rb.config(state=DISABLED if CustomTemplateDefined else widget_state)
         custom_stabilization_btn.config(state=widget_state)
@@ -1227,6 +1236,14 @@ def perform_cropping_selection():
     generate_video_checkbox.config(state=NORMAL if ffmpeg_installed
                                    else DISABLED)
     project_config["PerformCropping"] = perform_cropping.get()
+    if ui_init_done:
+        scale_display_update()
+
+
+def perform_denoise_selection():
+    global perform_denoise
+
+    project_config["PerformDenoise"] = perform_denoise.get()
     if ui_init_done:
         scale_display_update()
 
@@ -2402,7 +2419,7 @@ def hdr_merge_loop():
     win.after(1, hdr_merge_loop)
 
 def frame_generation_loop():
-    global perform_stabilization, perform_cropping, perform_rotation
+    global perform_stabilization, perform_cropping, perform_rotation, perform_denoise
     global ConvertLoopExitRequested
     global CropTopLeft, CropBottomRight
     global TargetDir
@@ -2465,6 +2482,8 @@ def frame_generation_loop():
             img = crop_image(img, CropTopLeft, CropBottomRight)
         else:
             img = even_image(img)
+        if perform_denoise.get():
+            img = cv2.fastNlMeansDenoisingColored(img, None, 10, 10, 7, 21)
 
         if CurrentFrame % 2 == 0:
             display_image(img)
@@ -2885,6 +2904,7 @@ def build_ui():
     global SourceDir
     global frames_source_dir, frames_target_dir, video_target_dir
     global perform_cropping, cropping_btn
+    global perform_denoise, perform_denoise_checkbox
     global generate_video, generate_video_checkbox
     global encode_all_frames, encode_all_frames_checkbox
     global frames_to_encode_str, frames_to_encode, frames_to_encode_label
@@ -3149,6 +3169,16 @@ def build_ui():
                           activebackground='green', activeforeground='white',
                           wraplength=120)
     cropping_btn.grid(row=postprocessing_row, column=2, sticky=E)
+    postprocessing_row += 1
+
+    # Check box to enable denoise
+    perform_denoise = tk.BooleanVar(value=False)
+    perform_denoise_checkbox = tk.Checkbutton(
+        postprocessing_frame, text='Denoise', variable=perform_denoise,
+        onvalue=True, offvalue=False, command=perform_denoise_selection,
+        width=7)
+    perform_denoise_checkbox.grid(row=postprocessing_row, column=0, sticky=W)
+    perform_denoise_checkbox.config(state=DISABLED)
     postprocessing_row += 1
 
     # Radio buttons to select R8/S8. Required to select adequate pattern, and match position
