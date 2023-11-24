@@ -2214,22 +2214,31 @@ def get_source_dir_file_list():
     SourceDirFileList = sorted(list(glob(os.path.join(
         SourceDir,
         FrameInputFilenamePattern))))
+    SourceDirHdrFileList = sorted(list(glob(os.path.join(
+        SourceDir,
+        HdrInputFilenamePattern))))
+    NumFiles = len(SourceDirFileList)
+    NumHdrFiles = len(SourceDirHdrFileList)
+    if NumFiles != 0 and NumHdrFiles != 0:
+        if tk.messagebox.askyesno(
+                "Frame conflict",
+                f"Found both standard and HDR files in source folder. "
+                f"There are {NumFiles} standard frames and {NumHdrFiles} HDR files.\r\n"
+                f"Do you want to continue using the {'standard' if NumFiles > NumHdrFiles else 'HDR'} files?.\r\n"
+                f"You might want ot clean up that source folder, it is strongly recommended to have only a single type of frames in the source folder."):
+                    if NumHdrFiles > NumFiles:
+                        SourceDirFileList = SourceDirHdrFileList
+
+
     if len(SourceDirFileList) == 0:
-        # If no files match standard pattern, try with HDR pattern
-        SourceDirFileList = sorted(list(glob(os.path.join(
-            SourceDir,
-            HdrInputFilenamePattern))))
-        if len(SourceDirFileList) == 0:
-            tk.messagebox.showerror("Error!",
-                                    "No files match pattern name. "
-                                    "Please specify new one and try again")
-            clear_image()
-            frames_target_dir.delete(0, 'end')
-            return
-        else:
-            perform_merge = True
+        tk.messagebox.showerror("Error!",
+                                "No files match pattern name. "
+                                "Please specify new one and try again")
+        clear_image()
+        frames_target_dir.delete(0, 'end')
+        return
     else:
-        perform_merge = False
+        perform_merge = True
 
     # Sanity check for CurrentFrame
     if CurrentFrame >= len(SourceDirFileList):
