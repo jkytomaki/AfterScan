@@ -2228,7 +2228,8 @@ def get_source_dir_file_list():
                 f"You might want ot clean up that source folder, it is strongly recommended to have only a single type of frames in the source folder."):
                     if NumHdrFiles > NumFiles:
                         SourceDirFileList = SourceDirHdrFileList
-
+    elif NumFiles == 0: # No standard files, only HDR
+        SourceDirFileList = SourceDirHdrFileList
 
     if len(SourceDirFileList) == 0:
         tk.messagebox.showerror("Error!",
