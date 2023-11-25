@@ -712,7 +712,7 @@ def job_list_process_selection(evt):
     # Note here that Tkinter passes an event object to onselect()
     # w = evt.widget - We already know the widget
 
-    if job_list_listbox.len == 0:
+    if job_list_listbox.size() == 0:
         return
 
     selected = int(job_list_listbox.curselection()[0])
@@ -859,7 +859,7 @@ def save_job_list():
 
 
 def load_job_list():
-    global job_list, job_list_filename
+    global job_list, job_list_filename, job_list_listbox
 
     if not IgnoreConfig and os.path.isfile(job_list_filename):
         f = open(job_list_filename)
