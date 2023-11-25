@@ -1355,13 +1355,15 @@ def scale_display_update():
     global CropTopLeft, CropBottomRight
     global SourceDirFileList
 
-    if CurrentFrame >= len(SourceDirFileList):
+    frame_to_display = CurrentFrame
+    if frame_to_display >= len(SourceDirFileList):
         return
-    file = SourceDirFileList[CurrentFrame]
+    file = SourceDirFileList[frame_to_display]
     img = cv2.imread(file, cv2.IMREAD_UNCHANGED)
     if img is None:
+        frame_scale_refresh_done = True
         logging.error(
-            "Error reading frame %i, skipping", CurrentFrame)
+            "Error reading frame %i, skipping", frame_to_display)
     else:
         if perform_rotation.get():
             img = rotate_image(img)
