@@ -1365,19 +1365,21 @@ def scale_display_update():
         logging.error(
             "Error reading frame %i, skipping", frame_to_display)
     else:
-        if perform_rotation.get():
-            img = rotate_image(img)
-        if perform_stabilization.get():
-            img = stabilize_image(img, img)
+        if not frame_scale_refresh_pending:
+            if perform_rotation.get():
+                img = rotate_image(img)
+            if perform_stabilization.get():
+                img = stabilize_image(img, img)
         if perform_cropping.get():
             img = crop_image(img, CropTopLeft, CropBottomRight)
         else:
             img = even_image(img)
         display_image(img)
-        frame_scale_refresh_done = True
         if frame_scale_refresh_pending:
             frame_scale_refresh_pending = False
             win.after(100, scale_display_update)
+        else:
+            frame_scale_refresh_done = True
 
 
 def select_scale_frame(selected_frame):
