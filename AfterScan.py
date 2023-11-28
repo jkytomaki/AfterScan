@@ -19,7 +19,8 @@ __author__ = 'Juan Remirez de Esparza'
 __copyright__ = "Copyright 2022, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
-__version__ = "1.5.1"
+__version__ = "1.8.0"
+__date__ = "2023-11-28"
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
 __status__ = "Development"
@@ -28,9 +29,13 @@ import tkinter as tk
 from tkinter import filedialog
 
 import tkinter.messagebox
-from tkinter import *
+from tkinter import DISABLED, NORMAL, LEFT, RIGHT, TOP, BOTTOM, N, W, E, NW, NS, EW, RAISED, SUNKEN, END, VERTICAL, HORIZONTAL
+from tkinter import Toplevel, Label, Button, Frame, LabelFrame, Canvas, Text, Scrollbar, Scale, Entry, Radiobutton, Listbox
+from tkinter import Tk, IntVar, StringVar, OptionMenu
 
-import tkinter.font as tkfont
+#from tkinter import *
+
+#import tkinter.font as tkfont
 
 from PIL import ImageTk, Image, ImageDraw, ImageFont
 
@@ -289,9 +294,10 @@ def set_project_defaults():
     global perform_cropping, generate_video, resolution_dropdown_selected
     global frame_slider, encode_all_frames, frames_to_encode_str
     global perform_stabilization, skip_frame_regeneration, ffmpeg_preset
-    global video_filename_name
+    global video_filename_name, video_title_name
     global frame_from_str, frame_to_str
     global frame_fill_type
+    global perform_denoise
 
     project_config["PerformCropping"] = False
     perform_cropping.set(project_config["PerformCropping"])
@@ -340,6 +346,7 @@ def load_general_config():
     global LastSessionDate
     global SourceDir, TargetDir
     global project_name
+    global FfmpegBinName
 
     # Check if persisted data file exist: If it does, load it
     if not IgnoreConfig and os.path.isfile(general_config_filename):
@@ -427,8 +434,9 @@ def save_project_config():
     global ffmpeg_preset
     global StabilizeAreaDefined, film_hole_height
     global CurrentFrame
-    global video_filename_name
+    global video_filename_name, video_title_name
     global frame_from_str, frame_to_str
+    global perform_denoise
 
     # Do not save if current project comes from batch job
     if not project_config_from_file or IgnoreConfig:
@@ -517,6 +525,7 @@ def decode_project_config():
     global force_4_3_crop, force_16_9_crop
     global frame_fill_type
     global Force43, Force169
+    global perform_denoise
 
     if IgnoreConfig:
         return
@@ -1005,7 +1014,7 @@ def set_source_folder():
     # Write project data before switching project
     save_project_config()
 
-    aux_dir = tk.filedialog.askdirectory(
+    aux_dir = filedialog.askdirectory(
         initialdir=SourceDir,
         title="Select folder with captured images to process")
 
@@ -1058,7 +1067,7 @@ def set_frames_target_folder():
     global TargetDir
     global frames_target_dir
 
-    aux_dir = tk.filedialog.askdirectory(
+    aux_dir = filedialog.askdirectory(
         initialdir=TargetDir,
         title="Select folder where to store generated frames")
 
@@ -1083,7 +1092,7 @@ def set_video_target_folder():
     global VideoTargetDir
     global video_target_dir
 
-    VideoTargetDir = tk.filedialog.askdirectory(
+    VideoTargetDir = filedialog.askdirectory(
         initialdir=VideoTargetDir,
         title="Select folder where to store generated video")
 
@@ -1689,10 +1698,11 @@ def select_custom_template():
             expected_pattern_pos_custom = RectangleTopLeft
             CustomTemplateWindowTitle = "Captured custom template. Press any key to continue."
             project_config['CustomTemplateExpectedPos'] = expected_pattern_pos_custom
-            win_x = int(img_final.shape[1] * area_select_image_factor)
+            #win_x = int(img_final.shape[1] * area_select_image_factor)
             win_y = int(img_final.shape[0] * area_select_image_factor)
             cv2.namedWindow(CustomTemplateWindowTitle, flags=cv2.WINDOW_KEEPRATIO)
             cv2.imshow(CustomTemplateWindowTitle, img_final)
+            # Hardcode template window width to 600 pixels to make it more visible
             cv2.resizeWindow(CustomTemplateWindowTitle, 600, round(win_y/2))
             cv2.moveWindow(CustomTemplateWindowTitle, win.winfo_x()+100, win.winfo_y()+30)
             cv2.waitKey(0)
@@ -2001,9 +2011,6 @@ def stabilize_image(img, img_ref):
     width = img_ref.shape[1]
     height = img_ref.shape[0]
 
-    # Get crop height to calculate if part of the image will be missing
-    crop_height = CropBottomRight[1]-CropTopLeft[1]
-
     left_stripe_image = get_image_left_stripe(img_ref)
 
     # Search film hole pattern
@@ -2042,10 +2049,8 @@ def stabilize_image(img, img_ref):
     else:
         move_x = 0
         move_y = 0
-    # Experimental: Try to figure out if there will be a part missing
+    # Try to figure out if there will be a part missing
     # at the bottom, or the top
-    # missing_bottom = top_left[1] - CropTopLeft[1] + crop_height - height - move_y
-    # missing_top = top_left[1] - CropTopLeft[1]
     missing_rows = 0
     missing_bottom = 0
     missing_top = 0
@@ -2172,6 +2177,8 @@ def crop_image(img, top_left, botton_right):
 
 def is_ffmpeg_installed():
     global ffmpeg_installed
+    global FfmpegBinName
+    global ffmpeg_process
 
     cmd_ffmpeg = [FfmpegBinName, '-h']
 
@@ -2243,7 +2250,7 @@ def get_source_dir_file_list():
         frames_target_dir.delete(0, 'end')
         return
     else:
-        perform_merge = True
+        perform_merge = NumHdrFiles > NumFiles
 
     # Sanity check for CurrentFrame
     if CurrentFrame >= len(SourceDirFileList):
@@ -2607,7 +2614,7 @@ def get_text_dimensions(text_string, font):
 def get_adjusted_font(image, text):
     max_size = 96
     try_again = False
-    draw = ImageDraw.Draw(image)
+    # draw = ImageDraw.Draw(image)
     image_width, image_height = image.size
     lines = textwrap.wrap(text, width=40)
     while max_size > 8:
@@ -2695,6 +2702,7 @@ def call_ffmpeg():
     global VideoTargetDir, TargetDir
     global cmd_ffmpeg
     global ffmpeg_preset
+    global FfmpegBinName
     global TargetVideoFilename
     global StartFrame
     global ffmpeg_process, ffmpeg_success
@@ -2882,7 +2890,6 @@ def init_display():
     global PreviewWidth, PreviewHeight, PreviewRatio
 
     # Get first file
-    savedir = os.getcwd()
     if SourceDir == "":
         tk.messagebox.showerror("Error!",
                                 "Please specify source and target folders.")
@@ -2936,6 +2943,7 @@ def afterscan_init():
         ]
     )
 
+    logging.info("AfterScann %s (%s)", __version__, __date__)
     logging.info("Log file: %s", log_file_fullpath)
 
     win = Tk()  # Create main window, store it in 'win'
@@ -3016,6 +3024,7 @@ def build_ui():
     global video_target_dir, video_target_folder_btn, video_filename_label, video_title_label
     global ffmpeg_preset
     global ffmpeg_preset_rb1, ffmpeg_preset_rb2, ffmpeg_preset_rb3
+    global FfmpegBinName
     global skip_frame_regeneration
     global ExpertMode
     global pattern_filename
@@ -3472,7 +3481,6 @@ def build_ui():
                              text='Job List',
                              width=67, height=8)
     job_list_frame.pack(side=TOP, padx=2, pady=2, anchor=W)
-    job_list_row = 0
 
     # job listbox
     job_list_listbox = Listbox(job_list_frame, width=65 if BigSize else 42, height=13)
