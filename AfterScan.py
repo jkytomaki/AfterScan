@@ -19,8 +19,8 @@ __author__ = 'Juan Remirez de Esparza'
 __copyright__ = "Copyright 2022, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
-__version__ = "1.8.0"
-__date__ = "2023-11-28"
+__version__ = "1.8.1"
+__date__ = "2023-11-30"
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
 __status__ = "Development"
@@ -356,9 +356,9 @@ def load_general_config():
     else:   # No project config file. Set empty config to force defaults
         general_config = {}
 
-    logging.info("Reading general config")
+    logging.debug("Reading general config")
     for item in general_config:
-        logging.info("%s=%s", item, str(general_config[item]))
+        logging.debug("%s=%s", item, str(general_config[item]))
 
     if 'SourceDir' in general_config:
         SourceDir = general_config["SourceDir"]
@@ -393,9 +393,9 @@ def save_project_settings():
             os.remove(project_settings_backup_filename)
         if os.path.isfile(project_settings_filename):
             os.rename(project_settings_filename, project_settings_backup_filename)
-            logging.info("Saving project settings:")
+            logging.debug("Saving project settings:")
         with open(project_settings_filename, 'w+') as f:
-            logging.info(project_settings)
+            logging.debug(project_settings)
             json.dump(project_settings, f)
 
 
@@ -481,20 +481,20 @@ def load_project_config():
     project_config = default_project_config.copy()  # set default config
 
     if SourceDir in project_settings:
-        logging.info("Loading project config from consolidated project settings")
+        logging.debug("Loading project config from consolidated project settings")
         project_config |= project_settings[SourceDir].copy()
     elif os.path.isfile(project_config_filename):
-        logging.info("Loading project config from dedicated project config file")
+        logging.debug("Loading project config from dedicated project config file")
         persisted_data_file = open(project_config_filename)
         project_config |= json.load(persisted_data_file)
         persisted_data_file.close()
     else:  # No project config file. Set empty config to force defaults
-        logging.info("No project config exists, initializing defaults")
+        logging.debug("No project config exists, initializing defaults")
         project_config = default_project_config.copy()
         project_config['SourceDir'] = SourceDir
 
     for item in project_config:
-        logging.info("%s=%s", item, str(project_config[item]))
+        logging.debug("%s=%s", item, str(project_config[item]))
 
     # Allow to determine source of current project, to avoid
     # saving it in case of batch processing
@@ -911,7 +911,7 @@ def job_processing_loop():
             #job_list_listbox.selection_set(idx)
             job_list_listbox.itemconfig(idx, fg='blue')
             CurrentJobEntry = entry
-            logging.info("Processing %s, starting from frame %i, %s frames",
+            logging.debug("Processing %s, starting from frame %i, %s frames",
                          entry, job_list[entry]['project']['CurrentFrame'],
                          job_list[entry]['project']['FramesToEncode'])
             project_config_from_file = False
@@ -2759,7 +2759,7 @@ def call_ffmpeg():
          os.path.join(VideoTargetDir,
                       TargetVideoFilename)])
 
-    logging.info("Generated ffmpeg command: %s", cmd_ffmpeg)
+    logging.debug("Generated ffmpeg command: %s", cmd_ffmpeg)
     ffmpeg_process = sp.Popen(cmd_ffmpeg, stderr=sp.STDOUT,
                               stdout=sp.PIPE,
                               universal_newlines=True)
@@ -2854,7 +2854,7 @@ def video_generation_loop():
         app_status_label.config(text=status_str, fg='black')
         # And display results
         if ffmpeg_success:
-            logging.info("Video generated OK: %s", os.path.join(VideoTargetDir, TargetVideoFilename))
+            logging.debug("Video generated OK: %s", os.path.join(VideoTargetDir, TargetVideoFilename))
             status_str = "Status: Video generated OK"
             app_status_label.config(text=status_str, fg='green')
             if not BatchJobRunning:
@@ -2991,7 +2991,7 @@ def afterscan_init():
 
     WinInitDone = True
 
-    logging.info("AfterScan initialized")
+    logging.debug("AfterScan initialized")
 
 
 def build_ui():
@@ -3586,7 +3586,7 @@ def main(argv):
     global suspend_on_joblist_end
     global BatchAutostart
 
-    LoggingMode = "warning"
+    LoggingMode = "INFO"
 
     # Create job dictionary
     job_list = {}
@@ -3646,21 +3646,21 @@ def main(argv):
         IsWindows = True
         FfmpegBinName = 'C:\\ffmpeg\\bin\\ffmpeg.exe'
         AltFfmpegBinName = 'ffmpeg.exe'
-        logging.info("Detected Windows OS")
+        logging.debug("Detected Windows OS")
     elif platform.system() == 'Linux':
         IsLinux = True
         FfmpegBinName = 'ffmpeg'
         AltFfmpegBinName = 'ffmpeg'
-        logging.info("Detected Linux OS")
+        logging.debug("Detected Linux OS")
     elif platform.system() == 'Darwin':
         IsMac = True
         FfmpegBinName = 'ffmpeg'
         AltFfmpegBinName = 'ffmpeg'
-        logging.info("Detected Darwin (MacOS) OS")
+        logging.debug("Detected Darwin (MacOS) OS")
     else:
         FfmpegBinName = 'ffmpeg'
         AltFfmpegBinName = 'ffmpeg'
-        logging.info("OS not recognized: " + platform.system())
+        logging.debug("OS not recognized: " + platform.system())
 
     if is_ffmpeg_installed():
         ffmpeg_installed = True
