@@ -19,8 +19,8 @@ __author__ = 'Juan Remirez de Esparza'
 __copyright__ = "Copyright 2022, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
-__version__ = "1.8.1"
-__date__ = "2023-11-30"
+__version__ = "1.8.2"
+__date__ = "2023-12-02"
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
 __status__ = "Development"
@@ -147,13 +147,15 @@ TargetVideoTitle = ""
 SourceDir = ""
 TargetDir = ""
 VideoTargetDir = ""
-FrameInputFilenamePattern = "picture-*.jpg"
+FrameInputFilenamePatternList = "picture-*.jpg"
+FrameInputFilenamePattern = "picture-%05d.jpg"   # HDR frames using standard filename (2/12/2023)
+FrameHdrInputFilenamePattern = "picture-%05d.%1d.jpg"   # HDR frames using standard filename (2/12/2023)
 FrameOutputFilenamePattern = "picture_out-%05d.jpg"
 TitleOutputFilenamePattern = "picture_out(title)-%05d.jpg"
 FrameCheckOutputFilenamePattern = "picture_out-?????.jpg"  # Req. for ffmpeg gen.
 HdrInputFilenamePattern = "hdrpic*.3.jpg"   # In HDR mode, use 3rd frame as guide
 HdrSetInputFilenamePattern = "hdrpic-%05d.%1d.jpg"   # Req. to fetch each HDR frame set
-perform_merge = False   # No HDR by default. Updated when building file list from input folder
+HdrFilesOnly = False   # No HDR by default. Updated when building file list from input folder
 MergeMertens = None
 images_to_merge = []
 
@@ -2216,7 +2218,7 @@ def get_source_dir_file_list():
     global frame_slider
     global area_select_image_factor, screen_height
     global frames_target_dir
-    global perform_merge
+    global HdrFilesOnly
 
     if not os.path.isdir(SourceDir):
         return
@@ -2224,7 +2226,7 @@ def get_source_dir_file_list():
     # Try first with standard scan filename template
     SourceDirFileList = sorted(list(glob(os.path.join(
         SourceDir,
-        FrameInputFilenamePattern))))
+        FrameInputFilenamePatternList))))
     SourceDirHdrFileList = sorted(list(glob(os.path.join(
         SourceDir,
         HdrInputFilenamePattern))))
@@ -2250,7 +2252,7 @@ def get_source_dir_file_list():
         frames_target_dir.delete(0, 'end')
         return
     else:
-        perform_merge = NumHdrFiles > NumFiles
+        HdrFilesOnly = NumHdrFiles > NumFiles
 
     # Sanity check for CurrentFrame
     if CurrentFrame >= len(SourceDirFileList):
@@ -2339,6 +2341,15 @@ Core top level functions
 ########################
 """
 
+def get_frame_number_from_filename(filename):
+    numbers = re.findall(r'\d\d\d\d\d', filename)
+
+    if len(numbers) >= 1:
+        return int(numbers[-1])
+    else:
+        # Return a default value or handle the case where no numbers are found
+        return None
+
 
 def start_convert():
     global ConvertLoopExitRequested, ConvertLoopRunning
@@ -2370,14 +2381,15 @@ def start_convert():
         # Centralize 'frames_to_encode' update here
         if encode_all_frames.get():
             StartFrame = 0
-            frames_to_encode = len(SourceDirFileList)
+            #frames_to_encode = len(SourceDirFileList)
+            frames_to_encode = get_frame_number_from_filename(SourceDirFileList[-1]) - get_frame_number_from_filename(SourceDirFileList[0]) + 1
         else:
             StartFrame = int(frame_from_str.get())
             frames_to_encode = int(frame_to_str.get()) - int(frame_from_str.get()) + 1
             if StartFrame + frames_to_encode > len(SourceDirFileList):
                 frames_to_encode = len(SourceDirFileList) - StartFrame
         CurrentFrame = StartFrame
-        if frames_to_encode == 0:
+        if frames_to_encode <= 1:
             tk.messagebox.showwarning(
                 "No frames match range",
                 "No frames to encode.\r\n"
@@ -2499,6 +2511,7 @@ def frame_generation_loop():
     global frame_slider
     global MergeMertens, images_to_merge
     global FPM_CalculatedValue
+    global HdrFilesOnly
 
     if CurrentFrame >= StartFrame + frames_to_encode:
         FPM_CalculatedValue = -1
@@ -2536,9 +2549,9 @@ def frame_generation_loop():
         return
 
     # Get current file(s)
-    if perform_merge:
+    if HdrFilesOnly:    # Legacy HDR (before 2 Dec 2023): Dedicated filename
         images_to_merge.clear()
-        file1 = os.path.join(SourceDir, HdrSetInputFilenamePattern % (CurrentFrame + first_absolute_frame, 1))
+        file1 = os.path.join(SourceDir, FrameInputFilenamePattern % CurrentFrame + (first_absolute_frame))
         images_to_merge.append(cv2.imread(file1, cv2.IMREAD_UNCHANGED))
         file2 = os.path.join(SourceDir, HdrSetInputFilenamePattern % (CurrentFrame + first_absolute_frame, 2))
         img_ref = cv2.imread(file2, cv2.IMREAD_UNCHANGED)   # Keep second frame of the set for stabilization reference
@@ -2551,11 +2564,29 @@ def frame_generation_loop():
         img = img - img.min()  # Now between 0 and 8674
         img = img / img.max() * 255
         img = np.uint8(img)
+        merged_frame = True
     else:
-        file = SourceDirFileList[CurrentFrame]
+        merged_frame = False
+        file1 = os.path.join(SourceDir, FrameInputFilenamePattern % (CurrentFrame + first_absolute_frame))
         # read image
-        img = cv2.imread(file, cv2.IMREAD_UNCHANGED)
+        img = cv2.imread(file1, cv2.IMREAD_UNCHANGED)
         img_ref = img   # Reference image is the same image for standard capture
+        file2 = os.path.join(SourceDir, FrameHdrInputFilenamePattern % (CurrentFrame + first_absolute_frame, 2))
+        if os.path.isfile(file2):   # If hdr frames exist, add them
+            file3 = os.path.join(SourceDir, FrameHdrInputFilenamePattern % (CurrentFrame + first_absolute_frame, 3))
+            file4 = os.path.join(SourceDir, FrameHdrInputFilenamePattern % (CurrentFrame + first_absolute_frame, 4))
+            if os.path.isfile(file3) and os.path.isfile(file4):   # Double check to make sure all hdr frames present
+                images_to_merge.clear()
+                images_to_merge.append(cv2.imread(file1, cv2.IMREAD_UNCHANGED))
+                img_ref = cv2.imread(file2, cv2.IMREAD_UNCHANGED)  # Override stabilization reference with HDR#2
+                images_to_merge.append(img_ref)
+                images_to_merge.append(cv2.imread(file3, cv2.IMREAD_UNCHANGED))
+                images_to_merge.append(cv2.imread(file4, cv2.IMREAD_UNCHANGED))
+                img = MergeMertens.process(images_to_merge)
+                img = img - img.min()  # Now between 0 and 8674
+                img = img / img.max() * 255
+                img = np.uint8(img)
+                merged_frame = True
 
     if img is None:
         logging.error(
@@ -2590,7 +2621,7 @@ def frame_generation_loop():
         frame_slider.set(CurrentFrame)
         frame_slider.config(label='Processed:'+
                             str(CurrentFrame+first_absolute_frame-StartFrame))
-        status_str = "Status: Generating %sframes %.1f%%" % ('merged ' if perform_merge else '', ((CurrentFrame-StartFrame)*100/frames_to_encode))
+        status_str = "Status: Generating %sframes %.1f%%" % ('merged ' if merged_frame else '', ((CurrentFrame-StartFrame)*100/frames_to_encode))
         if FPM_CalculatedValue != -1:  # FPM not calculated yet, display some indication
             status_str = status_str + ' (FPM:%d)' % (FPM_CalculatedValue)
         app_status_label.config(text=status_str, fg='black')
@@ -2665,7 +2696,7 @@ def video_create_title():
         title_duration = round(len(video_title_name.get())*50/1000) # 50 ms per char
         title_duration = min(title_duration, 10)    # no more than 10 sec
         title_duration = max(title_duration, 3)    # no less than 3 sec
-        title_num_frames = title_duration * VideoFps
+        title_num_frames = min(title_duration * VideoFps, frames_to_encode-1)
         # Custom font style and font size
         #myFont = ImageFont.truetype('FreeMonoBold.ttf', 96)
         img = Image.open(os.path.join(TargetDir, FrameOutputFilenamePattern % (StartFrame + first_absolute_frame)))
