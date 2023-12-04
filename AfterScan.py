@@ -19,8 +19,8 @@ __author__ = 'Juan Remirez de Esparza'
 __copyright__ = "Copyright 2022, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
-__version__ = "1.8.2"
-__date__ = "2023-12-02"
+__version__ = "1.8.3"
+__date__ = "2023-12-04"
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
 __status__ = "Development"
@@ -163,6 +163,7 @@ SourceDirFileList = []
 TargetDirFileList = []
 film_type = 'S8'
 frame_fill_type = 'none'
+stabilization_type = 'fast'
 
 # Flow control vars
 ConvertLoopExitRequested = False
@@ -298,7 +299,7 @@ def set_project_defaults():
     global perform_stabilization, skip_frame_regeneration, ffmpeg_preset
     global video_filename_name, video_title_name
     global frame_from_str, frame_to_str
-    global frame_fill_type
+    global frame_fill_type, stabilization_type
     global perform_denoise
 
     project_config["PerformCropping"] = False
@@ -321,6 +322,8 @@ def set_project_defaults():
     frame_to_str.set(project_config["FrameTo"])
     project_config["PerformStabilization"] = False
     perform_stabilization.set(project_config["PerformStabilization"])
+    project_config["StabilizationType"] = 'fast'
+    stabilization_type.set(project_config["StabilizationType"])
     project_config["skip_frame_regeneration"] = False
     skip_frame_regeneration.set(project_config["skip_frame_regeneration"])
     project_config["FFmpegPreset"] = "veryslow"
@@ -453,6 +456,7 @@ def save_project_config():
     project_config["PerformCropping"] = perform_cropping.get()
     project_config["PerformDenoise"] = perform_denoise.get()
     project_config["FrameFillType"] = frame_fill_type.get()
+    project_config["StabilizationType"] = stabilization_type.get()
     project_config["VideoFilename"] = video_filename_name.get()
     project_config["VideoTitle"] = video_title_name.get()
     project_config["FrameFrom"] = frame_from_str.get()
@@ -526,6 +530,7 @@ def decode_project_config():
     global project_name
     global force_4_3_crop, force_16_9_crop
     global frame_fill_type
+    global stabilization_type
     global Force43, Force169
     global perform_denoise
 
@@ -602,6 +607,12 @@ def decode_project_config():
     else:
         StabilizationThreshold = 240
         stabilization_threshold_str.set(StabilizationThreshold)
+
+    if 'StabilizationType' in project_config:
+        stabilization_type.set(project_config["StabilizationType"])
+    else:
+        project_config["StabilizationType"] = 'fast'
+        stabilization_type.set(project_config["StabilizationType"])
 
     if 'CustomTemplateExpectedPos' in project_config:
         expected_pattern_pos_custom = project_config["CustomTemplateExpectedPos"]
@@ -726,10 +737,11 @@ def job_list_process_selection(evt):
     if job_list_listbox.size() == 0:
         return
 
-    selected = int(job_list_listbox.curselection()[0])
-    entry = job_list_listbox.get(selected)
-
-    rerun_job_btn.config(text='Rerun job' if job_list[entry]['done'] else rerun_job_btn.config(text='Mark as run'))
+    selected_indices = job_list_listbox.curselection()
+    if selected_indices:
+        selected = int(job_list_listbox.curselection()[0])
+        entry = job_list_listbox.get(selected)
+        rerun_job_btn.config(text='Rerun job' if job_list[entry]['done'] else rerun_job_btn.config(text='Mark as run'))
 
 
 def job_list_add_current():
@@ -853,12 +865,14 @@ def job_list_rerun_selected():
     global job_list
     global job_list_listbox
 
-    selected = int(job_list_listbox.curselection()[0])
-    entry = job_list_listbox.get(selected)
+    selected_indices = job_list_listbox.curselection()
+    if selected_indices != ():
+        selected = int(job_list_listbox.curselection()[0])
+        entry = job_list_listbox.get(selected)
 
-    job_list[entry]['done'] = not job_list[entry]['done']
-    job_list_listbox.itemconfig(selected, fg='green' if job_list[entry]['done'] else 'black')
-    rerun_job_btn.config(text='Rerun job' if job_list[entry]['done'] else 'Mark as run')
+        job_list[entry]['done'] = not job_list[entry]['done']
+        job_list_listbox.itemconfig(selected, fg='green' if job_list[entry]['done'] else 'black')
+        rerun_job_btn.config(text='Rerun job' if job_list[entry]['done'] else 'Mark as run')
 
 
 def save_job_list():
@@ -934,6 +948,7 @@ def job_processing_loop():
         generation_exit()
         if suspend_on_completion.get() == 'batch_completion':
             system_suspend()
+            time.sleep(2)
 
 
 def job_list_delete_current(event):
@@ -946,6 +961,16 @@ def job_list_load_current(event):
 
 def job_list_rerun_current(event):
     job_list_rerun_selected()
+
+
+def get_job_listbox_index(CurrentJobEntry):
+    global job_list, job_list_listbox
+    idx = 0
+    for entry in job_list:
+        if job_list[entry] == job_list[CurrentJobEntry]:
+            return idx
+        idx += 1
+    return -1
 
 
 """
@@ -1146,6 +1171,8 @@ def widget_status_update(widget_state=0, button_action=0):
     global start_batch_btn
     global add_job_btn, delete_job_btn, rerun_job_btn
     global stabilization_bounds_alert_checkbox
+    global perform_fill_none_rb, perform_fill_fake_rb, perform_fill_dumb_rb
+    global fast_stabilization_rb, precise_stabilization_rb
 
     if widget_state != 0:
         CropAreaDefined = CropTopLeft != (0, 0) and CropBottomRight != (0, 0)
@@ -1165,6 +1192,11 @@ def widget_status_update(widget_state=0, button_action=0):
         rotation_angle_spinbox.config(state=widget_state)
         rotation_angle_label.config(state=widget_state if perform_rotation.get() else DISABLED)
         perform_stabilization_checkbox.config(state=widget_state if not is_demo else NORMAL)
+        perform_fill_none_rb.config(state=widget_state if not is_demo else NORMAL)
+        perform_fill_fake_rb.config(state=widget_state if not is_demo else NORMAL)
+        perform_fill_dumb_rb.config(state=widget_state if not is_demo else NORMAL)
+        fast_stabilization_rb.config(state=widget_state if not is_demo else NORMAL)
+        precise_stabilization_rb.config(state=widget_state if not is_demo else NORMAL)
         stabilization_threshold_spinbox.config(state=widget_state)
         #stabilization_threshold_label.config(state=widget_state if not encode_all_frames.get() else DISABLED)
         perform_cropping_checkbox.config(state=widget_state if perform_stabilization.get() and CropAreaDefined and not is_demo else NORMAL)
@@ -2005,9 +2037,10 @@ def stabilize_image(img, img_ref):
     global stabilization_bounds_alert, stabilization_bounds_alert_counter
     global stabilization_bounds_alert_checkbox
     global project_name
-    global frame_fill_type
+    global frame_fill_type, stabilization_type
     global CsvFile, GenerateCsv, CsvFramesOffPercent
     global stabilization_threshold_match_label
+    global stabilization_type
 
     # Get image dimensions to perform image shift later
     width = img_ref.shape[1]
@@ -2018,17 +2051,31 @@ def stabilize_image(img, img_ref):
     # Search film hole pattern
     WorkStabilizationThreshold = StabilizationThreshold
     BestStabilizationThreshold = StabilizationThreshold
+    if stabilization_type.get() == 'fast':
+        LowerStabilizationThreshold = float(StabilizationThreshold)
+    else:
+        LowerStabilizationThreshold = 50
     best_match_level = 0
+    loop_count = 0
+    best_match_index = 0
     while True:
+        loop_count += 1
         top_left, match_level = match_template(film_hole_template, left_stripe_image, float(WorkStabilizationThreshold))
+        if match_level >= 0.85:
+            break
         if match_level > best_match_level:
+            best_match_index = loop_count
             best_match_level = match_level
             BestStabilizationThreshold = WorkStabilizationThreshold
-        if match_level > 0.95:
+        if loop_count >= 10 and best_match_index == 1:  # If best match is still 1st one after 10 loops, take it
+            # logging.debug("Break -  Thr %s, match_level %.2f, best match level %.2f", WorkStabilizationThreshold, match_level, best_match_level)
+            top_left, match_level = match_template(film_hole_template, left_stripe_image, float(BestStabilizationThreshold))
             break
-        elif float(WorkStabilizationThreshold) > 20:
-            WorkStabilizationThreshold = float(WorkStabilizationThreshold) - 5
+        elif float(WorkStabilizationThreshold) > LowerStabilizationThreshold:
+            # logging.debug("Match level %.2f, decreasing Thr %s", match_level, WorkStabilizationThreshold)
+            WorkStabilizationThreshold = float(WorkStabilizationThreshold) - 20
         else:
+            # logging.debug("Break, exhausted list. Best match %.2f", best_match_level)
             top_left, match_level = match_template(film_hole_template, left_stripe_image, float(BestStabilizationThreshold))
             break
     if top_left[1] != -1:
@@ -2313,6 +2360,9 @@ def valid_generated_frame_range():
                                      FrameOutputFilenamePattern % i)
         if file_to_check in TargetDirFileList:
             file_count += 1
+        else:
+            logging.debug("File %s missing.", file_to_check)
+
     logging.debug("Checking frame range %i-%i: %i files found",
                   first_absolute_frame + StartFrame,
                   first_absolute_frame + StartFrame + frames_to_encode,
@@ -2471,21 +2521,24 @@ def generation_exit():
     global job_list, CurrentJobEntry
 
     ConvertLoopRunning = False
+    go_suspend = False
+    stop_batch = False
 
     if BatchJobRunning:
         if ConvertLoopExitRequested or CurrentJobEntry == -1:
-            start_batch_btn.config(text="Start batch", bg=save_bg, fg=save_fg)
-            BatchJobRunning = False
+            stop_batch = True
+            if (CurrentJobEntry != -1):
+                idx = get_job_listbox_index(CurrentJobEntry)
+                if idx != -1:
+                    job_list_listbox.itemconfig(idx, fg='black')
         else:
             job_list[CurrentJobEntry]['done'] = True    # Flag as done
-            idx = 0
-            for entry in job_list:
-                if job_list[entry] == job_list[CurrentJobEntry]:
-                    break
-                idx += 1
-            job_list_listbox.itemconfig(idx, fg='green')
+            idx = get_job_listbox_index(CurrentJobEntry)
+            if idx != -1:
+                job_list_listbox.itemconfig(idx, fg='green')
             if suspend_on_completion.get() == 'job_completion':
-                system_suspend()
+                stop_batch = True # Exit convert loop before suspend
+                go_suspend = True
             else:
                 win.after(100, job_processing_loop)         # Continue with next
     else:
@@ -2494,6 +2547,13 @@ def generation_exit():
     # Enable all buttons in main window
     widget_status_update(NORMAL, 0)
     win.update()
+    
+    if stop_batch:
+        start_batch_btn.config(text="Start batch", bg=save_bg, fg=save_fg)
+        BatchJobRunning = False
+    if go_suspend:
+        system_suspend()
+        time.sleep(2)
 
 
 def frame_generation_loop():
@@ -2807,7 +2867,7 @@ def video_generation_loop():
     global frames_to_encode, title_num_frames
     global app_status_label
     global BatchJobRunning
-    global StartFrame, first_absolute_frame
+    global StartFrame, first_absolute_frame, frames_to_encode
     global frame_selected
     global frame_slider
 
@@ -2828,7 +2888,7 @@ def video_generation_loop():
             tk.messagebox.showwarning(
                 "Frames missing",
                 "Video cannot be generated.\r\n"
-                "Not all frames in specified range exist in target folder to "
+                f"Not all frames in specified range ({StartFrame+first_absolute_frame}, {StartFrame+first_absolute_frame+frames_to_encode}) exist in target folder to "
                 "allow video generation.\r\n"
                 "Please regenerate frames making sure option "
                 "\'Skip Frame regeneration\' is not selected, and try again.")
@@ -3074,7 +3134,10 @@ def build_ui():
     global frame_from_str, frame_to_str, frame_from_entry, frame_to_entry, frames_separator_label
     global suspend_on_joblist_end
     global frame_fill_type
+    global stabilization_type
     global suspend_on_completion
+    global perform_fill_none_rb, perform_fill_fake_rb, perform_fill_dumb_rb
+    global fast_stabilization_rb, precise_stabilization_rb
 
     # Create a frame to add a border to the preview
     left_area_frame = Frame(win)
@@ -3172,6 +3235,17 @@ def build_ui():
     postprocessing_frame.pack(side=TOP, padx=2, pady=2, ipadx=5)
     postprocessing_row = 0
 
+    # Radio buttons to select R8/S8. Required to select adequate pattern, and match position
+    film_type = StringVar()
+    film_type_S8_rb = Radiobutton(postprocessing_frame, text="Super 8", command=set_film_type,
+                                  variable=film_type, value='S8')
+    film_type_S8_rb.grid(row=postprocessing_row, column=0, sticky=W)
+    film_type_R8_rb = Radiobutton(postprocessing_frame, text="Regular 8", command=set_film_type,
+                                  variable=film_type, value='R8')
+    film_type_R8_rb.grid(row=postprocessing_row, column=1, sticky=W)
+    film_type.set(project_config["FilmType"])
+    postprocessing_row += 1
+
     # Check box to select encoding of all frames
     encode_all_frames = tk.BooleanVar(value=False)
     encode_all_frames_checkbox = tk.Checkbutton(
@@ -3243,24 +3317,16 @@ def build_ui():
                                         columnspan=1, sticky=W)
     perform_stabilization_checkbox.config(state=DISABLED)
 
-    # Spinbox to select stabilization threshold
-    stabilization_threshold_label = tk.Label(postprocessing_frame,
-                                      text='Threshold:',
-                                      width=11)
-    stabilization_threshold_label.grid(row=postprocessing_row, column=1,
-                                columnspan=1, sticky=E)
-    stabilization_threshold_str = tk.StringVar(value=str(StabilizationThreshold))
-    stabilization_threshold_selection_aux = postprocessing_frame.register(
-        stabilization_threshold_selection)
-    stabilization_threshold_spinbox = tk.Spinbox(
-        postprocessing_frame,
-        command=(stabilization_threshold_selection_aux, '%d'), width=6,
-        textvariable=stabilization_threshold_str, from_=0, to=255)
-    stabilization_threshold_spinbox.grid(row=postprocessing_row, column=2, sticky=W)
-    stabilization_threshold_spinbox.bind("<FocusOut>", stabilization_threshold_spinbox_focus_out)
-    stabilization_threshold_match_label = Label(postprocessing_frame, width=5, borderwidth=1, relief='sunken')
-    stabilization_threshold_match_label.grid(row=postprocessing_row, column=2, sticky=E)
-    stabilization_threshold_selection('down')
+    # Radio buttons to selected between fast and precide stabilization
+    stabilization_type = StringVar()
+    fast_stabilization_rb = Radiobutton(postprocessing_frame, text='Fast',
+                                    variable=stabilization_type, value='fast')
+    fast_stabilization_rb.grid(row=postprocessing_row, column=1)
+    precise_stabilization_rb = Radiobutton(postprocessing_frame, text='Precise',
+                                    variable=stabilization_type, value='precise')
+    precise_stabilization_rb.grid(row=postprocessing_row, column=2)
+    stabilization_type.set('fast')
+
     postprocessing_row += 1
 
     # Check box to do cropping or not
@@ -3300,26 +3366,36 @@ def build_ui():
     perform_denoise_checkbox.config(state=DISABLED)
     postprocessing_row += 1
 
-    # Radio buttons to select R8/S8. Required to select adequate pattern, and match position
-    film_type = StringVar()
-    film_type_S8_rb = Radiobutton(postprocessing_frame, text="Super 8", command=set_film_type,
-                                  variable=film_type, value='S8')
-    film_type_S8_rb.grid(row=postprocessing_row, column=0, sticky=W)
-    film_type_R8_rb = Radiobutton(postprocessing_frame, text="Regular 8", command=set_film_type,
-                                  variable=film_type, value='R8')
-    film_type_R8_rb.grid(row=postprocessing_row, column=1, sticky=W)
-    film_type.set(project_config["FilmType"])
-    postprocessing_row += 1
-
     # Custom film perforation template
     custom_stabilization_btn = Button(postprocessing_frame,
-                                      text='Define custom hole template',
-                                      width=30, height=1,
+                                      text='Custom hole template',
+                                      width=16, height=1,
                                       command=select_custom_template,
                                       activebackground='green',
                                       activeforeground='white')
     custom_stabilization_btn.config(relief=SUNKEN if CustomTemplateDefined else RAISED)
-    custom_stabilization_btn.grid(row=postprocessing_row, column=0, columnspan=3, pady=5)
+    custom_stabilization_btn.grid(row=postprocessing_row, column=0, columnspan=1, pady=5, sticky=W)
+
+    # Spinbox to select stabilization threshold
+    stabilization_threshold_label = tk.Label(postprocessing_frame,
+                                             text='Threshold:',
+                                             width=11)
+    stabilization_threshold_label.grid(row=postprocessing_row, column=1,
+                                       columnspan=1, sticky=E)
+    stabilization_threshold_str = tk.StringVar(value=str(StabilizationThreshold))
+    stabilization_threshold_selection_aux = postprocessing_frame.register(
+        stabilization_threshold_selection)
+    stabilization_threshold_spinbox = tk.Spinbox(
+        postprocessing_frame,
+        command=(stabilization_threshold_selection_aux, '%d'), width=6,
+        textvariable=stabilization_threshold_str, from_=0, to=255)
+    stabilization_threshold_spinbox.grid(row=postprocessing_row, column=2, sticky=W)
+    stabilization_threshold_spinbox.bind("<FocusOut>", stabilization_threshold_spinbox_focus_out)
+
+    # Label to display the match level of current frame to template
+    stabilization_threshold_match_label = Label(postprocessing_frame, width=5, borderwidth=1, relief='sunken')
+    stabilization_threshold_match_label.grid(row=postprocessing_row, column=2, sticky=E)
+
     postprocessing_row += 1
 
     # This checkbox enables 'fake' frame completion when, due to stabilization process, part of the frame is lost at the
@@ -3423,6 +3499,8 @@ def build_ui():
     # Drop down to select FPS
     # Dropdown menu options
     fps_list = [
+        "8",
+        "9",
         "16",
         "16.67",
         "18",
