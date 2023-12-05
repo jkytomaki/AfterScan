@@ -1249,9 +1249,16 @@ def update_frame_to(event):
         frame_slider.set(frame_to_str.get())
 
 def on_paste_all_entries(event, entry):
-    # Delete the selected text
-    entry.delete(tk.SEL_FIRST, tk.SEL_LAST)
+    try:
+        # Get the current selection range
+        selection_start = entry.index(tk.SEL_FIRST)
+        selection_end = entry.index(tk.SEL_LAST)
 
+        # Check if there is a selection (non-empty)
+        if selection_start and selection_end:
+            entry.delete(tk.SEL_FIRST, tk.SEL_LAST)
+    except tk.TclError:
+        logging.warning("No selection to delete")
 
 def custom_ffmpeg_path_focus_out(event):
     global custom_ffmpeg_path, FfmpegBinName
