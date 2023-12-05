@@ -147,13 +147,14 @@ TargetVideoTitle = ""
 SourceDir = ""
 TargetDir = ""
 VideoTargetDir = ""
-FrameInputFilenamePatternList = "picture-*.jpg"
+FrameInputFilenamePatternList = "picture-?????.jpg"
 FrameInputFilenamePattern = "picture-%05d.jpg"   # HDR frames using standard filename (2/12/2023)
 FrameHdrInputFilenamePattern = "picture-%05d.%1d.jpg"   # HDR frames using standard filename (2/12/2023)
 FrameOutputFilenamePattern = "picture_out-%05d.jpg"
 TitleOutputFilenamePattern = "picture_out(title)-%05d.jpg"
 FrameCheckOutputFilenamePattern = "picture_out-?????.jpg"  # Req. for ffmpeg gen.
-HdrInputFilenamePattern = "hdrpic*.3.jpg"   # In HDR mode, use 3rd frame as guide
+LegacyHdrInputFilenamePattern = "hdrpic-?????.3.jpg"   # In legacy HDR mode, use 3rd frame as guide
+HdrInputFilenamePattern = "picture-?????.3.jpg"   # In HDR mode, use 3rd frame as guide
 HdrSetInputFilenamePattern = "hdrpic-%05d.%1d.jpg"   # Req. to fetch each HDR frame set
 HdrFilesOnly = False   # No HDR by default. Updated when building file list from input folder
 MergeMertens = None
@@ -2278,19 +2279,23 @@ def get_source_dir_file_list():
     SourceDirHdrFileList = sorted(list(glob(os.path.join(
         SourceDir,
         HdrInputFilenamePattern))))
+    SourceDirLegacyHdrFileList = sorted(list(glob(os.path.join(
+        SourceDir,
+        LegacyHdrInputFilenamePattern))))
     NumFiles = len(SourceDirFileList)
     NumHdrFiles = len(SourceDirHdrFileList)
-    if NumFiles != 0 and NumHdrFiles != 0:
+    NumLegacyHdrFiles = len(SourceDirLegacyHdrFileList)
+    if NumFiles != 0 and NumLegacyHdrFiles != 0:
         if tk.messagebox.askyesno(
                 "Frame conflict",
                 f"Found both standard and HDR files in source folder. "
-                f"There are {NumFiles} standard frames and {NumHdrFiles} HDR files.\r\n"
-                f"Do you want to continue using the {'standard' if NumFiles > NumHdrFiles else 'HDR'} files?.\r\n"
+                f"There are {NumFiles} standard frames and {NumLegacyHdrFiles} HDR files.\r\n"
+                f"Do you want to continue using the {'standard' if NumFiles > NumLegacyHdrFiles else 'HDR'} files?.\r\n"
                 f"You might want ot clean up that source folder, it is strongly recommended to have only a single type of frames in the source folder."):
-                    if NumHdrFiles > NumFiles:
-                        SourceDirFileList = SourceDirHdrFileList
-    elif NumFiles == 0: # No standard files, only HDR
-        SourceDirFileList = SourceDirHdrFileList
+                    if NumLegacyHdrFiles > NumFiles:
+                        SourceDirFileList = SourceDirLegacyHdrFileList
+    elif NumFiles == 0 and NumHdrFiles == 0: # Only Legacy HDR
+        SourceDirFileList = SourceDirLegacyHdrFileList
 
     if len(SourceDirFileList) == 0:
         tk.messagebox.showerror("Error!",
@@ -2300,7 +2305,7 @@ def get_source_dir_file_list():
         frames_target_dir.delete(0, 'end')
         return
     else:
-        HdrFilesOnly = NumHdrFiles > NumFiles
+        HdrFilesOnly = NumLegacyHdrFiles > NumFiles
 
     # Sanity check for CurrentFrame
     if CurrentFrame >= len(SourceDirFileList):
@@ -2613,10 +2618,10 @@ def frame_generation_loop():
     if HdrFilesOnly:    # Legacy HDR (before 2 Dec 2023): Dedicated filename
         images_to_merge.clear()
         file1 = os.path.join(SourceDir, HdrSetInputFilenamePattern % (CurrentFrame + first_absolute_frame, 1))
-        images_to_merge.append(cv2.imread(file1, cv2.IMREAD_UNCHANGED))
-        file2 = os.path.join(SourceDir, HdrSetInputFilenamePattern % (CurrentFrame + first_absolute_frame, 2))
-        img_ref = cv2.imread(file2, cv2.IMREAD_UNCHANGED)   # Keep second frame of the set for stabilization reference
+        img_ref = cv2.imread(file1, cv2.IMREAD_UNCHANGED)   # Keep first frame of the set for stabilization reference
         images_to_merge.append(img_ref)
+        file2 = os.path.join(SourceDir, HdrSetInputFilenamePattern % (CurrentFrame + first_absolute_frame, 2))
+        images_to_merge.append(cv2.imread(file2, cv2.IMREAD_UNCHANGED))
         file3 = os.path.join(SourceDir, HdrSetInputFilenamePattern % (CurrentFrame + first_absolute_frame, 3))
         images_to_merge.append(cv2.imread(file3, cv2.IMREAD_UNCHANGED))
         file4 = os.path.join(SourceDir, HdrSetInputFilenamePattern % (CurrentFrame + first_absolute_frame, 4))
@@ -2638,9 +2643,9 @@ def frame_generation_loop():
             file4 = os.path.join(SourceDir, FrameHdrInputFilenamePattern % (CurrentFrame + first_absolute_frame, 4))
             if os.path.isfile(file3) and os.path.isfile(file4):   # Double check to make sure all hdr frames present
                 images_to_merge.clear()
-                images_to_merge.append(cv2.imread(file1, cv2.IMREAD_UNCHANGED))
-                img_ref = cv2.imread(file2, cv2.IMREAD_UNCHANGED)  # Override stabilization reference with HDR#2
+                img_ref = cv2.imread(file1, cv2.IMREAD_UNCHANGED)  # Override stabilization reference with HDR#1
                 images_to_merge.append(img_ref)
+                images_to_merge.append(cv2.imread(file2, cv2.IMREAD_UNCHANGED))
                 images_to_merge.append(cv2.imread(file3, cv2.IMREAD_UNCHANGED))
                 images_to_merge.append(cv2.imread(file4, cv2.IMREAD_UNCHANGED))
                 img = MergeMertens.process(images_to_merge)
