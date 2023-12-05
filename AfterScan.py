@@ -253,14 +253,14 @@ resolution_dict = {
 }
 # Miscellaneous vars
 global win
-ExpertMode = False
+ExpertMode = True
 IsWindows = False
 IsLinux = False
 IsMac = False
 
 is_demo = False
 debug_enabled = False
-GenerateCsv = False
+GenerateCsv = True
 CsvFilename = ""
 CsvPathName = ""
 CsvFile = 0
