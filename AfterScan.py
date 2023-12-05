@@ -1250,13 +1250,7 @@ def update_frame_to(event):
 
 def on_paste_all_entries(event, entry):
     try:
-        # Get the current selection range
-        selection_start = entry.index(tk.SEL_FIRST)
-        selection_end = entry.index(tk.SEL_LAST)
-
-        # Check if there is a selection (non-empty)
-        if selection_start and selection_end:
-            entry.delete(tk.SEL_FIRST, tk.SEL_LAST)
+        entry.delete(tk.SEL_FIRST, tk.SEL_LAST)
     except tk.TclError:
         logging.warning("No selection to delete")
 
@@ -2618,7 +2612,7 @@ def frame_generation_loop():
     # Get current file(s)
     if HdrFilesOnly:    # Legacy HDR (before 2 Dec 2023): Dedicated filename
         images_to_merge.clear()
-        file1 = os.path.join(SourceDir, FrameInputFilenamePattern % CurrentFrame + (first_absolute_frame))
+        file1 = os.path.join(SourceDir, HdrSetInputFilenamePattern % (CurrentFrame + first_absolute_frame, 1))
         images_to_merge.append(cv2.imread(file1, cv2.IMREAD_UNCHANGED))
         file2 = os.path.join(SourceDir, HdrSetInputFilenamePattern % (CurrentFrame + first_absolute_frame, 2))
         img_ref = cv2.imread(file2, cv2.IMREAD_UNCHANGED)   # Keep second frame of the set for stabilization reference
