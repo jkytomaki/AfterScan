@@ -19,8 +19,8 @@ __author__ = 'Juan Remirez de Esparza'
 __copyright__ = "Copyright 2022, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
-__version__ = "1.8.3"
-__date__ = "2023-12-04"
+__version__ = "1.8.4"
+__date__ = "2023-12-09"
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
 __status__ = "Development"
@@ -102,6 +102,7 @@ default_project_config = {
     "VideoTargetDir": "",
     "FilmType": "S8",
     "PerformCropping": False,
+    "PerformSharpness": False,
     "PerformDenoise": False,
     "GenerateVideo": False,
     "VideoFps": "18",
@@ -301,10 +302,12 @@ def set_project_defaults():
     global video_filename_name, video_title_name
     global frame_from_str, frame_to_str
     global frame_fill_type, stabilization_type
-    global perform_denoise
+    global perform_denoise, perform_sharpness
 
     project_config["PerformCropping"] = False
     perform_cropping.set(project_config["PerformCropping"])
+    project_config["PerformSharpness"] = False
+    perform_sharpness.set(project_config["PerformSharpness"])
     project_config["PerformDenoise"] = False
     perform_denoise.set(project_config["PerformDenoise"])
     project_config["FrameFillType"] = 'none'
@@ -442,7 +445,7 @@ def save_project_config():
     global CurrentFrame
     global video_filename_name, video_title_name
     global frame_from_str, frame_to_str
-    global perform_denoise
+    global perform_denoise, perform_sharpness
 
     # Do not save if current project comes from batch job
     if not project_config_from_file or IgnoreConfig:
@@ -455,6 +458,7 @@ def save_project_config():
     project_config["FFmpegPreset"] = ffmpeg_preset.get()
     project_config["ProjectConfigDate"] = str(datetime.now())
     project_config["PerformCropping"] = perform_cropping.get()
+    project_config["PerformSharpness"] = perform_sharpness.get()
     project_config["PerformDenoise"] = perform_denoise.get()
     project_config["FrameFillType"] = frame_fill_type.get()
     project_config["StabilizationType"] = stabilization_type.get()
@@ -533,7 +537,7 @@ def decode_project_config():
     global frame_fill_type
     global stabilization_type
     global Force43, Force169
-    global perform_denoise
+    global perform_denoise, perform_sharpness
 
     if IgnoreConfig:
         return
@@ -629,6 +633,10 @@ def decode_project_config():
         perform_cropping.set(project_config["PerformCropping"])
     else:
         perform_cropping.set(False)
+    if 'PerformSharpness' in project_config:
+        perform_sharpness.set(project_config["PerformSharpness"])
+    else:
+        perform_sharpness.set(False)
     if 'PerformDenoise' in project_config:
         perform_denoise.set(project_config["PerformDenoise"])
     else:
@@ -1158,7 +1166,7 @@ def widget_status_update(widget_state=0, button_action=0):
     global perform_rotation_checkbox, rotation_angle_spinbox, perform_rotation
     global perform_stabilization
     global perform_stabilization_checkbox, stabilization_threshold_spinbox
-    global perform_cropping_checkbox, perform_denoise_checkbox
+    global perform_cropping_checkbox, perform_denoise_checkbox, perform_sharpness_checkbox
     global force_4_3_crop_checkbox, force_16_9_crop_checkbox
     global custom_stabilization_btn
     global stabilization_threshold_label
@@ -1206,6 +1214,7 @@ def widget_status_update(widget_state=0, button_action=0):
         force_16_9_crop_checkbox.config(state=widget_state if perform_stabilization.get() else DISABLED)
         perform_cropping_checkbox.config(state=widget_state)
         perform_denoise_checkbox.config(state=widget_state)
+        perform_sharpness_checkbox.config(state=widget_state)
         film_type_S8_rb.config(state=DISABLED if CustomTemplateDefined else widget_state)
         film_type_R8_rb.config(state=DISABLED if CustomTemplateDefined else widget_state)
         custom_stabilization_btn.config(state=widget_state)
@@ -1326,6 +1335,14 @@ def perform_cropping_selection():
     generate_video_checkbox.config(state=NORMAL if ffmpeg_installed
                                    else DISABLED)
     project_config["PerformCropping"] = perform_cropping.get()
+    if ui_init_done:
+        scale_display_update()
+
+
+def perform_sharpness_selection():
+    global perform_sharpness
+
+    project_config["PerformSharpness"] = perform_sharpness.get()
     if ui_init_done:
         scale_display_update()
 
@@ -2512,10 +2529,16 @@ def start_convert():
             clear_image()
             win.after(1, frame_generation_loop)
         elif generate_video.get():
-            ffmpeg_success = False
-            ffmpeg_encoding_status = ffmpeg_state.Pending
-            clear_image()
-            win.after(1, video_generation_loop)
+            # first check if resolution has been set
+            if resolution_dict[project_config["VideoResolution"]] == '':
+                logging.error("Error, no video resolution selected")
+                tk.messagebox.showerror("Error!", "Please specify video resolution.")
+                generation_exit()
+            else:
+                ffmpeg_success = False
+                ffmpeg_encoding_status = ffmpeg_state.Pending
+                clear_image()
+                win.after(1, video_generation_loop)
 
 
 def generation_exit():
@@ -2563,7 +2586,7 @@ def generation_exit():
 
 
 def frame_generation_loop():
-    global perform_stabilization, perform_cropping, perform_rotation, perform_denoise
+    global perform_stabilization, perform_cropping, perform_rotation, perform_denoise, perform_sharpness
     global ConvertLoopExitRequested
     global CropTopLeft, CropBottomRight
     global TargetDir
@@ -2667,8 +2690,17 @@ def frame_generation_loop():
             img = crop_image(img, CropTopLeft, CropBottomRight)
         else:
             img = even_image(img)
+        if perform_sharpness.get():
+            # Sharpness code taken from cpixip@Kinograph
+            # https://forums.kinograph.cc/t/in-defense-of-hdr-and-4k-8mm-super8/2026/25
+            sigma = 1.0
+            amount = 2.0
+            smoothed = cv2.GaussianBlur(img, (0, 0), sigma)
+            laplace = cv2.Laplacian(smoothed, cv2.CV_32F)
+            img = img - amount * laplace
+            img = np.uint8(img)
         if perform_denoise.get():
-            img = cv2.fastNlMeansDenoisingColored(img, None, 10, 10, 7, 21)
+            img = cv2.fastNlMeansDenoisingColored(img, None, 5, 5, 21, 7)
 
         if CurrentFrame % 2 == 0:
             display_image(img)
@@ -2812,6 +2844,7 @@ def call_ffmpeg():
     if resolution_dict[project_config["VideoResolution"]] != '':
         video_width = resolution_dict[project_config["VideoResolution"]].split(':')[0]
         video_height = resolution_dict[project_config["VideoResolution"]].split(':')[1]
+
     cmd_ffmpeg = [FfmpegBinName,
                   '-y',
                   '-loglevel', 'error',
@@ -3097,6 +3130,7 @@ def build_ui():
     global frames_source_dir, frames_target_dir, video_target_dir
     global perform_cropping, cropping_btn
     global perform_denoise, perform_denoise_checkbox
+    global perform_sharpness, perform_sharpness_checkbox
     global generate_video, generate_video_checkbox
     global encode_all_frames, encode_all_frames_checkbox
     global frames_to_encode_str, frames_to_encode, frames_to_encode_label
@@ -3362,13 +3396,22 @@ def build_ui():
     cropping_btn.grid(row=postprocessing_row, column=2, sticky=E)
     postprocessing_row += 1
 
-    # Check box to enable denoise
+    # Check box to perform sharpness
+    perform_sharpness = tk.BooleanVar(value=False)
+    perform_sharpness_checkbox = tk.Checkbutton(
+        postprocessing_frame, text='Sharpen', variable=perform_sharpness,
+        onvalue=True, offvalue=False, command=perform_sharpness_selection,
+        width=7)
+    perform_sharpness_checkbox.grid(row=postprocessing_row, column=0, sticky=W)
+    perform_sharpness_checkbox.config(state=DISABLED)
+
+    # Check box to perform denoise
     perform_denoise = tk.BooleanVar(value=False)
     perform_denoise_checkbox = tk.Checkbutton(
         postprocessing_frame, text='Denoise', variable=perform_denoise,
         onvalue=True, offvalue=False, command=perform_denoise_selection,
         width=7)
-    perform_denoise_checkbox.grid(row=postprocessing_row, column=0, sticky=W)
+    perform_denoise_checkbox.grid(row=postprocessing_row, column=1, sticky=W)
     perform_denoise_checkbox.config(state=DISABLED)
     postprocessing_row += 1
 
