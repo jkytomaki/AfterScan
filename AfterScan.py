@@ -19,8 +19,9 @@ __author__ = 'Juan Remirez de Esparza'
 __copyright__ = "Copyright 2022, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
-__version__ = "1.8.4"
-__date__ = "2023-12-09"
+__version__ = "1.8.5"
+__date__ = "2023-12-10"
+__version_highlight__ = "Multithread frame processing"
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
 __status__ = "Development"
@@ -51,12 +52,13 @@ import cv2
 import numpy as np
 from glob import glob
 import platform
-import threading
 import re
 import shutil
 from enum import Enum
 import textwrap
 import random
+import threading
+import queue
 
 # Frame vars
 first_absolute_frame = 0
@@ -159,7 +161,6 @@ HdrInputFilenamePattern = "picture-?????.3.jpg"   # In HDR mode, use 3rd frame a
 HdrSetInputFilenamePattern = "hdrpic-%05d.%1d.jpg"   # Req. to fetch each HDR frame set
 HdrFilesOnly = False   # No HDR by default. Updated when building file list from input folder
 MergeMertens = None
-images_to_merge = []
 
 SourceDirFileList = []
 TargetDirFileList = []
@@ -268,6 +269,13 @@ CsvPathName = ""
 CsvFile = 0
 CsvFramesOffPercent = 0
 
+# Token to be inserted in each queue on program closure, to allow threads to shut down cleanly
+END_TOKEN = object()
+counter_lock = threading.Lock()
+display_lock = threading.Lock()
+active_threads = 0
+working_threads = 0
+last_displayed_image = 0
 """
 #################
 Utility functions
@@ -1431,7 +1439,7 @@ def scale_display_update():
             if perform_rotation.get():
                 img = rotate_image(img)
             if perform_stabilization.get():
-                img = stabilize_image(img, img)
+                img = stabilize_image(CurrentFrame, img, img)
         if perform_cropping.get():
             img = crop_image(img, CropTopLeft, CropBottomRight)
         else:
@@ -1590,7 +1598,7 @@ def select_rectangle_area(is_cropping=False):
         original_image = rotate_image(original_image)
     # Stabilize image to make sure target image matches user visual definition
     if is_cropping and perform_stabilization.get():
-        original_image = stabilize_image(original_image, original_image)
+        original_image = stabilize_image(CurrentFrame, original_image, original_image)
     # Scale area selection image as required
     work_image = np.copy(original_image)
     img_width = work_image.shape[1]
@@ -2046,8 +2054,8 @@ def rotate_image(img):
     rotated = cv2.warpAffine(img, M, (w, h))
     return rotated
 
-def stabilize_image(img, img_ref):
-    global SourceDirFileList, CurrentFrame
+def stabilize_image(frame_idx, img, img_ref):
+    global SourceDirFileList
     global first_absolute_frame, StartFrame
     global HoleSearchTopLeft, HoleSearchBottomRight
     global expected_pattern_pos, film_hole_template
@@ -2143,15 +2151,15 @@ def stabilize_image(img, img_ref):
             if stabilization_bounds_alert.get():
                 win.bell()
             # Tag evolution
-            # FrameAlignTag: project_name, CurrentFrame, missing rows, top/bottom, move_y)
-            # FrameAlignTag-2: project_name, CurrentFrame, +/- missing rows, move_y, move_x)
+            # FrameAlignTag: project_name, frame_idx, missing rows, top/bottom, move_y)
+            # FrameAlignTag-2: project_name, frame_idx, +/- missing rows, move_y, move_x)
             project_name_tag = project_name + '(' + video_filename_name.get() + ')'
             project_name_tag = project_name_tag.replace(',', ';')   # To avoid problem with AfterScanAnalysis
-            logging.warning("FrameAlignTag-2, %s, %i, %i, %i, %i", project_name_tag, first_absolute_frame+CurrentFrame, missing_rows, move_y, move_x)
+            logging.warning("FrameAlignTag-2, %s, %i, %i, %i, %i", project_name_tag, first_absolute_frame+frame_idx, missing_rows, move_y, move_x)
             if GenerateCsv:
-                CsvFile.write('%i, %i, %i\n' % (first_absolute_frame+CurrentFrame, missing_rows, match_level))
-    if CurrentFrame-StartFrame > 0:
-        CsvFramesOffPercent = stabilization_bounds_alert_counter * 100 / (CurrentFrame-StartFrame)
+                CsvFile.write('%i, %i, %i\n' % (first_absolute_frame+frame_idx, missing_rows, match_level))
+    if frame_idx-StartFrame > 0:
+        CsvFramesOffPercent = stabilization_bounds_alert_counter * 100 / (frame_idx-StartFrame)
     stabilization_bounds_alert_checkbox.config(text='Alert when image out of bounds (%i, %.1f%%)' % (
             stabilization_bounds_alert_counter, CsvFramesOffPercent))
     # Check if frame fill is enabled, and required: Extract missing fragment
@@ -2197,7 +2205,7 @@ def stabilize_image(img, img_ref):
 
     if ConvertLoopRunning:
         logging.debug("FrameStabilizeTag, %s, %i, %ix%i, %i, %i",
-                      project_name, CurrentFrame, img.shape[1], img.shape[0],
+                      project_name, frame_idx, img.shape[1], img.shape[0],
                       move_x, move_y)
 
     return translated_image
@@ -2549,7 +2557,6 @@ def generation_exit():
     global BatchJobRunning
     global job_list, CurrentJobEntry
 
-    ConvertLoopRunning = False
     go_suspend = False
     stop_batch = False
 
@@ -2573,6 +2580,7 @@ def generation_exit():
     else:
         Go_btn.config(text="Start", bg=save_bg, fg=save_fg)
     ConvertLoopExitRequested = False  # Reset flags
+    ConvertLoopRunning = False
     # Enable all buttons in main window
     widget_status_update(NORMAL, 0)
     win.update()
@@ -2583,6 +2591,142 @@ def generation_exit():
     if go_suspend:
         system_suspend()
         time.sleep(2)
+
+
+def frame_encode(frame_idx):
+    global SourceDir, TargetDir
+    global HdrFilesOnly , first_absolute_frame, merged_frame, frames_to_encode
+    global FrameInputFilenamePattern, HdrSetInputFilenamePattern, FrameHdrInputFilenamePattern, FrameOutputFilenamePattern
+    global CropTopLeft, CropBottomRight
+    global app_status_label
+
+    images_to_merge = []
+
+    # Get current file(s)
+    if HdrFilesOnly:    # Legacy HDR (before 2 Dec 2023): Dedicated filename
+        images_to_merge.clear()
+        file1 = os.path.join(SourceDir, HdrSetInputFilenamePattern % (frame_idx + first_absolute_frame, 1))
+        img_ref = cv2.imread(file1, cv2.IMREAD_UNCHANGED)   # Keep first frame of the set for stabilization reference
+        images_to_merge.append(img_ref)
+        file2 = os.path.join(SourceDir, HdrSetInputFilenamePattern % (frame_idx + first_absolute_frame, 2))
+        images_to_merge.append(cv2.imread(file2, cv2.IMREAD_UNCHANGED))
+        file3 = os.path.join(SourceDir, HdrSetInputFilenamePattern % (frame_idx + first_absolute_frame, 3))
+        images_to_merge.append(cv2.imread(file3, cv2.IMREAD_UNCHANGED))
+        file4 = os.path.join(SourceDir, HdrSetInputFilenamePattern % (frame_idx + first_absolute_frame, 4))
+        images_to_merge.append(cv2.imread(file4, cv2.IMREAD_UNCHANGED))
+        img = MergeMertens.process(images_to_merge)
+        img = img - img.min()  # Now between 0 and 8674
+        img = img / img.max() * 255
+        img = np.uint8(img)
+        merged_frame = True
+    else:
+        merged_frame = False
+        file1 = os.path.join(SourceDir, FrameInputFilenamePattern % (frame_idx + first_absolute_frame))
+        # read image
+        img = cv2.imread(file1, cv2.IMREAD_UNCHANGED)
+        img_ref = img   # Reference image is the same image for standard capture
+        file2 = os.path.join(SourceDir, FrameHdrInputFilenamePattern % (frame_idx + first_absolute_frame, 2))
+        if os.path.isfile(file2):   # If hdr frames exist, add them
+            file3 = os.path.join(SourceDir, FrameHdrInputFilenamePattern % (frame_idx + first_absolute_frame, 3))
+            file4 = os.path.join(SourceDir, FrameHdrInputFilenamePattern % (frame_idx + first_absolute_frame, 4))
+            if os.path.isfile(file3) and os.path.isfile(file4):   # Double check to make sure all hdr frames present
+                images_to_merge.clear()
+                img_ref = cv2.imread(file1, cv2.IMREAD_UNCHANGED)  # Override stabilization reference with HDR#1
+                images_to_merge.append(img_ref)
+                images_to_merge.append(cv2.imread(file2, cv2.IMREAD_UNCHANGED))
+                images_to_merge.append(cv2.imread(file3, cv2.IMREAD_UNCHANGED))
+                images_to_merge.append(cv2.imread(file4, cv2.IMREAD_UNCHANGED))
+                img = MergeMertens.process(images_to_merge)
+                img = img - img.min()  # Now between 0 and 8674
+                img = img / img.max() * 255
+                img = np.uint8(img)
+                merged_frame = True
+
+    if img is None:
+        logging.error(
+            "Error reading frame %i, skipping", frame_idx)
+    else:
+        register_frame()
+        if perform_rotation.get():
+            img = rotate_image(img)
+        if perform_stabilization.get():
+            img = stabilize_image(frame_idx, img, img_ref)
+        if perform_cropping.get():
+            img = crop_image(img, CropTopLeft, CropBottomRight)
+        else:
+            img = even_image(img)
+        if perform_sharpness.get():
+            # Sharpness code taken from cpixip@Kinograph
+            # https://forums.kinograph.cc/t/in-defense-of-hdr-and-4k-8mm-super8/2026/25
+            sigma = 1.0
+            amount = 2.0
+            smoothed = cv2.GaussianBlur(img, (0, 0), sigma)
+            laplace = cv2.Laplacian(smoothed, cv2.CV_32F)
+            img = img - amount * laplace
+            img = np.uint8(img)
+        if perform_denoise.get():
+            img = cv2.fastNlMeansDenoisingColored(img, None, 5, 5, 21, 7)
+
+        # Before we used to display every other frame, but just discovered that it makes no difference to performance
+        # Instead of displaying image, we add it to a queue to be processed in main loop
+        queue_item = tuple((frame_idx, img))
+        frame_display_queue.put(queue_item)
+
+        if img.shape[1] % 2 == 1 or img.shape[0] % 2 == 1:
+            logging.error("Target size, one odd dimension")
+            status_str = "Status: Frame %d - odd size" % frame_idx
+            app_status_label.config(text=status_str, fg='red')
+            frame_idx = StartFrame + frames_to_encode - 1
+
+        if os.path.isdir(TargetDir):
+            target_file = os.path.join(TargetDir, FrameOutputFilenamePattern % (first_absolute_frame + frame_idx))
+            cv2.imwrite(target_file, img)
+
+
+def frame_update_ui(frame_idx):
+    global first_absolute_frame, StartFrame, merged_frame, frames_to_encode, FPM_CalculatedValue
+
+    frame_selected.set(frame_idx)
+    frame_slider.set(frame_idx)
+    frame_slider.config(label='Processed:' +
+                              str(frame_idx + first_absolute_frame - StartFrame))
+    status_str = "Status: Generating frames %.1f%%" % ((frame_idx - StartFrame) * 100 / frames_to_encode)
+    if FPM_CalculatedValue != -1:  # FPM not calculated yet, display some indication
+        status_str = status_str + ' (FPM:%d)' % (FPM_CalculatedValue)
+    app_status_label.config(text=status_str, fg='black')
+
+
+def frame_encoding_thread(queue, event, id):
+    global SourceDir
+    global message
+    global ScanStopRequested
+    global active_threads, working_threads
+
+    with counter_lock:
+        active_threads += 1
+    if not os.path.isdir(SourceDir):
+        logging.error(f"Source dir {SourceDir} unmounted: Stop encoding session")
+        ScanStopRequested = True    # If target dir does not exist, stop scan
+        return
+    while not event.is_set():
+        message = queue.get()
+        with counter_lock:
+            working_threads += 1
+        if message == END_TOKEN:
+            logging.debug(f"Thread {id}: Received terminate token, exiting")
+            with counter_lock:
+                working_threads -= 1
+            break
+        # Encode frame
+        frame_encode(message)
+        # Update UI with progress so far (double check we have not ended, it might happen during frame encoding)
+        if ConvertLoopRunning:
+            frame_update_ui(message)
+        with counter_lock:
+            working_threads -= 1
+    logging.debug(f"Exiting frame_encoding_thread n.{id}")
+    with counter_lock:
+        active_threads -= 1
 
 
 def frame_generation_loop():
@@ -2598,14 +2742,27 @@ def frame_generation_loop():
     global TargetDirFileList
     global GenerateCsv, CsvFile
     global frame_slider
-    global MergeMertens, images_to_merge
+    global MergeMertens
     global FPM_CalculatedValue
     global HdrFilesOnly
+    global frame_encoding_queue
+    global last_displayed_image, working_threads
 
-    if CurrentFrame >= StartFrame + frames_to_encode:
+    # Display encoded images from queue
+    if not frame_display_queue.empty():
+        message = frame_display_queue.get()
+        with display_lock:
+            if message[0] > last_displayed_image:
+                last_displayed_image = message[0]
+                display_image(message[1])
+
+    if CurrentFrame >= StartFrame + frames_to_encode and frame_encoding_queue.empty() and working_threads == 0:
         FPM_CalculatedValue = -1
         status_str = "Status: Frame generation OK"
         app_status_label.config(text=status_str, fg='green')
+        # Clear display queue
+        frame_display_queue.queue.clear()
+        last_displayed_image = 0
         # Refresh Target dir file list
         TargetDirFileList = sorted(list(glob(os.path.join(
             TargetDir, FrameCheckOutputFilenamePattern))))
@@ -2625,7 +2782,9 @@ def frame_generation_loop():
         return
 
     if ConvertLoopExitRequested:  # Stop button pressed
+        logging.debug("User requested termination")
         status_str = "Status: Cancelled by user"
+        frame_encoding_queue.queue.clear()
         if GenerateCsv:
             CsvFile.close()
             name, ext = os.path.splitext(CsvPathName)
@@ -2637,97 +2796,14 @@ def frame_generation_loop():
         FPM_CalculatedValue = -1
         return
 
-    # Get current file(s)
-    if HdrFilesOnly:    # Legacy HDR (before 2 Dec 2023): Dedicated filename
-        images_to_merge.clear()
-        file1 = os.path.join(SourceDir, HdrSetInputFilenamePattern % (CurrentFrame + first_absolute_frame, 1))
-        img_ref = cv2.imread(file1, cv2.IMREAD_UNCHANGED)   # Keep first frame of the set for stabilization reference
-        images_to_merge.append(img_ref)
-        file2 = os.path.join(SourceDir, HdrSetInputFilenamePattern % (CurrentFrame + first_absolute_frame, 2))
-        images_to_merge.append(cv2.imread(file2, cv2.IMREAD_UNCHANGED))
-        file3 = os.path.join(SourceDir, HdrSetInputFilenamePattern % (CurrentFrame + first_absolute_frame, 3))
-        images_to_merge.append(cv2.imread(file3, cv2.IMREAD_UNCHANGED))
-        file4 = os.path.join(SourceDir, HdrSetInputFilenamePattern % (CurrentFrame + first_absolute_frame, 4))
-        images_to_merge.append(cv2.imread(file4, cv2.IMREAD_UNCHANGED))
-        img = MergeMertens.process(images_to_merge)
-        img = img - img.min()  # Now between 0 and 8674
-        img = img / img.max() * 255
-        img = np.uint8(img)
-        merged_frame = True
-    else:
-        merged_frame = False
-        file1 = os.path.join(SourceDir, FrameInputFilenamePattern % (CurrentFrame + first_absolute_frame))
-        # read image
-        img = cv2.imread(file1, cv2.IMREAD_UNCHANGED)
-        img_ref = img   # Reference image is the same image for standard capture
-        file2 = os.path.join(SourceDir, FrameHdrInputFilenamePattern % (CurrentFrame + first_absolute_frame, 2))
-        if os.path.isfile(file2):   # If hdr frames exist, add them
-            file3 = os.path.join(SourceDir, FrameHdrInputFilenamePattern % (CurrentFrame + first_absolute_frame, 3))
-            file4 = os.path.join(SourceDir, FrameHdrInputFilenamePattern % (CurrentFrame + first_absolute_frame, 4))
-            if os.path.isfile(file3) and os.path.isfile(file4):   # Double check to make sure all hdr frames present
-                images_to_merge.clear()
-                img_ref = cv2.imread(file1, cv2.IMREAD_UNCHANGED)  # Override stabilization reference with HDR#1
-                images_to_merge.append(img_ref)
-                images_to_merge.append(cv2.imread(file2, cv2.IMREAD_UNCHANGED))
-                images_to_merge.append(cv2.imread(file3, cv2.IMREAD_UNCHANGED))
-                images_to_merge.append(cv2.imread(file4, cv2.IMREAD_UNCHANGED))
-                img = MergeMertens.process(images_to_merge)
-                img = img - img.min()  # Now between 0 and 8674
-                img = img / img.max() * 255
-                img = np.uint8(img)
-                merged_frame = True
-
-    if img is None:
-        logging.error(
-            "Error reading frame %i, skipping", CurrentFrame)
-    else:
-        register_frame()
-        if perform_rotation.get():
-            img = rotate_image(img)
-        if perform_stabilization.get():
-            img = stabilize_image(img, img_ref)
-        if perform_cropping.get():
-            img = crop_image(img, CropTopLeft, CropBottomRight)
-        else:
-            img = even_image(img)
-        if perform_sharpness.get():
-            # Sharpness code taken from cpixip@Kinograph
-            # https://forums.kinograph.cc/t/in-defense-of-hdr-and-4k-8mm-super8/2026/25
-            sigma = 1.0
-            amount = 2.0
-            smoothed = cv2.GaussianBlur(img, (0, 0), sigma)
-            laplace = cv2.Laplacian(smoothed, cv2.CV_32F)
-            img = img - amount * laplace
-            img = np.uint8(img)
-        if perform_denoise.get():
-            img = cv2.fastNlMeansDenoisingColored(img, None, 5, 5, 21, 7)
-
-        if CurrentFrame % 2 == 0:
-            display_image(img)
-
-        if img.shape[1] % 2 == 1 or img.shape[0] % 2 == 1:
-            logging.error("Target size, one odd dimension")
-            status_str = "Status: Frame %d - odd size" % CurrentFrame
-            app_status_label.config(text=status_str, fg='red')
-            CurrentFrame = StartFrame + frames_to_encode - 1
-
-        if os.path.isdir(TargetDir):
-            target_file = os.path.join(TargetDir, FrameOutputFilenamePattern % (first_absolute_frame + CurrentFrame))
-            cv2.imwrite(target_file, img)
-
-        frame_selected.set(CurrentFrame)
-        frame_slider.set(CurrentFrame)
-        frame_slider.config(label='Processed:'+
-                            str(CurrentFrame+first_absolute_frame-StartFrame))
-        status_str = "Status: Generating %sframes %.1f%%" % ('merged ' if merged_frame else '', ((CurrentFrame-StartFrame)*100/frames_to_encode))
-        if FPM_CalculatedValue != -1:  # FPM not calculated yet, display some indication
-            status_str = status_str + ' (FPM:%d)' % (FPM_CalculatedValue)
-        app_status_label.config(text=status_str, fg='black')
-
-    CurrentFrame += 1
-    project_config["CurrentFrame"] = CurrentFrame
-
-    win.after(1, frame_generation_loop)
+    # Add item to encoding queue
+    if CurrentFrame < StartFrame + frames_to_encode and not frame_encoding_queue.full():
+        frame_encoding_queue.put(CurrentFrame)
+        CurrentFrame += 1
+        project_config["CurrentFrame"] = CurrentFrame
+        win.after(1, frame_generation_loop)
+    else:   # If queue is full, wait a bit longer
+        win.after(100, frame_generation_loop)
 
 
 def get_text_dimensions(text_string, font):
@@ -3011,6 +3087,30 @@ def video_generation_loop():
 Application top level functions
 ###############################
 """
+
+def multiprocessing_init():
+    global num_threads
+    global frame_encoding_queue, frame_encoding_event, frame_display_queue
+
+    num_cores = os.cpu_count()
+
+    if num_cores is not None:
+        logging.debug(f"{num_cores} cores available")
+        num_threads = int(num_cores/2)
+    else:
+        logging.debug("Unable to determine number of cores available")
+        num_threads = 4
+
+    logging.debug(f"Creating {num_threads} threads")
+
+    frame_encoding_queue = queue.Queue(maxsize=20)
+    frame_display_queue = queue.Queue(maxsize=20)
+    frame_encoding_event = threading.Event()    # Not really used, thread exists when receiving specific message
+    frame_encoding_thread_list = []
+    for i in range(0, num_threads):
+        frame_encoding_thread_list.append(threading.Thread(target=frame_encoding_thread, args=(frame_encoding_queue, frame_encoding_event, i)))
+        frame_encoding_thread_list[i].start()
+    logging.debug(f"{num_threads} threads initialized")
 
 
 def init_display():
@@ -3719,6 +3819,20 @@ def build_ui():
 
 def exit_app():  # Exit Application
     global win
+    global active_threads
+    global frame_encoding_event, frame_encoding_queue
+
+    # Terminate threads
+    # frame_encoding_event.set()
+    for i in range(0, num_threads):
+        frame_encoding_queue.put(END_TOKEN)
+        logging.debug("Inserting end token to encoding queue")
+
+    while active_threads > 0:
+        win.update()
+        logging.debug(f"Waiting for threads to exit, {active_threads} pending")
+        time.sleep(0.2)
+
     save_general_config()
     save_project_config()
     save_job_list()
@@ -3798,6 +3912,8 @@ def main(argv):
     afterscan_init()
 
     load_general_config()
+
+    multiprocessing_init()
 
     ffmpeg_installed = False
     if platform.system() == 'Windows':
