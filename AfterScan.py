@@ -2707,7 +2707,6 @@ def frame_encoding_thread(queue, event, id):
             with counter_lock:
                 working_threads -= 1
             break
-        print(f"Thread {id}: Received frame{message}")
         # Encode frame
         frame_encode(message)
         # Update UI with progress so far (double check we have not ended, it might happen during frame encoding)
@@ -2742,10 +2741,8 @@ def frame_generation_loop():
     # Display encoded images from queue
     if not frame_display_queue.empty():
         message = frame_display_queue.get()
-        print(f"Last displayed image {last_displayed_image}")
         if message[0] > last_displayed_image:
             last_displayed_image = message[0]
-            print(f"Displaying image {message[0]}")
             display_image(message[1])
 
     if CurrentFrame >= StartFrame + frames_to_encode and frame_encoding_queue.empty() and working_threads == 0:
@@ -2780,7 +2777,6 @@ def frame_generation_loop():
         while working_threads > 0:
             win.update()
             logging.debug(f"Waiting for threads to stop, {working_threads} pending")
-            print(f"Waiting for threads to stop, {working_threads} pending")
             time.sleep(0.2)
         status_str = "Status: Cancelled by user"
         # Clear display queue
