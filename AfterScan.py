@@ -272,7 +272,6 @@ CsvFramesOffPercent = 0
 # Token to be inserted in each queue on program closure, to allow threads to shut down cleanly
 END_TOKEN = object()
 counter_lock = threading.Lock()
-display_lock = threading.Lock()
 active_threads = 0
 working_threads = 0
 last_displayed_image = 0
@@ -2145,19 +2144,13 @@ def stabilize_image(frame_idx, img, img_ref):
     # Log frame alignment info for analysis (only when in convert loop)
     # Items logged: Tag, project id, Frame number, missing pixel rows, location (bottom/top), Vertical shift
     if ConvertLoopRunning:
-        stabilization_threshold_match_label.config(fg='white', bg=color_interpolation(match_level), text=str(match_level))
+        stabilization_threshold_match_label.config(fg='white', bg=color_interpolation(match_level), text=str(int(match_level*100)))
         if missing_bottom < 0 or missing_top < 0:
             stabilization_bounds_alert_counter += 1
             if stabilization_bounds_alert.get():
                 win.bell()
-            # Tag evolution
-            # FrameAlignTag: project_name, frame_idx, missing rows, top/bottom, move_y)
-            # FrameAlignTag-2: project_name, frame_idx, +/- missing rows, move_y, move_x)
-            project_name_tag = project_name + '(' + video_filename_name.get() + ')'
-            project_name_tag = project_name_tag.replace(',', ';')   # To avoid problem with AfterScanAnalysis
-            logging.warning("FrameAlignTag-2, %s, %i, %i, %i, %i", project_name_tag, first_absolute_frame+frame_idx, missing_rows, move_y, move_x)
             if GenerateCsv:
-                CsvFile.write('%i, %i, %i\n' % (first_absolute_frame+frame_idx, missing_rows, match_level))
+                CsvFile.write('%i, %i, %i\n' % (first_absolute_frame+frame_idx, missing_rows, int(match_level*100)))
     if frame_idx-StartFrame > 0:
         CsvFramesOffPercent = stabilization_bounds_alert_counter * 100 / (frame_idx-StartFrame)
     stabilization_bounds_alert_checkbox.config(text='Alert when image out of bounds (%i, %.1f%%)' % (
@@ -2518,10 +2511,6 @@ def start_convert():
                                         "Please select a smaller template.")
                 ConvertLoopExitRequested = True
             else:
-                project_name_tag = project_name + '(' + video_filename_name.get() + ')'
-                project_name_tag = project_name_tag.replace(',', ';')  # To avoid problem with AfterScanAnalysis
-                # Log header line for project, to allow AfterScanAnalysis in case there are no out of bounds frames
-                logging.warning("FrameAlignTag, %s, %i, %i, 9999, 9999", project_name_tag, StartFrame, frames_to_encode)
                 # Check if CSV option selected
                 if GenerateCsv:
                     CsvFilename = video_filename_name.get()
@@ -2599,6 +2588,7 @@ def frame_encode(frame_idx):
     global FrameInputFilenamePattern, HdrSetInputFilenamePattern, FrameHdrInputFilenamePattern, FrameOutputFilenamePattern
     global CropTopLeft, CropBottomRight
     global app_status_label
+    global frame_display_queue
 
     images_to_merge = []
 
@@ -2717,6 +2707,7 @@ def frame_encoding_thread(queue, event, id):
             with counter_lock:
                 working_threads -= 1
             break
+        print(f"Thread {id}: Received frame{message}")
         # Encode frame
         frame_encode(message)
         # Update UI with progress so far (double check we have not ended, it might happen during frame encoding)
@@ -2746,15 +2737,16 @@ def frame_generation_loop():
     global FPM_CalculatedValue
     global HdrFilesOnly
     global frame_encoding_queue
-    global last_displayed_image, working_threads
+    global last_displayed_image, working_threads, frame_display_queue
 
     # Display encoded images from queue
     if not frame_display_queue.empty():
         message = frame_display_queue.get()
-        with display_lock:
-            if message[0] > last_displayed_image:
-                last_displayed_image = message[0]
-                display_image(message[1])
+        print(f"Last displayed image {last_displayed_image}")
+        if message[0] > last_displayed_image:
+            last_displayed_image = message[0]
+            print(f"Displaying image {message[0]}")
+            display_image(message[1])
 
     if CurrentFrame >= StartFrame + frames_to_encode and frame_encoding_queue.empty() and working_threads == 0:
         FPM_CalculatedValue = -1
@@ -2783,13 +2775,20 @@ def frame_generation_loop():
 
     if ConvertLoopExitRequested:  # Stop button pressed
         logging.debug("User requested termination")
-        status_str = "Status: Cancelled by user"
+        # Wait for all encoding threads to stop
         frame_encoding_queue.queue.clear()
+        while working_threads > 0:
+            win.update()
+            logging.debug(f"Waiting for threads to stop, {working_threads} pending")
+            print(f"Waiting for threads to stop, {working_threads} pending")
+            time.sleep(0.2)
+        status_str = "Status: Cancelled by user"
+        # Clear display queue
+        frame_display_queue.queue.clear()
+        last_displayed_image = 0
         if GenerateCsv:
             CsvFile.close()
-            name, ext = os.path.splitext(CsvPathName)
-            name = name + ' (%d frames, %.1f%% KO)' % (frames_to_encode, CsvFramesOffPercent) + '.csv'
-            os.rename(CsvPathName, name)
+            os.unlink(CsvPathName)  # Processing was stopped half-way, delete csv file as results are not representative
         app_status_label.config(text=status_str, fg='red')
         generation_exit()
         stabilization_threshold_match_label.config(fg='lightgray', bg='lightgray', text='')
@@ -3542,8 +3541,8 @@ def build_ui():
     stabilization_threshold_spinbox.bind("<FocusOut>", stabilization_threshold_spinbox_focus_out)
 
     # Label to display the match level of current frame to template
-    stabilization_threshold_match_label = Label(postprocessing_frame, width=5, borderwidth=1, relief='sunken')
-    stabilization_threshold_match_label.grid(row=postprocessing_row, column=2, sticky=E)
+    stabilization_threshold_match_label = Label(postprocessing_frame, width=4, borderwidth=1, relief='sunken')
+    stabilization_threshold_match_label.grid(row=postprocessing_row, column=2, sticky=E, padx=10)
 
     postprocessing_row += 1
 
