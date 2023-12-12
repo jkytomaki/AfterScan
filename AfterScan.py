@@ -19,9 +19,9 @@ __author__ = 'Juan Remirez de Esparza'
 __copyright__ = "Copyright 2022, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
-__version__ = "1.8.6"
-__date__ = "2023-12-11"
-__version_highlight__ = "Multithread frame processing"
+__version__ = "1.8.7"
+__date__ = "2023-12-12"
+__version_highlight__ = "Move items in job list ('u'/'d' keys')"
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
 __status__ = "Development"
@@ -825,7 +825,7 @@ def job_list_add_current():
             if pattern_filename_custom != TargetTemplateFile:
                 shutil.copyfile(pattern_filename_custom, TargetTemplateFile)
             job_list[entry_name]['project']['CustomTemplateFilename'] = TargetTemplateFile
-        job_list_listbox.insert('end', entry_name)
+        job_list_listbox.insert(item_index, entry_name)
         job_list_listbox.itemconfig('end', fg='black')
         job_list_listbox.select_set('end')
 
@@ -928,7 +928,7 @@ def start_processing_job_list():
 
 
 def job_processing_loop():
-    global job_list
+    global job_list, job_list_listbox
     global project_config
     global CurrentJobEntry
     global BatchJobRunning
@@ -936,11 +936,10 @@ def job_processing_loop():
     global suspend_on_completion
 
     job_started = False
-    idx = 0
     for entry in job_list:
         if  job_list[entry]['done'] == False:
             job_list_listbox.selection_clear(0, END)
-            #job_list_listbox.selection_set(idx)
+            idx = job_list_listbox.get(0, "end").index(entry)
             job_list_listbox.itemconfig(idx, fg='blue')
             CurrentJobEntry = entry
             logging.debug("Processing %s, starting from frame %i, %s frames",
@@ -957,8 +956,7 @@ def job_processing_loop():
             start_convert()
             job_started = True
             break
-        job_list_listbox.selection_clear(idx)
-        idx += 1
+        #job_list_listbox.selection_clear(idx)
     if not job_started:
         CurrentJobEntry = -1
         generation_exit()
@@ -981,12 +979,61 @@ def job_list_rerun_current(event):
 
 def get_job_listbox_index(CurrentJobEntry):
     global job_list, job_list_listbox
-    idx = 0
-    for entry in job_list:
-        if job_list[entry] == job_list[CurrentJobEntry]:
-            return idx
-        idx += 1
-    return -1
+    idx = -1
+    if CurrentJobEntry in job_list:
+        idx = job_list_listbox.get(0, "end").index(CurrentJobEntry)
+    return idx
+
+
+def sync_job_list_with_listbox():
+    global job_list_listbox, job_list
+
+    order_list=[]
+    for idx in range(0, job_list_listbox.size()):
+        order_list.append(job_list_listbox.get(idx))
+
+    # Create a new dictionary with the desired order
+    job_list = {key: job_list[key] for key in order_list}
+
+
+def job_list_move_up(event):
+    global job_list_listbox, job_list
+    selected_index = job_list_listbox.curselection()
+    if selected_index:
+        selected_index = selected_index[0]
+        if selected_index > 0:
+            item = job_list_listbox.get(selected_index)
+            job_list_listbox.delete(selected_index)
+            job_list_listbox.insert(selected_index - 1, item)
+            job_list_listbox.selection_clear(0, tk.END)
+            job_list_listbox.selection_set(selected_index - 1)
+            job_list_listbox.activate(selected_index - 1)
+            job_list_listbox.see(selected_index - 1)  # Scroll to the new selection
+            if item in job_list:
+                if job_list[item]['done'] == True:
+                    job_list_listbox.itemconfig(selected_index - 1, fg='green')
+            sync_job_list_with_listbox()
+            #return "break"
+
+
+def job_list_move_down(event):
+    global job_list_listbox, job_list
+    selected_index = job_list_listbox.curselection()
+    if selected_index:
+        selected_index = selected_index[0]
+        if selected_index < job_list_listbox.size() - 1:
+            item = job_list_listbox.get(selected_index)
+            job_list_listbox.delete(selected_index)
+            job_list_listbox.insert(selected_index + 1, item)
+            job_list_listbox.selection_clear(0, tk.END)
+            job_list_listbox.selection_set(selected_index + 1)
+            job_list_listbox.activate(selected_index + 1)
+            job_list_listbox.see(selected_index + 1)  # Scroll to the new selection
+            if item in job_list:
+                if job_list[item]['done'] == True:
+                    job_list_listbox.itemconfig(selected_index + 1, fg='green')
+            sync_job_list_with_listbox()
+            #return "break"
 
 
 """
@@ -2544,7 +2591,7 @@ def generation_exit():
     global ConvertLoopRunning
     global Go_btn, save_bg, save_fg
     global BatchJobRunning
-    global job_list, CurrentJobEntry
+    global job_list, CurrentJobEntry, job_list_listbox
 
     go_suspend = False
     stop_batch = False
@@ -3150,7 +3197,6 @@ def afterscan_init():
     global PreviewWidth, PreviewHeight
     global screen_height
     global ExpertMode
-    global job_list_listbox
     global BigSize
     global MergeMertens
 
@@ -3744,6 +3790,8 @@ def build_ui():
     job_list_listbox.bind("<Double - Button - 1>", job_list_load_current)
     job_list_listbox.bind("r", job_list_rerun_current)
     job_list_listbox.bind('<<ListboxSelect>>', job_list_process_selection)
+    job_list_listbox.bind("u", job_list_move_up)
+    job_list_listbox.bind("d", job_list_move_down)
     # job listbox scrollbars
     job_list_listbox_scrollbar_y = Scrollbar(job_list_frame, orient="vertical")
     job_list_listbox_scrollbar_y.config(command=job_list_listbox.yview)
