@@ -19,9 +19,9 @@ __author__ = 'Juan Remirez de Esparza'
 __copyright__ = "Copyright 2022, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
-__version__ = "1.8.7"
+__version__ = "1.8.8"
 __date__ = "2023-12-12"
-__version_highlight__ = "Move items in job list ('u'/'d' keys')"
+__version_highlight__ = "Bypass stabilize if match not good"
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
 __status__ = "Development"
@@ -1941,14 +1941,12 @@ def validate_template_size():
         return True
 
 
-def color_interpolation(t):
-    c1 = (255, 0, 0)  # Red
-    c2 = (0, 255, 0)  # Green
-    r = int(c1[0] * (1 - t) + c2[0] * t)
-    g = int(c1[1] * (1 - t) + c2[1] * t)
-    b = int(c1[2] * (1 - t) + c2[2] * t)
-    return "#%02x%02x%02x" % (r, g, b)
-
+def match_level_color(t):
+    if t < 0.7:
+        return "red"
+    if t < 0.9:
+        return "orange"
+    return "green"
 
 def match_template(template, img, thres):
     result = []
@@ -2151,7 +2149,7 @@ def stabilize_image(frame_idx, img, img_ref):
             # logging.debug("Break, exhausted list. Best match %.2f", best_match_level)
             top_left, match_level = match_template(film_hole_template, left_stripe_image, float(BestStabilizationThreshold))
             break
-    if top_left[1] != -1:
+    if top_left[1] != -1 and match_level > 0.7:
         # The coordinates returned by match template are relative to the
         # cropped image. In order to calculate the correct values to provide
         # to the translation matrix, need to convert to absolute coordinates
@@ -2191,7 +2189,7 @@ def stabilize_image(frame_idx, img, img_ref):
     # Log frame alignment info for analysis (only when in convert loop)
     # Items logged: Tag, project id, Frame number, missing pixel rows, location (bottom/top), Vertical shift
     if ConvertLoopRunning:
-        stabilization_threshold_match_label.config(fg='white', bg=color_interpolation(match_level), text=str(int(match_level*100)))
+        stabilization_threshold_match_label.config(fg='white', bg=match_level_color(match_level), text=str(int(match_level*100)))
         if missing_bottom < 0 or missing_top < 0:
             stabilization_bounds_alert_counter += 1
             if stabilization_bounds_alert.get():
@@ -2242,11 +2240,6 @@ def stabilize_image(frame_idx, img, img_ref):
                 translated_image = translated_image[0:CropBottomRight[1]-missing_rows, 0:width]
                 translated_image = cv2.copyMakeBorder(src=translated_image, top=0, bottom=CropBottomRight[1]-missing_rows, left=0, right=0,
                                                       borderType=cv2.BORDER_REPLICATE)
-
-    if ConvertLoopRunning:
-        logging.debug("FrameStabilizeTag, %s, %i, %ix%i, %i, %i",
-                      project_name, frame_idx, img.shape[1], img.shape[0],
-                      move_x, move_y)
 
     return translated_image
 
