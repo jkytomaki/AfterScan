@@ -19,9 +19,9 @@ __author__ = 'Juan Remirez de Esparza'
 __copyright__ = "Copyright 2022, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
-__version__ = "1.8.8"
-__date__ = "2023-12-12"
-__version_highlight__ = "Bypass stabilize if match not good"
+__version__ = "1.8.9"
+__date__ = "2023-12-13"
+__version_highlight__ = "Fix Video encoding beyond last frame"
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
 __status__ = "Development"
@@ -2624,7 +2624,7 @@ def generation_exit():
 
 def frame_encode(frame_idx):
     global SourceDir, TargetDir
-    global HdrFilesOnly , first_absolute_frame, merged_frame, frames_to_encode
+    global HdrFilesOnly , first_absolute_frame, frames_to_encode
     global FrameInputFilenamePattern, HdrSetInputFilenamePattern, FrameHdrInputFilenamePattern, FrameOutputFilenamePattern
     global CropTopLeft, CropBottomRight
     global app_status_label
@@ -2648,9 +2648,7 @@ def frame_encode(frame_idx):
         img = img - img.min()  # Now between 0 and 8674
         img = img / img.max() * 255
         img = np.uint8(img)
-        merged_frame = True
     else:
-        merged_frame = False
         file1 = os.path.join(SourceDir, FrameInputFilenamePattern % (frame_idx + first_absolute_frame))
         # read image
         img = cv2.imread(file1, cv2.IMREAD_UNCHANGED)
@@ -2670,7 +2668,6 @@ def frame_encode(frame_idx):
                 img = img - img.min()  # Now between 0 and 8674
                 img = img / img.max() * 255
                 img = np.uint8(img)
-                merged_frame = True
 
     if img is None:
         logging.error(
@@ -2714,7 +2711,7 @@ def frame_encode(frame_idx):
 
 
 def frame_update_ui(frame_idx):
-    global first_absolute_frame, StartFrame, merged_frame, frames_to_encode, FPM_CalculatedValue
+    global first_absolute_frame, StartFrame, frames_to_encode, FPM_CalculatedValue
 
     frame_selected.set(frame_idx)
     frame_slider.set(frame_idx)
@@ -2728,7 +2725,6 @@ def frame_update_ui(frame_idx):
 
 def frame_encoding_thread(queue, event, id):
     global SourceDir
-    global message
     global ScanStopRequested
     global active_threads, working_threads
 
@@ -2960,34 +2956,41 @@ def call_ffmpeg():
                   '-y',
                   '-loglevel', 'error',
                   '-stats',
-                  '-flush_packets', '1',
-                  '-f', 'image2',
-                  '-framerate', str(VideoFps),
-                  '-start_number', str(StartFrame + first_absolute_frame)]
-    cmd_ffmpeg.extend(['-i', os.path.join(TargetDir, FrameOutputFilenamePattern)])
+                  '-flush_packets', '1']
     if title_num_frames > 0:   # There is a title
         cmd_ffmpeg.extend(['-f', 'image2',
                            '-framerate', str(VideoFps),
                            '-start_number', str(StartFrame + first_absolute_frame),
                            '-i', os.path.join(TargetDir, TitleOutputFilenamePattern)])
+    cmd_ffmpeg.extend(['-f', 'image2',
+                       '-framerate', str(VideoFps),
+                       '-start_number', str(StartFrame + first_absolute_frame),
+                       '-i', os.path.join(TargetDir, FrameOutputFilenamePattern)])
     # Create filter_complex or one or two inputs
     filter_complex_options=''
-    # Main video
-    # trim filter: I had problems with some prime numbers here (specially with 14657, which caused the encoding to extend till the end)
-    # Therefore, we always add an odd number, just in case
-    frames_to_encode_trim = frames_to_encode - frames_to_encode % 2 # Do not add, in case we are at the end
-    filter_complex_options+='[0:v]trim=start_frame=0:end_frame='+str(frames_to_encode_trim)+'[v0];'  # Limit number of frames of main video
-    filter_complex_options+='[v0]'
-    if (out_frame_width != 0 and out_frame_height != 0):
-        filter_complex_options+='scale=w='+video_width+':h='+video_height+':'
-    filter_complex_options+='force_original_aspect_ratio=decrease,pad='+video_width+':'+video_height+':(ow-iw)/2:(oh-ih)/2,setsar=1[v00];'
     # Title sequence
     if title_num_frames > 0:   # There is a title
-        filter_complex_options+='[1:v]'
+        filter_complex_options+='[0:v]'
         if (out_frame_width != 0 and out_frame_height != 0):
             filter_complex_options+='scale=w='+video_width+':h='+video_height+':'
-        filter_complex_options+='force_original_aspect_ratio=decrease,pad='+video_width+':'+video_height+':(ow-iw)/2:(oh-ih)/2,setsar=1[v1];[v1]'
-    filter_complex_options+='[v00]concat=n='+str(2 if title_num_frames>0 else 1)+':v=1[v]'
+        filter_complex_options+='force_original_aspect_ratio=decrease,pad='+video_width+':'+video_height+':(ow-iw)/2:(oh-ih)/2,setsar=1[v0];'
+    # Main video
+    # trim filter: Problems with some specific number of frames, which cause video encoding to extend till the end
+    # Initially thought it happen with prime number, later verified it can be any number
+    frames_to_encode_trim = frames_to_encode
+    if title_num_frames > 0:   # There is a title
+        filter_complex_options+='[1:v]'
+    else:
+        filter_complex_options += '[0:v]'
+    filter_complex_options+='trim=start_frame=0:end_frame='+str(frames_to_encode_trim)+',setpts=PTS-STARTPTS[v1];'  # Limit number of frames of main video
+    filter_complex_options+='[v1]'
+    if (out_frame_width != 0 and out_frame_height != 0):
+        filter_complex_options+='scale=w='+video_width+':h='+video_height+':'
+    filter_complex_options+='force_original_aspect_ratio=decrease,pad='+video_width+':'+video_height+':(ow-iw)/2:(oh-ih)/2,setsar=1[v2];'
+    # Concatenate title (if exists) + main video
+    if title_num_frames > 0:   # There is a title
+        filter_complex_options += '[v0]'
+    filter_complex_options+='[v2]concat=n='+str(2 if title_num_frames>0 else 1)+':v=1[v]'
     cmd_ffmpeg.extend(['-filter_complex', filter_complex_options])
 
     cmd_ffmpeg.extend(
