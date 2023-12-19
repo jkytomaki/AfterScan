@@ -19,9 +19,9 @@ __author__ = 'Juan Remirez de Esparza'
 __copyright__ = "Copyright 2022, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
-__version__ = "1.8.9"
-__date__ = "2023-12-13"
-__version_highlight__ = "Fix Video encoding beyond last frame"
+__version__ = "1.8.12"
+__date__ = "2023-12-19"
+__version_highlight__ = "Afterscan multithread - Fix Windows specific issues"
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
 __status__ = "Development"
@@ -59,6 +59,7 @@ import textwrap
 import random
 import threading
 import queue
+from matplotlib import font_manager
 
 # Frame vars
 first_absolute_frame = 0
@@ -270,11 +271,12 @@ CsvFile = 0
 CsvFramesOffPercent = 0
 
 # Token to be inserted in each queue on program closure, to allow threads to shut down cleanly
-END_TOKEN = object()
-counter_lock = threading.Lock()
-active_threads = 0
-working_threads = 0
+END_TOKEN = "TERMINATE_PROCESS"
+LAST_ITEM_TOKEN = "LAST_ITEM"
 last_displayed_image = 0
+active_threads = 0
+num_threads = 0
+
 """
 #################
 Utility functions
@@ -294,6 +296,13 @@ def is_a_number(string):
         return True
     else:
         return False
+
+
+def empty_queue(q):
+    while not q.empty():
+        item = q.get()
+        print(f"Emptying queue: Got {item[0]}")
+
 """
 ####################################
 Configuration file support functions
@@ -1655,14 +1664,15 @@ def select_rectangle_area(is_cropping=False):
 
     # work_image = np.zeros((512,512,3), np.uint8)
     base_image = np.copy(work_image)
-    cv2.namedWindow(RectangleWindowTitle, cv2.WINDOW_KEEPRATIO)
+    cv2.namedWindow(RectangleWindowTitle, cv2.WINDOW_GUI_NORMAL)
     cv2.setMouseCallback(RectangleWindowTitle, draw_rectangle)
     # rectangle_refresh = False
     cv2.imshow(RectangleWindowTitle, work_image)
+    # Cannot make window wider than required since in Windows the image is expanded tpo cover the full width
     if is_demo:
-        cv2.resizeWindow(RectangleWindowTitle, 3*round(win_x/2), round(win_y/2))
+        cv2.resizeWindow(RectangleWindowTitle, round(win_x/2), round(win_y/2))
     else:
-        cv2.resizeWindow(RectangleWindowTitle, 3*win_x, win_y)
+        cv2.resizeWindow(RectangleWindowTitle, win_x, win_y)
     while 1:
         if rectangle_refresh:
             copy = work_image.copy()
@@ -1805,12 +1815,12 @@ def select_custom_template():
             expected_pattern_pos_custom = RectangleTopLeft
             CustomTemplateWindowTitle = "Captured custom template. Press any key to continue."
             project_config['CustomTemplateExpectedPos'] = expected_pattern_pos_custom
-            #win_x = int(img_final.shape[1] * area_select_image_factor)
+            win_x = int(img_final.shape[1] * area_select_image_factor)
             win_y = int(img_final.shape[0] * area_select_image_factor)
-            cv2.namedWindow(CustomTemplateWindowTitle, flags=cv2.WINDOW_KEEPRATIO)
+            cv2.namedWindow(CustomTemplateWindowTitle, flags=cv2.WINDOW_GUI_NORMAL)
             cv2.imshow(CustomTemplateWindowTitle, img_final)
-            # Hardcode template window width to 600 pixels to make it more visible
-            cv2.resizeWindow(CustomTemplateWindowTitle, 600, round(win_y/2))
+            # Cannot force window to be wider than required since in Windows image is expanded as well
+            cv2.resizeWindow(CustomTemplateWindowTitle, round(win_x/2), round(win_y/2))
             cv2.moveWindow(CustomTemplateWindowTitle, win.winfo_x()+100, win.winfo_y()+30)
             cv2.waitKey(0)
             cv2.destroyAllWindows()
@@ -2005,10 +2015,84 @@ def match_template(template, img, thres):
 
 
 """
+#################################
+Multiprocessing Support functions
+#################################
+"""
+
+
+def start_threads():
+    global num_threads, active_threads
+    global frame_encoding_thread_list
+    global frame_encoding_event, frame_encoding_queue
+
+    frame_encoding_thread_list = []
+    frame_encoding_event = threading.Event()
+    for i in range(0, num_threads):
+        frame_encoding_thread_list.append(threading.Thread(target=frame_encoding_thread, args=(frame_encoding_queue, frame_encoding_event, i)))
+        frame_encoding_thread_list[i].start()
+        active_threads += 1
+    logging.debug(f"{num_threads} threads initialized")
+
+
+def terminate_threads(user_terminated):
+    global win, num_threads, frames_to_read_queue, active_threads
+    global frame_encoding_thread_list, frame_encoding_event
+    global last_displayed_image
+
+    if user_terminated:     # User terminated processing: Queue might be full, make space for End Token
+        empty_queue(frame_encoding_queue)
+
+    # Multiprocessing: Now threads/child processes will be alive only during encoding, no more need to terminate them here
+    for i in range(0, num_threads):
+        logging.debug("Inserting end token to read queue for threads, in case they are stuck reading the queue")
+        frame_encoding_queue.put((END_TOKEN, 0))
+
+    # Terminate threads
+    logging.debug("Signaling exit event for threads")
+    frame_encoding_event.set()
+    while active_threads > 0:
+        logging.debug(f"Waiting for threads to stop ({active_threads} remaining)")
+        check_subprocess_event_queue(user_terminated)
+        win.update()
+        time.sleep(0.2)
+
+    # Process any remaining items in queue from workers
+    logging.debug("Empty any remaining items in frames to read queue")
+    empty_queue(frame_encoding_queue)
+
+    print("Thread queues content>>>>")
+    while not frame_encoding_queue.empty():
+        print(frame_encoding_queue.get())
+    print("<<<<Thread queues content")
+
+    try:
+        for i in range(0, num_threads):
+            logging.debug(f"Joining thread {i} {frame_encoding_thread_list[i]} ...")
+            if frame_encoding_thread_list[i].is_alive():
+                frame_encoding_thread_list[i].join()
+            logging.debug(f"Thread {i} finalized {frame_encoding_thread_list[i]}")
+    except Exception as e:
+        print(f"Exception during thread {i} join {e}")
+
+    frame_encoding_queue.put(LAST_ITEM_TOKEN)
+    print("Thread Queues content (after join)>>>>")
+    item = None
+    while item != LAST_ITEM_TOKEN:
+        item = frame_encoding_queue.get()
+        print(item)
+    print("<<<<Thread Queues content (after join)")
+
+    # Reinitilize variables used to avoid out-of-order UI update
+    last_displayed_image = 0
+
+
+"""
 ###################################
 Support functions for core business
 ###################################
 """
+
 
 def debug_display_image(window_name, img):
     if debug_enabled:
@@ -2051,10 +2135,12 @@ def display_image(img):
 def display_output_frame_by_number(frame_number):
     global StartFrame
     global TargetDirFileList
+    global last_displayed_image
 
     TargetFile = TargetDir + '/' + FrameOutputFilenamePattern % (StartFrame + frame_number)
 
-    if TargetFile in TargetDirFileList:
+    if TargetFile in TargetDirFileList and frame_number > last_displayed_image:
+        last_displayed_image = frame_number
         img = cv2.imread(TargetFile, cv2.IMREAD_UNCHANGED)
         display_image(img)
 
@@ -2481,10 +2567,12 @@ def start_convert():
     global job_list, CurrentJobEntry
     global stabilization_bounds_alert_counter
     global CsvFilename, CsvPathName, GenerateCsv, CsvFile
+    global FPM_LastMinuteFrameTimes
 
 
     if ConvertLoopRunning:
         ConvertLoopExitRequested = True
+        ConvertLoopRunning = False
     else:
         # Save current project status
         save_general_config()
@@ -2492,6 +2580,8 @@ def start_convert():
         save_job_list()
         # Reset frames out of bounds counter
         stabilization_bounds_alert_counter = 0
+        # Empty FPM register list
+        FPM_LastMinuteFrameTimes.clear()
         # Centralize 'frames_to_encode' update here
         if encode_all_frames.get():
             StartFrame = 0
@@ -2564,6 +2654,8 @@ def start_convert():
                     CsvPathName = os.path.join(CsvPathName, CsvFilename)
                     CsvFile = open(CsvPathName, "w")
             clear_image()
+            # Multiprocessing: Start all threads before encoding
+            start_threads()
             win.after(1, frame_generation_loop)
         elif generate_video.get():
             # first check if resolution has been set
@@ -2628,7 +2720,7 @@ def frame_encode(frame_idx):
     global FrameInputFilenamePattern, HdrSetInputFilenamePattern, FrameHdrInputFilenamePattern, FrameOutputFilenamePattern
     global CropTopLeft, CropBottomRight
     global app_status_label
-    global frame_display_queue
+    global subprocess_event_queue
 
     images_to_merge = []
 
@@ -2696,8 +2788,8 @@ def frame_encode(frame_idx):
 
         # Before we used to display every other frame, but just discovered that it makes no difference to performance
         # Instead of displaying image, we add it to a queue to be processed in main loop
-        queue_item = tuple((frame_idx, img))
-        frame_display_queue.put(queue_item)
+        queue_item = tuple(("processed_image", frame_idx, img))
+        subprocess_event_queue.put(queue_item)
 
         if img.shape[1] % 2 == 1 or img.shape[0] % 2 == 1:
             logging.error("Target size, one odd dimension")
@@ -2712,6 +2804,7 @@ def frame_encode(frame_idx):
 
 def frame_update_ui(frame_idx):
     global first_absolute_frame, StartFrame, frames_to_encode, FPM_CalculatedValue
+    global app_status_label
 
     frame_selected.set(frame_idx)
     frame_slider.set(frame_idx)
@@ -2725,34 +2818,71 @@ def frame_update_ui(frame_idx):
 
 def frame_encoding_thread(queue, event, id):
     global SourceDir
-    global ScanStopRequested
+    global ScanStopRequested, ConvertLoopRunning
     global active_threads, working_threads
+    global last_displayed_image
 
-    with counter_lock:
-        active_threads += 1
-    if not os.path.isdir(SourceDir):
-        logging.error(f"Source dir {SourceDir} unmounted: Stop encoding session")
-        ScanStopRequested = True    # If target dir does not exist, stop scan
-        return
-    while not event.is_set():
-        message = queue.get()
-        with counter_lock:
-            working_threads += 1
-        if message == END_TOKEN:
-            logging.debug(f"Thread {id}: Received terminate token, exiting")
-            with counter_lock:
-                working_threads -= 1
-            break
-        # Encode frame
-        frame_encode(message)
-        # Update UI with progress so far (double check we have not ended, it might happen during frame encoding)
-        if ConvertLoopRunning:
-            frame_update_ui(message)
-        with counter_lock:
-            working_threads -= 1
-    logging.debug(f"Exiting frame_encoding_thread n.{id}")
-    with counter_lock:
-        active_threads -= 1
+    try:
+        while not event.is_set():
+            message = queue.get()
+            if message[0] != "encode_frame":
+                print(f"t{id}: Rx message {message[0]}")
+            if not os.path.isdir(SourceDir):
+                logging.error(f"Source dir {SourceDir} unmounted: Stop encoding session")
+                ScanStopRequested = True    # If target dir does not exist, stop scan
+                break
+            if message[0] == "encode_frame":
+                # Encode frame
+                frame_encode(message[1])
+                # Update UI with progress so far (double check we have not ended, it might happen during frame encoding)
+                if ConvertLoopRunning:
+                    if message[1] >= last_displayed_image:
+                        frame_update_ui(message[1])
+            elif message[0] == END_TOKEN:
+                logging.debug(f"Thread {id}: Received terminate token, exiting")
+                break
+        logging.debug(f"Exiting frame_encoding_thread n.{id}")
+        queue_item = tuple(("exit_thread", id))
+        subprocess_event_queue.put(queue_item)
+    except Exception as e:
+        logging.error(f"Thread {id}: Exception happen {e}")
+
+
+def check_subprocess_event_queue(user_terminated):
+    global TargetDir, FrameOutputFilenamePattern
+    global first_absolute_frame, frame_idx
+    global subprocess_event_queue
+    global last_displayed_image, active_threads
+    global stabilization_bounds_alert_checkbox, stabilization_bounds_alert_counter
+    global CsvFramesOffPercent
+    global ConvertLoopRunning
+
+    # Process requests coming from workers
+    while not subprocess_event_queue.empty():
+        message = subprocess_event_queue.get()
+        print(f"Got {message[0]} from thread queue")
+        # Display encoded images from queue
+        if message[0] == "processed_image":
+            img = message[2]
+            frame_idx = message[1]
+            if img.shape[1] % 2 == 1 or img.shape[0] % 2 == 1:
+                logging.error("Target size, one odd dimension")
+                status_str = "Status: Frame %d - odd size" % message[1]
+                app_status_label.config(text=status_str, fg='red')
+                #frame_idx = StartFrame + frames_to_encode - 1
+            if os.path.isdir(TargetDir):
+                target_file = os.path.join(TargetDir, FrameOutputFilenamePattern % (first_absolute_frame + frame_idx))
+                cv2.imwrite(target_file, img)
+            if not user_terminated:    # Display image
+                if message[1] >= last_displayed_image:
+                    last_displayed_image = frame_idx
+                    display_image(img)
+                    # Update UI with progress so far (double check we have not ended, it might happen during frame encoding)
+                    if ConvertLoopRunning:
+                        frame_update_ui(message[1])
+        elif message[0] == "exit_thread":
+            logging.debug(f"Thread {message[1]}:Exiting frame_encoding_thread")
+            active_threads -= 1
 
 
 def frame_generation_loop():
@@ -2772,22 +2902,24 @@ def frame_generation_loop():
     global FPM_CalculatedValue
     global HdrFilesOnly
     global frame_encoding_queue
-    global last_displayed_image, working_threads, frame_display_queue
+    global last_displayed_image, working_threads
+    global frame_encoding_queue, subprocess_event_queue
 
     # Display encoded images from queue
-    if not frame_display_queue.empty():
-        message = frame_display_queue.get()
-        if message[0] > last_displayed_image:
-            last_displayed_image = message[0]
-            display_image(message[1])
+    if not subprocess_event_queue.empty():
+        message = subprocess_event_queue.get()
+        if message[0] == "processed_image" and message[1] > last_displayed_image:
+            last_displayed_image = message[1]
+            display_image(message[2])
 
-    if CurrentFrame >= StartFrame + frames_to_encode and frame_encoding_queue.empty() and working_threads == 0:
+    if CurrentFrame >= StartFrame + frames_to_encode and last_displayed_image+1 >= StartFrame + frames_to_encode:
         FPM_CalculatedValue = -1
         status_str = "Status: Frame generation OK"
         app_status_label.config(text=status_str, fg='green')
         # Clear display queue
-        frame_display_queue.queue.clear()
-        last_displayed_image = 0
+        #subprocess_event_queue.queue.clear()
+        #last_displayed_image = 0
+        win.update()
         # Refresh Target dir file list
         TargetDirFileList = sorted(list(glob(os.path.join(
             TargetDir, FrameCheckOutputFilenamePattern))))
@@ -2796,6 +2928,9 @@ def frame_generation_loop():
             name, ext = os.path.splitext(CsvPathName)
             name = name + ' (%d frames, %.1f%% KO)' % (frames_to_encode, CsvFramesOffPercent) + '.csv'
             os.rename(CsvPathName, name)
+        # Stop threads
+        terminate_threads(False)
+        # Generate video if requested or terminate
         if generate_video.get():
             ffmpeg_success = False
             ffmpeg_encoding_status = ffmpeg_state.Pending
@@ -2804,32 +2939,39 @@ def frame_generation_loop():
             generation_exit()
         CurrentFrame -= 1  # Prevent being out of range
         stabilization_threshold_match_label.config(fg='lightgray', bg='lightgray', text='')
+        win.update()
         return
 
     if ConvertLoopExitRequested:  # Stop button pressed
+        # Process user requested termination
         logging.debug("User requested termination")
-        # Wait for all encoding threads to stop
-        frame_encoding_queue.queue.clear()
-        while working_threads > 0:
-            win.update()
-            logging.debug(f"Waiting for threads to stop, {working_threads} pending")
-            time.sleep(0.2)
-        status_str = "Status: Cancelled by user"
-        # Clear display queue
-        frame_display_queue.queue.clear()
-        last_displayed_image = 0
+        status_str = "Status: Stopping encoding..."
+        app_status_label.config(text=status_str, fg='orange')
+        win.update()
+        # Close CSV file
         if GenerateCsv:
             CsvFile.close()
             os.unlink(CsvPathName)  # Processing was stopped half-way, delete csv file as results are not representative
+        # Stop workers
+        terminate_threads(True)
+        print(f"frames_to_encode_queue.qsize = {frame_encoding_queue.qsize()}")
+        print(f"subprocess_event_queue.qsize = {subprocess_event_queue.qsize()}")
+        print("Exiting threads terminate")
+        status_str = "Status: Cancelled by user"
         app_status_label.config(text=status_str, fg='red')
         generation_exit()
         stabilization_threshold_match_label.config(fg='lightgray', bg='lightgray', text='')
         FPM_CalculatedValue = -1
+        win.update()
         return
 
     # Add item to encoding queue
     if CurrentFrame < StartFrame + frames_to_encode and not frame_encoding_queue.full():
-        frame_encoding_queue.put(CurrentFrame)
+        frame_encoding_queue.put(("encode_frame", CurrentFrame))
+        # If inserting the first few frames, add a delay so that workers are interleaved
+        # Improves visual preview, no effect on processing speed
+        if CurrentFrame < StartFrame + num_threads:
+            time.sleep(0.3)
         CurrentFrame += 1
         project_config["CurrentFrame"] = CurrentFrame
         win.after(1, frame_generation_loop)
@@ -2848,6 +2990,7 @@ def get_text_dimensions(text_string, font):
 
 
 def get_adjusted_font(image, text):
+    global IsWindows, IsLinux, IsMac
     max_size = 96
     try_again = False
     # draw = ImageDraw.Draw(image)
@@ -2856,7 +2999,9 @@ def get_adjusted_font(image, text):
     while max_size > 8:
         status_str = "Status: Calculating title font size %u" % max_size
         app_status_label.config(text=status_str, fg='black')
-        font = ImageFont.truetype('DejaVuSans-Bold.ttf', max_size)
+        font = font_manager.FontProperties(family='sans-serif', weight='bold')
+        file = font_manager.findfont(font)
+        font = ImageFont.truetype(file, max_size)
         try_again = False
         num_lines = 0
         for line in lines:
@@ -2903,7 +3048,6 @@ def video_create_title():
         title_duration = max(title_duration, 3)    # no less than 3 sec
         title_num_frames = min(title_duration * VideoFps, frames_to_encode-1)
         # Custom font style and font size
-        #myFont = ImageFont.truetype('FreeMonoBold.ttf', 96)
         img = Image.open(os.path.join(TargetDir, FrameOutputFilenamePattern % (StartFrame + first_absolute_frame)))
         myFont, num_lines = get_adjusted_font(img, TargetVideoTitle)
         if myFont == 0:
@@ -3128,27 +3272,22 @@ Application top level functions
 
 def multiprocessing_init():
     global num_threads
-    global frame_encoding_queue, frame_encoding_event, frame_display_queue
+    global frame_encoding_queue, subprocess_event_queue
 
     num_cores = os.cpu_count()
 
-    if num_cores is not None:
-        logging.debug(f"{num_cores} cores available")
-        num_threads = int(num_cores/2)
-    else:
-        logging.debug("Unable to determine number of cores available")
-        num_threads = 4
+    if num_threads == 0:
+        if num_cores is not None:
+            logging.debug(f"{num_cores} cores available")
+            num_threads = int(num_cores/2)
+        else:
+            logging.debug("Unable to determine number of cores available")
+            num_threads = 4
 
     logging.debug(f"Creating {num_threads} threads")
 
     frame_encoding_queue = queue.Queue(maxsize=20)
-    frame_display_queue = queue.Queue(maxsize=20)
-    frame_encoding_event = threading.Event()    # Not really used, thread exists when receiving specific message
-    frame_encoding_thread_list = []
-    for i in range(0, num_threads):
-        frame_encoding_thread_list.append(threading.Thread(target=frame_encoding_thread, args=(frame_encoding_queue, frame_encoding_event, i)))
-        frame_encoding_thread_list[i].start()
-    logging.debug(f"{num_threads} threads initialized")
+    subprocess_event_queue = queue.Queue(maxsize=20)
 
 
 def init_display():
@@ -3859,12 +3998,12 @@ def build_ui():
 def exit_app():  # Exit Application
     global win
     global active_threads
-    global frame_encoding_event, frame_encoding_queue
+    global frame_encoding_event, frame_encoding_queue, num_threads
 
     # Terminate threads
     # frame_encoding_event.set()
     for i in range(0, num_threads):
-        frame_encoding_queue.put(END_TOKEN)
+        frame_encoding_queue.put((END_TOKEN, 0))
         logging.debug("Inserting end token to encoding queue")
 
     while active_threads > 0:
@@ -3896,6 +4035,7 @@ def main(argv):
     global GenerateCsv
     global suspend_on_joblist_end
     global BatchAutostart
+    global num_threads
 
     LoggingMode = "INFO"
 
@@ -3919,7 +4059,7 @@ def main(argv):
     film_bw_template =  cv2.imread(pattern_bw_filename, 0)
     film_wb_template =  cv2.imread(pattern_wb_filename, 0)
 
-    opts, args = getopt.getopt(argv, "hiel:dcs")
+    opts, args = getopt.getopt(argv, "hiel:dcst:")
 
     for opt, arg in opts:
         if opt == '-l':
@@ -3934,6 +4074,8 @@ def main(argv):
             is_demo = True
         elif opt == '-s':
             BatchAutostart = True
+        if opt == '-t':
+            num_threads = int(arg)
         elif opt == '-h':
             print("AfterScan")
             print("  -l <log mode>  Set log level:")
@@ -3942,6 +4084,7 @@ def main(argv):
             print("  -e             Enable expert mode")
             print("  -c             Generate CSV file with misaligned frames")
             print("  -s             Initiate batch on startup (and suspend on batch completion)")
+            print("  -t <num>       Number of threads")
             exit()
 
     LogLevel = getattr(logging, LoggingMode.upper(), None)
