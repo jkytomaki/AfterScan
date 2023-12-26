@@ -1,15 +1,18 @@
 # AfterScan - R8/S8 film post-scan utility 
 
-This utility is intended to handle the basic post-processing after film scanning is completed, mainly stabilizing and cropping.
+AfterScan can handle several post-processing tasks once film scanning is completed in ALT-Scann8.
 
 Originally created for the T-Scann 8 project (Torulf Holmström, http://tscann8.torulf.com/index.html), but probably can be used for other frame-by-frame film scanners as well.
 
-Actions performed by this tool on the captured frames are:
+Actions that can be performed by AfterScan include:
 - Stabilization (taking the film sprocket hole as reference)
 - Cropping
+- Image sharpening
+- Noise removal
+- Exposure fusion
 - Video generation
 
-And that's about it. Other post-processing jobs (film cleanup, color correction) should be done with other tools to be found elsewhere.
+And that's about it. Other post-processing jobs (color correction) can be done, if required, with other tools.
 
 This tool relies in the following open source projects to achieve its objectives. Need to be installed in the system used to run AfterScan:
 * [Python](https://www.python.org/)
