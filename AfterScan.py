@@ -19,7 +19,7 @@ __author__ = 'Juan Remirez de Esparza'
 __copyright__ = "Copyright 2022, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
-__version__ = "1.8.12"
+__version__ = "1.8.13"
 __date__ = "2023-12-19"
 __version_highlight__ = "Afterscan multithread - Fix Windows specific issues"
 __maintainer__ = "Juan Remirez de Esparza"
@@ -813,6 +813,7 @@ def job_list_add_current():
         entry_name = entry_name + ", " + resolution_dropdown_selected.get()
 
     save_project = True
+    item_index = 'end'
     if entry_name in job_list:
         if tk.messagebox.askyesno(
                 "Job already exists",
