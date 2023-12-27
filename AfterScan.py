@@ -19,8 +19,8 @@ __author__ = 'Juan Remirez de Esparza'
 __copyright__ = "Copyright 2022, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
-__version__ = "1.8.13"
-__date__ = "2023-12-19"
+__version__ = "1.8.14"
+__date__ = "2023-12-27"
 __version_highlight__ = "Afterscan multithread - Fix Windows specific issues"
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
@@ -2775,17 +2775,15 @@ def frame_encode(frame_idx):
             img = crop_image(img, CropTopLeft, CropBottomRight)
         else:
             img = even_image(img)
-        if perform_sharpness.get():
-            # Sharpness code taken from cpixip@Kinograph
-            # https://forums.kinograph.cc/t/in-defense-of-hdr-and-4k-8mm-super8/2026/25
-            sigma = 1.0
-            amount = 2.0
-            smoothed = cv2.GaussianBlur(img, (0, 0), sigma)
-            laplace = cv2.Laplacian(smoothed, cv2.CV_32F)
-            img = img - amount * laplace
-            img = np.uint8(img)
         if perform_denoise.get():
             img = cv2.fastNlMeansDenoisingColored(img, None, 5, 5, 21, 7)
+        if perform_sharpness.get():
+            # Sharpness code taken from https://www.educative.io/answers/how-to-sharpen-a-blurred-image-using-opencv
+            sharpen_filter = np.array([[-1, -1, -1],
+                                       [-1, 9, -1],
+                                       [-1, -1, -1]])
+            # applying kernels to the input image to get the sharpened image
+            img = cv2.filter2D(img, -1, sharpen_filter)
 
         # Before we used to display every other frame, but just discovered that it makes no difference to performance
         # Instead of displaying image, we add it to a queue to be processed in main loop
