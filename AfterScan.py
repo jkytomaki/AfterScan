@@ -19,9 +19,9 @@ __author__ = 'Juan Remirez de Esparza'
 __copyright__ = "Copyright 2022, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
-__version__ = "1.8.15"
+__version__ = "1.8.16"
 __date__ = "2023-12-29"
-__version_highlight__ = "Bugfix - UI not updated when encoding fragments from same source in non-sequential order"
+__version_highlight__ = "HDR - Change to allow handlign between 2 and 5 exposures in HDR mode"
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
 __status__ = "Development"
@@ -2745,21 +2745,27 @@ def frame_encode(frame_idx):
         # read image
         img = cv2.imread(file1, cv2.IMREAD_UNCHANGED)
         img_ref = img   # Reference image is the same image for standard capture
+        # Check if HDR frames exist. Can handle between 2 and 5
         file2 = os.path.join(SourceDir, FrameHdrInputFilenamePattern % (frame_idx + first_absolute_frame, 2))
         if os.path.isfile(file2):   # If hdr frames exist, add them
+            img_ref = img  # Override stabilization reference with HDR#1
+            images_to_merge.clear()
+            images_to_merge.append(img_ref)
+            images_to_merge.append(cv2.imread(file2, cv2.IMREAD_UNCHANGED))
             file3 = os.path.join(SourceDir, FrameHdrInputFilenamePattern % (frame_idx + first_absolute_frame, 3))
-            file4 = os.path.join(SourceDir, FrameHdrInputFilenamePattern % (frame_idx + first_absolute_frame, 4))
-            if os.path.isfile(file3) and os.path.isfile(file4):   # Double check to make sure all hdr frames present
-                images_to_merge.clear()
-                img_ref = cv2.imread(file1, cv2.IMREAD_UNCHANGED)  # Override stabilization reference with HDR#1
-                images_to_merge.append(img_ref)
-                images_to_merge.append(cv2.imread(file2, cv2.IMREAD_UNCHANGED))
+            if os.path.isfile(file3):  # If hdr frames exist, add them
                 images_to_merge.append(cv2.imread(file3, cv2.IMREAD_UNCHANGED))
-                images_to_merge.append(cv2.imread(file4, cv2.IMREAD_UNCHANGED))
-                img = MergeMertens.process(images_to_merge)
-                img = img - img.min()  # Now between 0 and 8674
-                img = img / img.max() * 255
-                img = np.uint8(img)
+                file4 = os.path.join(SourceDir, FrameHdrInputFilenamePattern % (frame_idx + first_absolute_frame, 4))
+                if os.path.isfile(file4):  # If hdr frames exist, add them
+                    images_to_merge.append(cv2.imread(file4, cv2.IMREAD_UNCHANGED))
+                    file5 = os.path.join(SourceDir, FrameHdrInputFilenamePattern % (frame_idx + first_absolute_frame, 5))
+                    if os.path.isfile(file5):  # If hdr frames exist, add them
+                        images_to_merge.append(cv2.imread(file5, cv2.IMREAD_UNCHANGED))
+
+            img = MergeMertens.process(images_to_merge)
+            img = img - img.min()  # Now between 0 and 8674
+            img = img / img.max() * 255
+            img = np.uint8(img)
 
     if img is None:
         logging.error(
