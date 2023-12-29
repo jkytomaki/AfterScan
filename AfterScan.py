@@ -2132,16 +2132,15 @@ def display_image(img):
 
     win.update()
 
-
+# Display frames while video encoding is ongoing
+# No need to care about sequencing since video encoding process in AfterScan is single threaded
 def display_output_frame_by_number(frame_number):
     global StartFrame
     global TargetDirFileList
-    global last_displayed_image
 
     TargetFile = TargetDir + '/' + FrameOutputFilenamePattern % (StartFrame + frame_number)
 
-    if TargetFile in TargetDirFileList and frame_number > last_displayed_image:
-        last_displayed_image = frame_number
+    if TargetFile in TargetDirFileList:
         img = cv2.imread(TargetFile, cv2.IMREAD_UNCHANGED)
         display_image(img)
 
@@ -2873,7 +2872,7 @@ def check_subprocess_event_queue(user_terminated):
                 target_file = os.path.join(TargetDir, FrameOutputFilenamePattern % (first_absolute_frame + frame_idx))
                 cv2.imwrite(target_file, img)
             if not user_terminated:    # Display image
-                if message[1] >= last_displayed_image:
+                if frame_idx >= last_displayed_image:
                     last_displayed_image = frame_idx
                     display_image(img)
                     # Update UI with progress so far (double check we have not ended, it might happen during frame encoding)
@@ -3240,6 +3239,7 @@ def video_generation_loop():
     elif ffmpeg_encoding_status == ffmpeg_state.Completed:
         status_str = "Status: Generating video 100%"
         app_status_label.config(text=status_str, fg='black')
+        last_displayed_image = 0
         # And display results
         if ffmpeg_success:
             logging.debug("Video generated OK: %s", os.path.join(VideoTargetDir, TargetVideoFilename))
