@@ -19,9 +19,9 @@ __author__ = 'Juan Remirez de Esparza'
 __copyright__ = "Copyright 2022, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
-__version__ = "1.8.16"
+__version__ = "1.8.17"
 __date__ = "2023-12-29"
-__version_highlight__ = "HDR - Change to allow handlign between 2 and 5 exposures in HDR mode"
+__version_highlight__ = "HDR - Change to allow handling between 2 and 5 exposures in HDR mode"
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
 __status__ = "Development"
@@ -2748,10 +2748,10 @@ def frame_encode(frame_idx):
         # Check if HDR frames exist. Can handle between 2 and 5
         file2 = os.path.join(SourceDir, FrameHdrInputFilenamePattern % (frame_idx + first_absolute_frame, 2))
         if os.path.isfile(file2):   # If hdr frames exist, add them
-            img_ref = img  # Override stabilization reference with HDR#1
             images_to_merge.clear()
+            images_to_merge.append(img_ref)     # Add first frame
+            img_ref = cv2.imread(file2, cv2.IMREAD_UNCHANGED) # Override stabilization reference with HDR#2
             images_to_merge.append(img_ref)
-            images_to_merge.append(cv2.imread(file2, cv2.IMREAD_UNCHANGED))
             file3 = os.path.join(SourceDir, FrameHdrInputFilenamePattern % (frame_idx + first_absolute_frame, 3))
             if os.path.isfile(file3):  # If hdr frames exist, add them
                 images_to_merge.append(cv2.imread(file3, cv2.IMREAD_UNCHANGED))
