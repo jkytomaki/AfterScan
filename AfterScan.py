@@ -19,9 +19,9 @@ __author__ = 'Juan Remirez de Esparza'
 __copyright__ = "Copyright 2022, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
-__version__ = "1.8.14"
-__date__ = "2023-12-27"
-__version_highlight__ = "Afterscan multithread - Fix Windows specific issues"
+__version__ = "1.8.15"
+__date__ = "2023-12-29"
+__version_highlight__ = "Bugfix - UI not updated when encoding fragments from same source in non-sequential order"
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
 __status__ = "Development"
@@ -2917,7 +2917,7 @@ def frame_generation_loop():
         app_status_label.config(text=status_str, fg='green')
         # Clear display queue
         #subprocess_event_queue.queue.clear()
-        #last_displayed_image = 0
+        last_displayed_image = 0
         win.update()
         # Refresh Target dir file list
         TargetDirFileList = sorted(list(glob(os.path.join(
@@ -2946,6 +2946,7 @@ def frame_generation_loop():
         logging.debug("User requested termination")
         status_str = "Status: Stopping encoding..."
         app_status_label.config(text=status_str, fg='orange')
+        last_displayed_image = 0
         win.update()
         # Close CSV file
         if GenerateCsv:
