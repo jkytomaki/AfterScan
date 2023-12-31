@@ -19,9 +19,9 @@ __author__ = 'Juan Remirez de Esparza'
 __copyright__ = "Copyright 2022, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
-__version__ = "1.8.18"
+__version__ = "1.8.19"
 __date__ = "2023-12-31"
-__version_highlight__ = "HDR - Improve stabilization algorithm in HDR mode"
+__version_highlight__ = "Cleanup thread termination code + job rerun UI improvement"
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
 __status__ = "Development"
@@ -990,7 +990,14 @@ def job_list_load_current(event):
 
 
 def job_list_rerun_current(event):
+    global job_list, job_list_listbox
     job_list_rerun_selected()
+    selected_index = job_list_listbox.curselection()
+    if selected_index:
+        idx = selected_index[0]
+        job_list_listbox.selection_clear(0, tk.END)
+        if idx < job_list_listbox.size() - 1:
+            job_list_listbox.selection_set(idx + 1)
 
 
 def get_job_listbox_index(CurrentJobEntry):
@@ -1016,18 +1023,18 @@ def job_list_move_up(event):
     global job_list_listbox, job_list
     selected_index = job_list_listbox.curselection()
     if selected_index:
-        selected_index = selected_index[0]
-        if selected_index > 0:
-            item = job_list_listbox.get(selected_index)
-            job_list_listbox.delete(selected_index)
-            job_list_listbox.insert(selected_index - 1, item)
+        idx = selected_index[0]
+        if idx > 0:
+            item = job_list_listbox.get(idx)
+            job_list_listbox.delete(idx)
+            job_list_listbox.insert(idx - 1, item)
             job_list_listbox.selection_clear(0, tk.END)
-            job_list_listbox.selection_set(selected_index - 1)
-            job_list_listbox.activate(selected_index - 1)
-            job_list_listbox.see(selected_index - 1)  # Scroll to the new selection
+            job_list_listbox.selection_set(idx - 1)
+            job_list_listbox.activate(idx - 1)
+            job_list_listbox.see(idx - 1)  # Scroll to the new selection
             if item in job_list:
                 if job_list[item]['done'] == True:
-                    job_list_listbox.itemconfig(selected_index - 1, fg='green')
+                    job_list_listbox.itemconfig(idx - 1, fg='green')
             sync_job_list_with_listbox()
             #return "break"
 
@@ -1036,15 +1043,15 @@ def job_list_move_down(event):
     global job_list_listbox, job_list
     selected_index = job_list_listbox.curselection()
     if selected_index:
-        selected_index = selected_index[0]
-        if selected_index < job_list_listbox.size() - 1:
-            item = job_list_listbox.get(selected_index)
-            job_list_listbox.delete(selected_index)
-            job_list_listbox.insert(selected_index + 1, item)
+        idx = selected_index[0]
+        if idx < job_list_listbox.size() - 1:
+            item = job_list_listbox.get(idx)
+            job_list_listbox.delete(idx)
+            job_list_listbox.insert(idx + 1, item)
             job_list_listbox.selection_clear(0, tk.END)
-            job_list_listbox.selection_set(selected_index + 1)
-            job_list_listbox.activate(selected_index + 1)
-            job_list_listbox.see(selected_index + 1)  # Scroll to the new selection
+            job_list_listbox.selection_set(idx + 1)
+            job_list_listbox.activate(idx + 1)
+            job_list_listbox.see(idx + 1)  # Scroll to the new selection
             if item in job_list:
                 if job_list[item]['done'] == True:
                     job_list_listbox.itemconfig(selected_index + 1, fg='green')
@@ -2853,19 +2860,16 @@ def frame_update_ui(frame_idx):
 
 def frame_encoding_thread(queue, event, id):
     global SourceDir
-    global ScanStopRequested, ConvertLoopRunning
+    global ConvertLoopExitRequested, ConvertLoopRunning
     global active_threads, working_threads
     global last_displayed_image
 
     try:
         while not event.is_set():
             message = queue.get()
-            if message[0] != "encode_frame":
-                print(f"t{id}: Rx message {message[0]}")
             if not os.path.isdir(SourceDir):
                 logging.error(f"Source dir {SourceDir} unmounted: Stop encoding session")
-                ScanStopRequested = True    # If target dir does not exist, stop scan
-                break
+                ConvertLoopExitRequested = True    # If target dir does not exist, stop scan
             if message[0] == "encode_frame":
                 # Encode frame
                 frame_encode(message[1])
@@ -2875,7 +2879,7 @@ def frame_encoding_thread(queue, event, id):
                         frame_update_ui(message[1])
             elif message[0] == END_TOKEN:
                 logging.debug(f"Thread {id}: Received terminate token, exiting")
-                break
+                ConvertLoopExitRequested = True    # If target dir does not exist, stop scan
         logging.debug(f"Exiting frame_encoding_thread n.{id}")
         queue_item = tuple(("exit_thread", id))
         subprocess_event_queue.put(queue_item)
@@ -2895,7 +2899,6 @@ def check_subprocess_event_queue(user_terminated):
     # Process requests coming from workers
     while not subprocess_event_queue.empty():
         message = subprocess_event_queue.get()
-        print(f"Got {message[0]} from thread queue")
         # Display encoded images from queue
         if message[0] == "processed_image":
             img = message[2]
