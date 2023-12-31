@@ -19,9 +19,9 @@ __author__ = 'Juan Remirez de Esparza'
 __copyright__ = "Copyright 2022, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
-__version__ = "1.8.17"
-__date__ = "2023-12-29"
-__version_highlight__ = "HDR - Change to allow handling between 2 and 5 exposures in HDR mode"
+__version__ = "1.8.18"
+__date__ = "2023-12-31"
+__version_highlight__ = "HDR - Improve stabilization algorithm in HDR mode"
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
 __status__ = "Development"
@@ -827,7 +827,8 @@ def job_list_add_current():
     if save_project:
         save_project_config()  # Make sure all current settings are in project_config
         job_list[entry_name] = {'project': project_config.copy(), 'done': False}
-        job_list[entry_name]['project']['Done'] = False    # Set Done to False in case of editing an existing job
+        job_list[entry_name]['project']['done'] = False    # Set Done to False in case of editing an existing job
+        job_list[entry_name]['project']['Attempted'] = False    # Set Attempted to False in case of editing an existing job
         # If a custom pattern is used, copy it with the name of the job, and change it in the joblist/project item
         if CustomTemplateDefined and os.path.isfile(pattern_filename_custom):
             CustomTemplateDir = os.path.dirname(pattern_filename_custom)    # should be aux_dir, but better be safe
@@ -897,6 +898,7 @@ def job_list_rerun_selected():
         entry = job_list_listbox.get(selected)
 
         job_list[entry]['done'] = not job_list[entry]['done']
+        job_list[entry]['attempted'] = job_list[entry]['done']
         job_list_listbox.itemconfig(selected, fg='green' if job_list[entry]['done'] else 'black')
         rerun_job_btn.config(text='Rerun job' if job_list[entry]['done'] else 'Mark as run')
 
@@ -916,7 +918,8 @@ def load_job_list():
         f = open(job_list_filename)
         job_list = json.load(f)
         for entry in job_list:
-            job_list_listbox.insert('end', entry)
+            job_list_listbox.insert('end', entry)   # Add to listbox
+            job_list[entry]['attempted'] = job_list[entry]['done']  # Add default value for new json field
         f.close()
         idx = 0
         for entry in job_list:
@@ -934,6 +937,8 @@ def start_processing_job_list():
     else:
         BatchJobRunning = True
         widget_status_update(DISABLED, start_batch_btn)
+        for entry in job_list:
+            job_list[entry]['attempted'] = job_list[entry]['done'] # Reset attempted flag for those not done yet
         job_processing_loop()
 
 
@@ -947,7 +952,8 @@ def job_processing_loop():
 
     job_started = False
     for entry in job_list:
-        if  job_list[entry]['done'] == False:
+        if  not job_list[entry]['done'] and not job_list[entry]['attempted']:
+            job_list[entry]['attempted'] = True
             job_list_listbox.selection_clear(0, END)
             idx = job_list_listbox.get(0, "end").index(entry)
             job_list_listbox.itemconfig(idx, fg='blue')
@@ -2184,7 +2190,7 @@ def rotate_image(img):
     rotated = cv2.warpAffine(img, M, (w, h))
     return rotated
 
-def stabilize_image(frame_idx, img, img_ref):
+def stabilize_image(frame_idx, img, img_ref, img_ref_alt = None):
     global SourceDirFileList
     global first_absolute_frame, StartFrame
     global HoleSearchTopLeft, HoleSearchBottomRight
@@ -2197,24 +2203,25 @@ def stabilize_image(frame_idx, img, img_ref):
     global frame_fill_type, stabilization_type
     global CsvFile, GenerateCsv, CsvFramesOffPercent
     global stabilization_threshold_match_label
-    global stabilization_type
 
     # Get image dimensions to perform image shift later
     width = img_ref.shape[1]
     height = img_ref.shape[0]
 
-    left_stripe_image = get_image_left_stripe(img_ref)
-
     # Search film hole pattern
-    WorkStabilizationThreshold = StabilizationThreshold
-    BestStabilizationThreshold = StabilizationThreshold
+    WorkStabilizationThreshold = 250 # StabilizationThreshold
     if stabilization_type.get() == 'fast':
-        LowerStabilizationThreshold = float(StabilizationThreshold)
+        LowerStabilizationThreshold = 200 # float(StabilizationThreshold)
     else:
         LowerStabilizationThreshold = 50
     best_match_level = 0
     loop_count = 0
     best_match_index = 0
+    best_top_left = [0,0]
+
+    # Get sprocket hole area
+    left_stripe_image = get_image_left_stripe(img_ref)
+    img_ref_alt_used = False
     while True:
         loop_count += 1
         top_left, match_level = match_template(film_hole_template, left_stripe_image, float(WorkStabilizationThreshold))
@@ -2223,18 +2230,32 @@ def stabilize_image(frame_idx, img, img_ref):
         if match_level > best_match_level:
             best_match_index = loop_count
             best_match_level = match_level
-            BestStabilizationThreshold = WorkStabilizationThreshold
-        if loop_count >= 10 and best_match_index == 1:  # If best match is still 1st one after 10 loops, take it
+            best_top_left = top_left
+        if loop_count >= 20 and best_match_index == 1:  # If best match is still 1st one after 10 loops, take it
             # logging.debug("Break -  Thr %s, match_level %.2f, best match level %.2f", WorkStabilizationThreshold, match_level, best_match_level)
-            top_left, match_level = match_template(film_hole_template, left_stripe_image, float(BestStabilizationThreshold))
-            break
+            if not img_ref_alt_used and img_ref_alt is not None:
+                left_stripe_image = get_image_left_stripe(img_ref_alt)
+                WorkStabilizationThreshold = 250  # StabilizationThreshold
+                loop_count = 0
+                img_ref_alt_used = True
+            else:
+                match_level = best_match_level
+                top_left = best_top_left
+                break
         elif float(WorkStabilizationThreshold) > LowerStabilizationThreshold:
             # logging.debug("Match level %.2f, decreasing Thr %s", match_level, WorkStabilizationThreshold)
-            WorkStabilizationThreshold = float(WorkStabilizationThreshold) - 20
+            WorkStabilizationThreshold = float(WorkStabilizationThreshold) - (20 if stabilization_type.get() == 'fast' else 10)
         else:
             # logging.debug("Break, exhausted list. Best match %.2f", best_match_level)
-            top_left, match_level = match_template(film_hole_template, left_stripe_image, float(BestStabilizationThreshold))
-            break
+            if not img_ref_alt_used and img_ref_alt is not None:
+                left_stripe_image = get_image_left_stripe(img_ref_alt)
+                WorkStabilizationThreshold = 250  # StabilizationThreshold
+                loop_count = 0
+                img_ref_alt_used = True
+            else:
+                match_level = best_match_level
+                top_left = best_top_left
+                break
     if top_left[1] != -1 and match_level > 0.7:
         # The coordinates returned by match template are relative to the
         # cropped image. In order to calculate the correct values to provide
@@ -2660,9 +2681,12 @@ def start_convert():
         elif generate_video.get():
             # first check if resolution has been set
             if resolution_dict[project_config["VideoResolution"]] == '':
-                logging.error("Error, no video resolution selected")
-                tk.messagebox.showerror("Error!", "Please specify video resolution.")
-                generation_exit()
+                if not BatchJobRunning:
+                    logging.error("Error, no video resolution selected")
+                    tk.messagebox.showerror("Error!", "Please specify video resolution.")
+                else:
+                    logging.error(f"Cannot generate video {TargetVideoFilename}, no video resolution selected")
+                generation_exit(success = False)
             else:
                 ffmpeg_success = False
                 ffmpeg_encoding_status = ffmpeg_state.Pending
@@ -2670,7 +2694,7 @@ def start_convert():
                 win.after(1, video_generation_loop)
 
 
-def generation_exit():
+def generation_exit(success = True):
     global win
     global ConvertLoopExitRequested
     global ConvertLoopRunning
@@ -2689,10 +2713,15 @@ def generation_exit():
                 if idx != -1:
                     job_list_listbox.itemconfig(idx, fg='black')
         else:
-            job_list[CurrentJobEntry]['done'] = True    # Flag as done
-            idx = get_job_listbox_index(CurrentJobEntry)
-            if idx != -1:
-                job_list_listbox.itemconfig(idx, fg='green')
+            if success:
+                job_list[CurrentJobEntry]['done'] = True    # Flag as done
+                idx = get_job_listbox_index(CurrentJobEntry)
+                if idx != -1:
+                    job_list_listbox.itemconfig(idx, fg='green')
+            else:
+                idx = get_job_listbox_index(CurrentJobEntry)
+                if idx != -1:
+                    job_list_listbox.itemconfig(idx, fg='black')
             if suspend_on_completion.get() == 'job_completion':
                 stop_batch = True # Exit convert loop before suspend
                 go_suspend = True
@@ -2723,6 +2752,7 @@ def frame_encode(frame_idx):
     global subprocess_event_queue
 
     images_to_merge = []
+    img_ref_aux = None
 
     # Get current file(s)
     if HdrFilesOnly:    # Legacy HDR (before 2 Dec 2023): Dedicated filename
@@ -2750,6 +2780,7 @@ def frame_encode(frame_idx):
         if os.path.isfile(file2):   # If hdr frames exist, add them
             images_to_merge.clear()
             images_to_merge.append(img_ref)     # Add first frame
+            img_ref_aux = img_ref
             img_ref = cv2.imread(file2, cv2.IMREAD_UNCHANGED) # Override stabilization reference with HDR#2
             images_to_merge.append(img_ref)
             file3 = os.path.join(SourceDir, FrameHdrInputFilenamePattern % (frame_idx + first_absolute_frame, 3))
@@ -2775,7 +2806,7 @@ def frame_encode(frame_idx):
         if perform_rotation.get():
             img = rotate_image(img)
         if perform_stabilization.get():
-            img = stabilize_image(frame_idx, img, img_ref)
+            img = stabilize_image(frame_idx, img, img_ref, img_ref_aux)
         if perform_cropping.get():
             img = crop_image(img, CropTopLeft, CropBottomRight)
         else:
@@ -2964,7 +2995,7 @@ def frame_generation_loop():
         print("Exiting threads terminate")
         status_str = "Status: Cancelled by user"
         app_status_label.config(text=status_str, fg='red')
-        generation_exit()
+        generation_exit(success = False)
         stabilization_threshold_match_label.config(fg='lightgray', bg='lightgray', text='')
         FPM_CalculatedValue = -1
         win.update()
@@ -3178,23 +3209,29 @@ def video_generation_loop():
         if frames_to_encode == 0:
             status_str = "Status: No frames to encode"
             app_status_label.config(text=status_str, fg='red')
-            tk.messagebox.showwarning(
-                "No frames match range to generate video",
-                "Video cannot be generated.\r\n"
-                "No frames in target folder match the specified range.\r\n"
-                "Please review your settings and try again.")
-            generation_exit()  # Restore all settings to normal
+            if not BatchJobRunning:
+                tk.messagebox.showwarning(
+                    "No frames match range to generate video",
+                    "Video cannot be generated.\r\n"
+                    "No frames in target folder match the specified range.\r\n"
+                    "Please review your settings and try again.")
+            else:
+                logging.error(f"Cannot generate video {TargetVideoFilename}, no frames to encode")
+            generation_exit(success = False)  # Restore all settings to normal
         elif not valid_generated_frame_range():
             status_str = "Status: No frames to encode"
             app_status_label.config(text=status_str, fg='red')
-            tk.messagebox.showwarning(
-                "Frames missing",
-                "Video cannot be generated.\r\n"
-                f"Not all frames in specified range ({StartFrame+first_absolute_frame}, {StartFrame+first_absolute_frame+frames_to_encode}) exist in target folder to "
-                "allow video generation.\r\n"
-                "Please regenerate frames making sure option "
-                "\'Skip Frame regeneration\' is not selected, and try again.")
-            generation_exit()  # Restore all settings to normal
+            if not BatchJobRunning:
+                tk.messagebox.showwarning(
+                    "Frames missing",
+                    "Video cannot be generated.\r\n"
+                    f"Not all frames in specified range ({StartFrame+first_absolute_frame}, {StartFrame+first_absolute_frame+frames_to_encode}) exist in target folder to "
+                    "allow video generation.\r\n"
+                    "Please regenerate frames making sure option "
+                    "\'Skip Frame regeneration\' is not selected, and try again.")
+            else:
+                logging.error(f"Cannot generate video {TargetVideoFilename}, due to some frames missing")
+            generation_exit(success = False)  # Restore all settings to normal
         else:
             get_target_dir_file_list()  # Refresh target dir file list here as well for batch mode encoding
             logging.debug(
@@ -3219,7 +3256,7 @@ def video_generation_loop():
                 "FFMPEG encoding interrupted by user",
                 "\r\nVideo generation by FFMPEG has been stopped by user "
                 "action.")
-            generation_exit()  # Restore all settings to normal
+            generation_exit(success = False)  # Restore all settings to normal
             os.remove(os.path.join(VideoTargetDir, TargetVideoFilename))
         else:
             line = ffmpeg_process.stdout.readline().strip()
@@ -3267,7 +3304,9 @@ def video_generation_loop():
                     "FFMPEG encoding failed",
                     "\r\nVideo generation by FFMPEG has failed\r\nPlease "
                     "check the logs to determine what the problem was.")
-        generation_exit()  # Restore all settings to normal
+            else:
+                logging.error(f"FFMPEG encoding failed for video {TargetVideoFilename}")
+        generation_exit(success = ffmpeg_success)  # Restore all settings to normal
 
 
 """
