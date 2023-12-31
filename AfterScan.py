@@ -19,7 +19,7 @@ __author__ = 'Juan Remirez de Esparza'
 __copyright__ = "Copyright 2022, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
-__version__ = "1.8.19"
+__version__ = "1.8.20"
 __date__ = "2023-12-31"
 __version_highlight__ = "Cleanup thread termination code + job rerun UI improvement"
 __maintainer__ = "Juan Remirez de Esparza"
@@ -2043,6 +2043,7 @@ def start_threads():
     frame_encoding_thread_list = []
     frame_encoding_event = threading.Event()
     for i in range(0, num_threads):
+        logging.debug(f"Thread {i} initialized")
         frame_encoding_thread_list.append(threading.Thread(target=frame_encoding_thread, args=(frame_encoding_queue, frame_encoding_event, i)))
         frame_encoding_thread_list[i].start()
         active_threads += 1
@@ -2057,15 +2058,11 @@ def terminate_threads(user_terminated):
     if user_terminated:     # User terminated processing: Queue might be full, make space for End Token
         empty_queue(frame_encoding_queue)
 
-    # Multiprocessing: Now threads/child processes will be alive only during encoding, no more need to terminate them here
-    for i in range(0, num_threads):
-        logging.debug("Inserting end token to read queue for threads, in case they are stuck reading the queue")
-        frame_encoding_queue.put((END_TOKEN, 0))
-
     # Terminate threads
     logging.debug("Signaling exit event for threads")
     frame_encoding_event.set()
     while active_threads > 0:
+        frame_encoding_queue.put((END_TOKEN, 0))    # Threads might be stuck reading from queue, ass item to allow them to exit
         logging.debug(f"Waiting for threads to stop ({active_threads} remaining)")
         check_subprocess_event_queue(user_terminated)
         win.update()
@@ -2869,7 +2866,6 @@ def frame_encoding_thread(queue, event, id):
             message = queue.get()
             if not os.path.isdir(SourceDir):
                 logging.error(f"Source dir {SourceDir} unmounted: Stop encoding session")
-                ConvertLoopExitRequested = True    # If target dir does not exist, stop scan
             if message[0] == "encode_frame":
                 # Encode frame
                 frame_encode(message[1])
@@ -2879,7 +2875,6 @@ def frame_encoding_thread(queue, event, id):
                         frame_update_ui(message[1])
             elif message[0] == END_TOKEN:
                 logging.debug(f"Thread {id}: Received terminate token, exiting")
-                ConvertLoopExitRequested = True    # If target dir does not exist, stop scan
         logging.debug(f"Exiting frame_encoding_thread n.{id}")
         queue_item = tuple(("exit_thread", id))
         subprocess_event_queue.put(queue_item)
