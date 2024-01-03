@@ -19,8 +19,8 @@ __author__ = 'Juan Remirez de Esparza'
 __copyright__ = "Copyright 2022, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
-__version__ = "1.8.20"
-__date__ = "2023-12-31"
+__version__ = "1.8.21"
+__date__ = "2024-01-03"
 __version_highlight__ = "Cleanup thread termination code + job rerun UI improvement"
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
@@ -301,7 +301,7 @@ def is_a_number(string):
 def empty_queue(q):
     while not q.empty():
         item = q.get()
-        print(f"Emptying queue: Got {item[0]}")
+        logging.debug(f"Emptying queue: Got {item[0]}")
 
 """
 ####################################
@@ -2072,10 +2072,10 @@ def terminate_threads(user_terminated):
     logging.debug("Empty any remaining items in frames to read queue")
     empty_queue(frame_encoding_queue)
 
-    print("Thread queues content>>>>")
+    logging.debug("Thread queues content>>>>")
     while not frame_encoding_queue.empty():
-        print(frame_encoding_queue.get())
-    print("<<<<Thread queues content")
+        logging.debug(frame_encoding_queue.get())
+    logging.debug("<<<<Thread queues content")
 
     try:
         for i in range(0, num_threads):
@@ -2084,15 +2084,15 @@ def terminate_threads(user_terminated):
                 frame_encoding_thread_list[i].join()
             logging.debug(f"Thread {i} finalized {frame_encoding_thread_list[i]}")
     except Exception as e:
-        print(f"Exception during thread {i} join {e}")
+        logging.error(f"Exception during thread {i} join {e}")
 
     frame_encoding_queue.put(LAST_ITEM_TOKEN)
-    print("Thread Queues content (after join)>>>>")
+    logging.debug("Thread Queues content (after join)>>>>")
     item = None
     while item != LAST_ITEM_TOKEN:
         item = frame_encoding_queue.get()
-        print(item)
-    print("<<<<Thread Queues content (after join)")
+        logging.debug(item)
+    logging.debug("<<<<Thread Queues content (after join)")
 
     # Reinitilize variables used to avoid out-of-order UI update
     last_displayed_image = 0
@@ -2536,7 +2536,7 @@ def valid_generated_frame_range():
         if file_to_check in TargetDirFileList:
             file_count += 1
         else:
-            logging.debug("File %s missing.", file_to_check)
+            logging.error("File %s missing.", file_to_check)
 
     logging.debug("Checking frame range %i-%i: %i files found",
                   first_absolute_frame + StartFrame,
@@ -2988,9 +2988,9 @@ def frame_generation_loop():
             os.unlink(CsvPathName)  # Processing was stopped half-way, delete csv file as results are not representative
         # Stop workers
         terminate_threads(True)
-        print(f"frames_to_encode_queue.qsize = {frame_encoding_queue.qsize()}")
-        print(f"subprocess_event_queue.qsize = {subprocess_event_queue.qsize()}")
-        print("Exiting threads terminate")
+        logging.debug(f"frames_to_encode_queue.qsize = {frame_encoding_queue.qsize()}")
+        logging.debug(f"subprocess_event_queue.qsize = {subprocess_event_queue.qsize()}")
+        logging.debug("Exiting threads terminate")
         status_str = "Status: Cancelled by user"
         app_status_label.config(text=status_str, fg='red')
         generation_exit(success = False)
@@ -3213,8 +3213,7 @@ def video_generation_loop():
                     "Video cannot be generated.\r\n"
                     "No frames in target folder match the specified range.\r\n"
                     "Please review your settings and try again.")
-            else:
-                logging.error(f"Cannot generate video {TargetVideoFilename}, no frames to encode")
+            logging.error(f"Cannot generate video {TargetVideoFilename}, no frames to encode")
             generation_exit(success = False)  # Restore all settings to normal
         elif not valid_generated_frame_range():
             status_str = "Status: No frames to encode"
@@ -3227,8 +3226,8 @@ def video_generation_loop():
                     "allow video generation.\r\n"
                     "Please regenerate frames making sure option "
                     "\'Skip Frame regeneration\' is not selected, and try again.")
-            else:
-                logging.error(f"Cannot generate video {TargetVideoFilename}, due to some frames missing")
+            logging.error(f"Cannot generate video {TargetVideoFilename}, due to some frames missing in range "
+                          f"{StartFrame+first_absolute_frame}, {StartFrame+first_absolute_frame+frames_to_encode}")
             generation_exit(success = False)  # Restore all settings to normal
         else:
             get_target_dir_file_list()  # Refresh target dir file list here as well for batch mode encoding
