@@ -19,9 +19,9 @@ __author__ = 'Juan Remirez de Esparza'
 __copyright__ = "Copyright 2022, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
-__version__ = "1.8.21"
-__date__ = "2024-01-04"
-__version_highlight__ = "Cleanup thread termination code + job rerun UI improvement"
+__version__ = "1.8.22"
+__date__ = "2024-01-05"
+__version_highlight__ = "Improve rectangle selection handling (for cropping and custom template)"
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
 __status__ = "Development"
@@ -201,6 +201,8 @@ RectangleBottomRight = (0, 0)
 RectangleBottomRight = (0, 0)
 CropTopLeft = (0, 0)
 CropBottomRight = (0, 0)
+TemplateTopLeft = (0, 0)
+TemplateBottomRight = (0, 0)
 CustomTemplateDefined = False
 Force43 = False
 Force169 = False
@@ -1544,15 +1546,69 @@ def select_scale_frame(selected_frame):
             frame_scale_refresh_pending = True
 
 
-"""
-##############################
-Second level support functions
-##############################
-(Code below to draw a rectangle to select area to crop or find hole,
-adapted from various authors in Stack Overflow)
-"""
+################################
+# Second level support functions
+################################
 
 
+# Code in this function is taken from Adrian Rosebrock sample, at URL below
+# https://pyimagesearch.com/2015/01/26/multi-scale-template-matching-using-python-opencv/
+def get_best_template_size(img):
+    global film_type
+    # load the default template, convert it to grayscale, and detect edges
+    if film_type.get() == 'S8':
+        pattern_filename = pattern_filename_s8
+    else:
+        pattern_filename = pattern_filename_r8
+    template = cv2.imread(pattern_filename)
+    template = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY)
+    template = cv2.Canny(template, 50, 200)
+    (tH, tW) = template.shape[:2]
+    # cv2.imshow("Template", template)
+    # Handle image to be searched
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    found = None
+    # loop over the scales of the image
+    for scale in np.linspace(0.2, 1.0, 20)[::-1]:
+        # resize the image according to the scale, and keep track
+        # of the ratio of the resizing
+        #resized = imutils.resize(gray, width=int(gray.shape[1] * scale))
+        resized = resize_image(gray, scale * 100)
+        r = gray.shape[1] / float(resized.shape[1])
+        # if the resized image is smaller than the template, then break
+        # from the loop
+        if resized.shape[0] < tH or resized.shape[1] < tW:
+            break
+        # detect edges in the resized, grayscale image and apply template
+        # matching to find the template in the image
+        edged = cv2.Canny(resized, 50, 200)
+        result = cv2.matchTemplate(edged, template, cv2.TM_CCOEFF)
+        (_, maxVal, _, maxLoc) = cv2.minMaxLoc(result)
+        # check to see if the iteration should be visualized
+        # if we have found a new maximum correlation value, then update
+        # the bookkeeping variable
+        if found is None or maxVal > found[0]:
+            found = (maxVal, maxLoc, r)
+
+    # unpack the bookkeeping variable and compute the (x, y) coordinates
+    # of the bounding box based on the resized ratio
+    (_, maxLoc, r) = found
+    (startX, startY) = (int(maxLoc[0] * r), int(maxLoc[1] * r))
+    (endX, endY) = (int((maxLoc[0] + tW) * r), int((maxLoc[1] + tH) * r))
+    # Optimize template rectangle: Maximize horizontally, and for S8, make it taller
+    startX = 0
+    endX = img.shape[1]-1
+    """
+    if film_type.get() == 'S8':
+        startY = startY - template.shape[0]
+        endY = endY + template.shape[0]
+    """
+    return (startX, startY), (endX, endY)
+
+
+
+# (Code below to draw a rectangle to select area to crop or find hole,
+# adapted from various authors in Stack Overflow)
 def draw_rectangle(event, x, y, flags, param):
     global work_image, base_image, original_image
     global rectangle_drawing
@@ -1635,6 +1691,7 @@ def select_rectangle_area(is_cropping=False):
     global rectangle_refresh
     global RectangleTopLeft, RectangleBottomRight
     global CropTopLeft, CropBottomRight
+    global TemplateTopLeft, TemplateBottomRight
     global perform_stabilization, perform_cropping, perform_rotation
     global line_thickness
     global IsCropping
@@ -1645,16 +1702,21 @@ def select_rectangle_area(is_cropping=False):
         return False
 
     retvalue = False
+    ix, iy = -1, -1
+    x_, y_ = 0, 0
+    rectangle_refresh = False
     if is_cropping and CropAreaDefined:
         ix, iy = CropTopLeft[0], CropTopLeft[1]
         x_, y_ = CropBottomRight[0], CropBottomRight[1]
         RectangleTopLeft = CropTopLeft
         RectangleBottomRight = CropBottomRight
         rectangle_refresh = True
-    else:
-        ix, iy = -1, -1
-        x_, y_ = 0, 0
-        rectangle_refresh = False
+    if not is_cropping and TemplateTopLeft != (0, 0) and TemplateBottomRight != (0, 0):  # Custom template definition
+        ix, iy = TemplateTopLeft[0], TemplateTopLeft[1]
+        x_, y_ = TemplateBottomRight[0], TemplateBottomRight[1]
+        RectangleTopLeft = TemplateTopLeft
+        RectangleBottomRight = TemplateBottomRight
+        rectangle_refresh = True
 
     file = SourceDirFileList[CurrentFrame]
 
@@ -1668,6 +1730,16 @@ def select_rectangle_area(is_cropping=False):
     # Stabilize image to make sure target image matches user visual definition
     if is_cropping and perform_stabilization.get():
         original_image = stabilize_image(CurrentFrame, original_image, original_image)
+    # Try to find best template
+    if not is_cropping and TemplateTopLeft == (0, 0) and TemplateBottomRight == (0, 0): # If no template defined,set default
+        top_left, bottom_right = get_best_template_size(original_image)
+        ix = top_left[0]
+        iy = top_left[1]
+        x_ = bottom_right[0]
+        y_ = bottom_right[1]
+        RectangleTopLeft = top_left
+        RectangleBottomRight = bottom_right
+        rectangle_refresh = True
     # Scale area selection image as required
     work_image = np.copy(original_image)
     img_width = work_image.shape[1]
@@ -1679,6 +1751,10 @@ def select_rectangle_area(is_cropping=False):
     # work_image = np.zeros((512,512,3), np.uint8)
     base_image = np.copy(work_image)
     cv2.namedWindow(RectangleWindowTitle, cv2.WINDOW_GUI_NORMAL)
+    # Force the window to have focus (otherwise it won't take any keys)
+    cv2.setWindowProperty(RectangleWindowTitle, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+    cv2.setWindowProperty(RectangleWindowTitle, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_NORMAL)
+    # Capture mouse events
     cv2.setMouseCallback(RectangleWindowTitle, draw_rectangle)
     # rectangle_refresh = False
     cv2.imshow(RectangleWindowTitle, work_image)
@@ -1693,8 +1769,15 @@ def select_rectangle_area(is_cropping=False):
             cv2.rectangle(copy, (ix, iy), (x_, y_), (0, 255, 0), line_thickness)
             cv2.imshow(RectangleWindowTitle, copy)
         k = cv2.waitKeyEx(1) & 0xFF
+        inc_ix = 0
+        inc_x = 0
+        inc_iy = 0
+        inc_y = 0
+        # waitKey is OS dependent. So we'll check lists of possible values for each direction (arrow keys, num pad, letters)
         if not rectangle_drawing:
-            if k in [81, 82, 83, 84]:
+            if k in [81, 82, 83, 84, ord('2'), ord('4'), ord('6'), ord('8'), ord('u'), ord('d'), ord('l'), ord('r'),
+                     ord('U'), ord('D'), ord('L'), ord('R'), ord('w'), ord('W'), ord('t'), ord('T'),
+                     ord('s'), ord('S'), ord('n'), ord('N')]:
                 ix = RectangleTopLeft[0]
                 iy = RectangleTopLeft[1]
                 x_ = RectangleBottomRight[0]
@@ -1702,39 +1785,66 @@ def select_rectangle_area(is_cropping=False):
             if k == 13:  # Enter: Confirm selection
                 retvalue = True
                 break
-            elif k == 82:   # Up
+            elif k in [82, ord('8'), ord('u'), ord('U')]:   # Up
                 if iy > 0:
-                    iy -= 1
-                    y_ -= 1
-                    RectangleTopLeft = (ix, iy)
-                    RectangleBottomRight = (x_, y_)
-            elif k == 84:   # Down
+                    inc_iy = -1
+                    inc_y = -1
+            elif k in [84, ord('2'), ord('d'), ord('D')]:   # Down
                 if y_ < img_height:
-                    iy += 1
-                    y_ += 1
-                    RectangleTopLeft = (ix, iy)
-                    RectangleBottomRight = (x_, y_)
-            elif k == 81:   # Left
+                    inc_iy = 1
+                    inc_y = 1
+            elif k in [81, ord('4'), ord('l'), ord('L')]:   # Left
                 if ix > 0:
-                    ix -= 1
-                    x_ -= 1
-                    RectangleTopLeft = (ix, iy)
-                    RectangleBottomRight = (x_, y_)
-            elif k == 83:   # Right
+                    inc_ix = -1
+                    inc_x = -1
+            elif k in [83, ord('6'), ord('r'), ord('R')]:   # Right
                 if x_ < img_width:
-                    ix += 1
-                    x_ += 1
-                    RectangleTopLeft = (ix, iy)
-                    RectangleBottomRight = (x_, y_)
-            elif k == 27:  # Escape: Restore previous selection, for cropping
+                    inc_ix = 1
+                    inc_x = 1
+            elif k in [ord('w'), ord('W')]:  # wider
+                if x_ - ix < img_width:
+                    if ix > 0:
+                        inc_ix = -1
+                    if x_ < img_width:
+                        inc_x = 1
+            elif k in [ord('n'), ord('N')]:  # narrower
+                if x_ - ix > 4:
+                    inc_ix = 1
+                    inc_x = -1
+            elif k in [ord('t'), ord('T')]:  # taller
+                if y_ - iy < img_height:
+                    if iy > 0:
+                        inc_iy = -1
+                    if y_ < img_height:
+                        inc_y = 1
+            elif k in [ord('s'), ord('S')]:  # shorter
+                if y_ - iy > 4:
+                    inc_iy = 1
+                    inc_y = -1
+            elif k == 27:  # Escape: Restore previous selection, for cropping aand template
                 if is_cropping and CropAreaDefined:
                     RectangleTopLeft = CropTopLeft
                     RectangleBottomRight = CropBottomRight
                     retvalue = True
+                if not is_cropping and TemplateTopLeft != (0, 0) and TemplateBottomRight != (0, 0):
+                    RectangleTopLeft = TemplateTopLeft
+                    RectangleBottomRight = TemplateBottomRight
+                    retvalue = True
                 break
             elif k == 46 or k == 120 or k == 32:     # Space, X or Supr (inNum keypad) delete selection
                 break
-    cv2.destroyAllWindows()
+            if inc_x != 0 or inc_ix != 0 or inc_y != 0 or inc_iy != 0:
+                ix += inc_ix
+                x_ += inc_x
+                iy += inc_iy
+                y_ += inc_y
+                RectangleTopLeft = (ix, iy)
+                RectangleBottomRight = (x_, y_)
+                rectangle_refresh = True
+    #cv2.destroyAllWindows()
+    # Remove the mouse callback and destroy the window
+    cv2.setMouseCallback(RectangleWindowTitle, lambda *args: None)
+    cv2.destroyWindow(RectangleWindowTitle)
     logging.debug("Destroying window %s", RectangleWindowTitle)
 
     return retvalue
@@ -1791,6 +1901,8 @@ def select_custom_template():
     global StabilizationThreshold
     global custom_stabilization_btn
     global area_select_image_factor
+    global TemplateTopLeft, TemplateBottomRight
+
 
     if (CustomTemplateDefined):
         if os.path.isfile(pattern_filename_custom): # Delete Template if it exist
@@ -1810,7 +1922,11 @@ def select_custom_template():
 
         RectangleWindowTitle = CustomTemplateTitle
 
-        if select_rectangle_area(False) and CurrentFrame < len(SourceDirFileList):
+        if select_rectangle_area(is_cropping=False) and CurrentFrame < len(SourceDirFileList):
+            TemplateTopLeft = RectangleTopLeft
+            TemplateBottomRight = RectangleBottomRight
+            logging.debug("Template area: (%i,%i) - (%i, %i)", TemplateTopLeft[0],
+                          TemplateTopLeft[1], TemplateBottomRight[0], TemplateBottomRight[1])
             widget_status_update(NORMAL, 0)
             logging.debug("Custom template area: (%i,%i) - (%i, %i)", RectangleTopLeft[0],
                           RectangleTopLeft[1], RectangleBottomRight[0], RectangleBottomRight[1])
@@ -1925,6 +2041,7 @@ def set_film_type():
     global default_hole_height_s8, default_interhole_height_r8
     global film_hole_height
     global CustomTemplateDefined, pattern_filename_custom
+    global TemplateTopLeft, TemplateBottomRight
     if CustomTemplateDefined:
         if os.path.isfile(pattern_filename_custom):
             pattern_filename = pattern_filename_custom
@@ -1940,6 +2057,8 @@ def set_film_type():
             expected_pattern_pos = expected_pattern_pos_r8
 
     project_config["FilmType"] = film_type.get()
+    TemplateTopLeft = (0,0)
+    TemplateBottomRight = (0,0)
     film_hole_template = cv2.imread(pattern_filename, 0)
     adjust_hole_pattern_size()
 
@@ -3199,7 +3318,7 @@ def video_generation_loop():
     global app_status_label
     global BatchJobRunning
     global StartFrame, first_absolute_frame, frames_to_encode
-    global frame_selected
+    global frame_selected, last_displayed_image
     global frame_slider
 
     if ffmpeg_encoding_status == ffmpeg_state.Pending:
