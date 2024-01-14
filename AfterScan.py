@@ -19,9 +19,9 @@ __author__ = 'Juan Remirez de Esparza'
 __copyright__ = "Copyright 2022, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
-__version__ = "1.9.0"
+__version__ = "1.9.1"
 __date__ = "2024-01-13"
-__version_highlight__ = "Fully automatic hole templates - Custom template removed"
+__version_highlight__ = "Bugfixes"
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
 __status__ = "Development"
@@ -2971,7 +2971,7 @@ def start_convert():
                 ffmpeg_success = False
                 ffmpeg_encoding_status = ffmpeg_state.Pending
                 clear_image()
-                win.after(1, video_generation_loop)
+                win.after(1000, video_generation_loop)
 
 
 def generation_exit(success = True):
@@ -3243,7 +3243,7 @@ def frame_generation_loop():
         if generate_video.get():
             ffmpeg_success = False
             ffmpeg_encoding_status = ffmpeg_state.Pending
-            win.after(1, video_generation_loop)
+            win.after(1000, video_generation_loop)
         else:
             generation_exit()
         CurrentFrame -= 1  # Prevent being out of range
@@ -4236,7 +4236,7 @@ def build_ui():
                                                      onvalue=True, offvalue=False,
                                                      command=display_template_selection,
                                                      width=32)
-            display_template_checkbox.grid(row=extra_row, column=0, sticky=W)
+            display_template_checkbox.grid(row=extra_row, column=0, columnspan=2, sticky=W)
 
 
     # Define job list area ***************************************************
