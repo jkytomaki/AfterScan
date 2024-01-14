@@ -1,3 +1,9 @@
+## Join Our Community on Discord
+
+[![Discord](https://img.shields.io/badge/Join%20Discord-Chat%20Now-blue.svg)](https://discord.gg/r2UGkH7qg2)
+
+Feel free to join our Discord server to discuss and get support!
+
 # AfterScan - R8/S8 film post-scan utility 
 
 AfterScan can handle several post-processing tasks once film scanning is completed in ALT-Scann8.
