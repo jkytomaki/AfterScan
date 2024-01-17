@@ -19,9 +19,9 @@ __author__ = 'Juan Remirez de Esparza'
 __copyright__ = "Copyright 2022, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
-__version__ = "1.9.1"
-__date__ = "2024-01-13"
-__version_highlight__ = "Bugfixes"
+__version__ = "1.9.5"
+__date__ = "2024-01-17"
+__version_highlight__ = "Rework small screen mode"
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
 __status__ = "Development"
@@ -141,6 +141,7 @@ default_interhole_height_r8 = 808
 hole_template_bw_filename = os.path.join(aux_dir, "Pattern_BW.jpg")
 hole_template_wb_filename = os.path.join(aux_dir, "Pattern_WB.jpg")
 film_hole_template = None
+film_hole_template_scale = 1.0
 HoleSearchTopLeft = (0, 0)
 HoleSearchBottomRight = (0, 0)
 
@@ -166,7 +167,6 @@ SourceDirFileList = []
 TargetDirFileList = []
 film_type = 'S8'
 frame_fill_type = 'fake'
-stabilization_type = 'fast'
 
 # Flow control vars
 ConvertLoopExitRequested = False
@@ -203,6 +203,7 @@ CropBottomRight = (0, 0)
 # Rectangle of current custom template
 TemplateTopLeft = (0, 0)
 TemplateBottomRight = (0, 0)
+max_loop_count = 0
 
 CustomTemplateDefined = False
 Force43 = False
@@ -266,6 +267,8 @@ IsLinux = False
 IsMac = False
 
 is_demo = False
+ForceSmallSize = False
+ForceBigSize = False
 debug_enabled = False
 debug_template_match = False
 developer_debug = False
@@ -324,7 +327,7 @@ def set_project_defaults():
     global perform_stabilization, skip_frame_regeneration, ffmpeg_preset
     global video_filename_name, video_title_name
     global frame_from_str, frame_to_str
-    global frame_fill_type, stabilization_type
+    global frame_fill_type, extended_stabilization
     global perform_denoise, perform_sharpness
 
     project_config["PerformCropping"] = False
@@ -349,8 +352,8 @@ def set_project_defaults():
     frame_to_str.set(project_config["FrameTo"])
     project_config["PerformStabilization"] = False
     perform_stabilization.set(project_config["PerformStabilization"])
-    project_config["StabilizationType"] = 'fast'
-    stabilization_type.set(project_config["StabilizationType"])
+    project_config["ExtendedStabilization"] = False
+    extended_stabilization.set(project_config["ExtendedStabilization"])
     project_config["skip_frame_regeneration"] = False
     skip_frame_regeneration.set(project_config["skip_frame_regeneration"])
     project_config["FFmpegPreset"] = "veryslow"
@@ -484,13 +487,18 @@ def save_project_config():
     project_config["PerformSharpness"] = perform_sharpness.get()
     project_config["PerformDenoise"] = perform_denoise.get()
     project_config["FrameFillType"] = frame_fill_type.get()
-    project_config["StabilizationType"] = stabilization_type.get()
+    project_config["ExtendedStabilization"] = extended_stabilization.get()
     project_config["VideoFilename"] = video_filename_name.get()
     project_config["VideoTitle"] = video_title_name.get()
     project_config["FrameFrom"] = frame_from_str.get()
     project_config["FrameTo"] = frame_to_str.get()
     if StabilizeAreaDefined:
         project_config["PerformStabilization"] = perform_stabilization.get()
+        if not encode_all_frames.get():
+            project_config["HolePos"] = list(expected_hole_template_pos)
+            project_config["CustomHolePos"] = list(expected_hole_template_pos_custom)
+            project_config["HoleScale"] = film_hole_template_scale
+
 
     # No longer saving to dedicated file, all project settings in common file now
     # with open(project_config_filename, 'w+') as f:
@@ -549,11 +557,12 @@ def decode_project_config():
     global CustomTemplateDefined
     global hole_template_filename, expected_hole_template_pos
     global hole_template_filename_custom, expected_hole_template_pos_custom
+    global film_hole_template_scale
     global frame_from_str, frame_to_str
     global project_name
     global force_4_3_crop, force_16_9_crop
     global frame_fill_type
-    global stabilization_type
+    global extended_stabilization
     global Force43, Force169
     global perform_denoise, perform_sharpness
 
@@ -630,11 +639,8 @@ def decode_project_config():
     else:
         StabilizationThreshold = 220
 
-    if 'StabilizationType' in project_config:
-        stabilization_type.set(project_config["StabilizationType"])
-    else:
-        project_config["StabilizationType"] = 'fast'
-        stabilization_type.set(project_config["StabilizationType"])
+    if 'ExtendedStabilization' in project_config:
+        extended_stabilization.set(project_config["ExtendedStabilization"])
 
     if 'CustomTemplateExpectedPos' in project_config:
         expected_hole_template_pos_custom = project_config["CustomTemplateExpectedPos"]
@@ -720,6 +726,22 @@ def decode_project_config():
         perform_stabilization.set(project_config["PerformStabilization"])
     else:
         perform_stabilization.set(False)
+
+    if 'HolePos' in project_config:
+        expected_hole_template_pos = tuple(project_config["HolePos"])
+    else:
+        expected_hole_template_pos = (0,0)
+
+    if 'CustomHolePos' in project_config:
+        expected_hole_template_pos_custom = tuple(project_config["CustomHolePos"])
+    else:
+        expected_hole_template_pos_custom = (0, 0)
+
+    if 'HoleScale' in project_config:
+        film_hole_template_scale = project_config["HoleScale"]
+        set_scaled_template()
+    else:
+        film_hole_template_scale = 1.0
 
     if 'PerformRotation' in project_config:
         perform_rotation.set(project_config["PerformRotation"])
@@ -812,22 +834,19 @@ def job_list_add_current():
         entry_name = entry_name + ", " + resolution_dropdown_selected.get()
 
     save_project = True
-    item_index = 'end'
+    listbox_index = 'end'
     if entry_name in job_list:
         if tk.messagebox.askyesno(
                 "Job already exists",
                 "A job named " + entry_name + " exists already in the job list. "
                 "Do you want to overwrite it?."):
-            item_index = job_list_listbox.get(0, "end").index(entry_name)
-            job_list.pop(job_list_listbox.get(item_index))
-            job_list_listbox.delete(item_index)
+            listbox_index = job_list_listbox.get(0, "end").index(entry_name)
+            job_list_listbox.delete(listbox_index)
         else:
             save_project = False
     if save_project:
         save_project_config()  # Make sure all current settings are in project_config
-        job_list[entry_name] = {'project': project_config.copy(), 'done': False}
-        job_list[entry_name]['project']['done'] = False    # Set Done to False in case of editing an existing job
-        job_list[entry_name]['project']['Attempted'] = False    # Set Attempted to False in case of editing an existing job
+        job_list[entry_name] = {'project': project_config.copy(), 'done': False, 'attempted': False}
         # If a custom pattern is used, copy it with the name of the job, and change it in the joblist/project item
         if CustomTemplateDefined and os.path.isfile(hole_template_filename_custom):
             CustomTemplateDir = os.path.dirname(hole_template_filename_custom)    # should be aux_dir, but better be safe
@@ -838,9 +857,9 @@ def job_list_add_current():
         else:
             if 'CustomTemplateFilename' in project_config:
                 del project_config['CustomTemplateFilename']
-        job_list_listbox.insert(item_index, entry_name)
-        job_list_listbox.itemconfig('end', fg='black')
-        job_list_listbox.select_set('end')
+        job_list_listbox.insert(listbox_index, entry_name)
+        job_list_listbox.itemconfig(listbox_index, fg='green')
+        job_list_listbox.select_set(listbox_index)
 
 
 # gets currently selected job list item adn loads it in the UI fields (to allow editing)
@@ -1263,7 +1282,7 @@ def widget_status_update(widget_state=0, button_action=0):
     global add_job_btn, delete_job_btn, rerun_job_btn
     global stabilization_bounds_alert_checkbox
     global perform_fill_none_rb, perform_fill_fake_rb, perform_fill_dumb_rb
-    global fast_stabilization_rb, precise_stabilization_rb
+    global extended_stabilization_checkbox
     global SourceDirFileList
 
     if widget_state != 0:
@@ -1281,14 +1300,13 @@ def widget_status_update(widget_state=0, button_action=0):
         frames_to_encode_label.config(state=widget_state if not encode_all_frames.get() else DISABLED)
         frames_separator_label.config(state=widget_state if not encode_all_frames.get() else DISABLED)
         perform_rotation_checkbox.config(state=widget_state)
-        rotation_angle_spinbox.config(state=widget_state)
+        rotation_angle_spinbox.config(state=widget_state if perform_rotation.get() else DISABLED)
         rotation_angle_label.config(state=widget_state if perform_rotation.get() else DISABLED)
         perform_stabilization_checkbox.config(state=widget_state if not is_demo else NORMAL)
         perform_fill_none_rb.config(state=widget_state if not is_demo else NORMAL)
         perform_fill_fake_rb.config(state=widget_state if not is_demo else NORMAL)
         perform_fill_dumb_rb.config(state=widget_state if not is_demo else NORMAL)
-        fast_stabilization_rb.config(state=widget_state if not is_demo else NORMAL)
-        precise_stabilization_rb.config(state=widget_state if not is_demo else NORMAL)
+        extended_stabilization_checkbox.config(state=widget_state if perform_stabilization.get() else DISABLED)
         if ExpertMode:
             custom_stabilization_btn.config(state=widget_state)
             stabilization_threshold_spinbox.config(state=widget_state)
@@ -1372,6 +1390,8 @@ def perform_rotation_selection():
     global perform_rotation
     rotation_angle_spinbox.config(
         state=NORMAL if perform_rotation.get() else DISABLED)
+    rotation_angle_label.config(
+        state=NORMAL if perform_rotation.get() else DISABLED)
     project_config["PerformRotation"] = perform_rotation.get()
     win.after(5, scale_display_update)
 
@@ -1400,6 +1420,13 @@ def perform_stabilization_selection():
         stabilization_threshold_spinbox.config(
             state=NORMAL if perform_stabilization.get() else DISABLED)
     project_config["PerformStabilization"] = perform_stabilization.get()
+    win.after(5, scale_display_update)
+    widget_status_update(NORMAL)
+
+
+def extended_stabilization_selection():
+    global extended_stabilization
+    project_config["ExtendedStabilization"] = extended_stabilization.get()
     win.after(5, scale_display_update)
     widget_status_update(NORMAL)
 
@@ -1516,7 +1543,7 @@ def display_reference_frame():
     frame_slider.set(ReferenceFrame)
 
 
-def display_template_selection():
+def debug_template_popup():
     global win
     global film_hole_template
     global display_template
@@ -1524,8 +1551,9 @@ def display_template_selection():
     global CropTopLeft, CropBottomRight
     global expected_hole_template_pos, expected_hole_template_pos_custom, CustomTemplateDefined
     global HoleSearchTopLeft, HoleSearchBottomRight
-    global debug_template_match
+    global debug_template_match, debug_template_width, debug_template_height
     global current_frame_label
+    global left_stripe_canvas
 
     if not developer_debug:
         return
@@ -1540,12 +1568,14 @@ def display_template_selection():
     template_popup_window = Toplevel(win)
     template_popup_window.title("Hole Template match debug info")
 
-    template_popup_window.minsize(width=440, height=template_popup_window.winfo_height())
+    template_popup_window.minsize(width=300, height=template_popup_window.winfo_height())
 
     # Create two paralell vertical frames
     left_frame = Frame(template_popup_window, width=60, height=8)
     left_frame.pack(side=LEFT)
-    right_frame = Frame(template_popup_window, width=380, height=8)
+    center_frame = Frame(template_popup_window, width=60, height=8)
+    center_frame.pack(side=LEFT)
+    right_frame = Frame(template_popup_window, width=280, height=8)
     right_frame.pack(side=LEFT)
     # Add a label and a close button to the popup window
     #label = Label(left_frame, text="Current template:")
@@ -1555,23 +1585,30 @@ def display_template_selection():
     main_win_height = win.winfo_height()
     ratio = int(main_win_height * 100 / (2*height))
     aux = resize_image(film_hole_template, ratio)
-    width = aux.shape[1]
-    height = aux.shape[0]
+    debug_template_width = aux.shape[1]
+    debug_template_height = aux.shape[0]
 
+    # Create Canvas to display template
     template_canvas = Canvas(left_frame, bg='dark grey',
-                                 width=width, height=height)
+                                 width=debug_template_width, height=debug_template_height)
     template_canvas.pack(side=TOP, anchor=N)
 
     DisplayableImage = ImageTk.PhotoImage(Image.fromarray(aux))
     template_canvas.create_image(0, 0, anchor=NW, image=DisplayableImage)
     template_canvas.image = DisplayableImage
 
+    # Create Canvas to display image left stripe
+    left_stripe_canvas = Canvas(center_frame, bg='dark grey',
+                                 width=debug_template_width, height=debug_template_height)
+    left_stripe_canvas.pack(side=TOP, anchor=N)
+    #left_stripe_canvas.create_image(0, 0, anchor=NW, image=DisplayableImage)
+
     # Add a label with the film type
-    film_type_label = Label(right_frame, text=f"Film type: {film_type.get()}")
+    film_type_label = Label(right_frame, text=f"Film type: {film_type.get()}", font=("Arial", FontSize))
     film_type_label.pack(pady=5, padx=10, anchor="center")
 
     # Add a label with the cropping dimensions
-    crop_label = Label(right_frame, text=f"Crop: {CropTopLeft}, {CropBottomRight}")
+    crop_label = Label(right_frame, text=f"Crop: {CropTopLeft}, {CropBottomRight}", font=("Arial", FontSize))
     crop_label.pack(pady=5, padx=10, anchor="center")
 
     # Add a label with the stabilization info
@@ -1579,19 +1616,19 @@ def display_template_selection():
         hole_template_pos = expected_hole_template_pos_custom
     else:
         hole_template_pos = expected_hole_template_pos
-    hole_pos_label = Label(right_frame, text=f"Expected template pos: {hole_template_pos}")
+    hole_pos_label = Label(right_frame, text=f"Expected template pos: {hole_template_pos}", font=("Arial", FontSize))
     hole_pos_label.pack(pady=5, padx=10, anchor="center")
 
-    search_area_label = Label(right_frame, text=f"Search Area: {HoleSearchTopLeft}, {HoleSearchBottomRight}")
+    search_area_label = Label(right_frame, text=f"Search Area: {HoleSearchTopLeft}, {HoleSearchBottomRight}", font=("Arial", FontSize))
     search_area_label.pack(pady=5, padx=10, anchor="center")
 
-    current_frame_label = Label(right_frame, text="Current:", width=45)
+    current_frame_label = Label(right_frame, text="Current:", width=45, font=("Arial", FontSize))
     current_frame_label.pack(pady=5, padx=10, anchor="center")
 
-    display_reference_frame_button = Button(right_frame, text="Display reference frame", command=display_reference_frame)
+    display_reference_frame_button = Button(right_frame, text="Display reference frame", command=display_reference_frame, font=("Arial", FontSize))
     display_reference_frame_button.pack(pady=10, padx=10, anchor="center")
 
-    close_button = Button(right_frame, text="Close", command=display_template_closure)
+    close_button = Button(right_frame, text="Close", command=display_template_closure, font=("Arial", FontSize))
     close_button.pack(pady=10, padx=10, anchor="center")
 
     # Run a loop for the popup window
@@ -1601,6 +1638,28 @@ def display_template_selection():
     debug_template_match = False
 
 
+def debug_template_display_info(frame_idx, top_left, move_x, move_y):
+    global current_frame_label
+    if debug_template_match:
+        current_frame_label.config(text=f"Current Frm:{frame_idx}, Tmp.Pos.:{top_left}, ΔX:{move_x}, ΔY:{move_y}")
+
+
+def debug_template_display_frame(img):
+    global debug_template_match, debug_template_width, debug_template_height, left_stripe_canvas
+
+    if debug_template_match:
+        height, width = img.shape
+        ratio_w = debug_template_width / width
+        ratio_h = debug_template_height / height
+        ratio = min(ratio_w, ratio_h)
+        resized_image = cv2.resize(img, (int(width*ratio), int(height*ratio)))
+        cv2_image = cv2.cvtColor(resized_image, cv2.COLOR_BGR2RGB)
+        pil_image = Image.fromarray(cv2_image)
+        photo_image = ImageTk.PhotoImage(image=pil_image)
+        left_stripe_canvas.create_image(0, 0, anchor=NW, image=photo_image)
+        left_stripe_canvas.image = photo_image
+        win.update()
+
 def scale_display_update():
     global win
     global frame_scale_refresh_done, frame_scale_refresh_pending
@@ -1608,6 +1667,7 @@ def scale_display_update():
     global perform_stabilization, perform_cropping, perform_rotation
     global CropTopLeft, CropBottomRight
     global SourceDirFileList
+    global debug_template_match
 
     frame_to_display = CurrentFrame
     if frame_to_display >= len(SourceDirFileList):
@@ -1622,7 +1682,7 @@ def scale_display_update():
         if not frame_scale_refresh_pending:
             if perform_rotation.get():
                 img = rotate_image(img)
-            if perform_stabilization.get():
+            if perform_stabilization.get() or debug_template_match:
                 img = stabilize_image(CurrentFrame, img, img)
         if perform_cropping.get():
             img = crop_image(img, CropTopLeft, CropBottomRight)
@@ -1683,7 +1743,7 @@ def detect_film_type():
         other_film_type = 'R8'
 
     # Create a list with 5 evenly distributed values between CurrentFrame and len(SourceDirFileList) - CurrentFrame
-    num_frames = min(5,len(SourceDirFileList)-CurrentFrame)
+    num_frames = min(10,len(SourceDirFileList)-CurrentFrame)
     FramesToCheck = np.linspace(CurrentFrame, len(SourceDirFileList) - CurrentFrame - 1, num_frames).astype(int).tolist()
     for frame_to_check in FramesToCheck:
         img = cv2.imread(SourceDirFileList[frame_to_check], cv2.IMREAD_UNCHANGED)
@@ -1696,7 +1756,7 @@ def detect_film_type():
         result = cv2.matchTemplate(search_img, template_2, cv2.TM_CCOEFF_NORMED)
         (minVal, maxVal, minLoc, maxLoc) = cv2.minMaxLoc(result)
         top_left_2 = (maxLoc[1], maxLoc[0])
-        if top_left_1[1] > top_left_2[1]:
+        if top_left_1[0] > top_left_2[0]:
             count1 += 1
         else:
             count2 += 1
@@ -1717,11 +1777,17 @@ def detect_film_type():
 
 
 # Functions in charge of finding the best template for currently loaded set of frames
-def set_best_template():
+def set_scaled_template():
+    global hole_template_filename, film_hole_template, film_hole_template_scale
+    template = cv2.imread(hole_template_filename, cv2.IMREAD_GRAYSCALE)
+    film_hole_template = resize_image(template, film_hole_template_scale * 100)
+
+
+def set_best_template(first_frame, last_frame):
     global win, CurrentFrame, ReferenceFrame, SourceDirFileList
     global TemplateTopLeft, TemplateBottomRight
     global expected_hole_template_pos
-    global film_hole_template
+    global film_hole_template, film_hole_template_scale
     global CustomTemplateDefined
     global app_status_label
 
@@ -1738,21 +1804,21 @@ def set_best_template():
 
     candidates = []
     frame_found = False
-    total_frames = len(SourceDirFileList) - CurrentFrame
+    total_frames = last_frame - first_frame + 1
     # Start checking 10% ahead, in case first frames are not OK. Random seed in case it fails and needs to be repeated
     if total_frames > 110:
-        start_frame = CurrentFrame + int((total_frames - 100) * 0.1) + random.randint(1, 100)
+        start_frame = first_frame + int((total_frames - 100) * 0.1) + random.randint(1, 100)
     else:
-        start_frame = CurrentFrame
-    num_frames = min(100,len(SourceDirFileList)-start_frame)
+        start_frame = first_frame
+    num_frames = min(100,last_frame-start_frame)
     # Create a list with 10 evenly distributed values between CurrentFrame and len(SourceDirFileList) - CurrentFrame
-    FramesToCheck = np.linspace(start_frame, len(SourceDirFileList) - start_frame - 1, num_frames).astype(int).tolist()
+    FramesToCheck = np.linspace(start_frame, last_frame - start_frame - 1, num_frames).astype(int).tolist()
     for frame_to_check in FramesToCheck:
         work_image = cv2.imread(SourceDirFileList[frame_to_check], cv2.IMREAD_UNCHANGED)
         work_image = get_image_left_stripe(work_image)
         y_center_image = int(work_image.shape[0]/2)
         shift_allowed = int (work_image.shape[0] * 0.01)     # Allow up to 10% difference between center of image and center of detected template
-        TemplateTopLeft, TemplateBottomRight, film_hole_template = get_best_template_size(work_image)
+        TemplateTopLeft, TemplateBottomRight, film_hole_template_scale, film_hole_template = get_best_template_size(work_image)
         expected_hole_template_pos = TemplateTopLeft
         iy = TemplateTopLeft[1]
         y_ = TemplateBottomRight[1]
@@ -1761,12 +1827,13 @@ def set_best_template():
             frame_found = True
             break
         else:
-            candidates.append((TemplateTopLeft, abs(y_center_template - y_center_image), frame_to_check, film_hole_template))
+            candidates.append((TemplateTopLeft, abs(y_center_template - y_center_image), frame_to_check, film_hole_template_scale, film_hole_template))
     if not frame_found:
         # Get the item with lowest difference to the centred position
         best_candidate = min(candidates, key=lambda x: x[1])
         expected_hole_template_pos = best_candidate[0]
-        film_hole_template = best_candidate[3]
+        film_hole_template_scale = best_candidate[3]
+        film_hole_template = best_candidate[4]
         tk.messagebox.showwarning(
             "No centered frame found meeting criteria",
             f"Degraded candidate selected: Frame {best_candidate[2]}, expected template position {expected_hole_template_pos}"
@@ -1823,7 +1890,7 @@ def get_best_template_size(img):
     logging.debug(f"Match found - scale {scale:.2f}, maxVal {maxVal:.2f}, maxLoc {maxLoc}, t.height {best_template.shape[0]}")
     (startX, startY) = (maxLoc[0], maxLoc[1])
     (endX, endY) = (maxLoc[0] + best_template.shape[1] - 1, maxLoc[1] + best_template.shape[0] - 1)
-    return (startX, startY), (endX, endY), best_template
+    return (startX, startY), (endX, endY), scale, best_template
 
 
 
@@ -2083,15 +2150,33 @@ def select_rectangle_area(is_cropping=False):
 
 
 def select_cropping_area():
-    global RectangleWindowTitle
+    global win, RectangleWindowTitle
     global perform_cropping
     global CropTopLeft, CropBottomRight
     global CropAreaDefined
     global RectangleTopLeft, RectangleBottomRight
+    global expected_hole_template_pos, project_config
+    global encode_all_frames, from_frame, to_frame, ReferenceFrame
 
     # Disable all buttons in main window
     widget_status_update(DISABLED,0)
     win.update()
+
+    if not encode_all_frames.get():
+        win.config(cursor="watch")
+        win.update()  # Force an update to apply the cursor change
+        set_best_template(int(frame_from_str.get()), int(frame_to_str.get()))
+        select_scale_frame(ReferenceFrame)
+        frame_slider.set(ReferenceFrame)
+        project_config["HolePos"] = expected_hole_template_pos
+        project_config["HoleScale"] = film_hole_template_scale
+        win.config(cursor="")
+        win.update()  # Force an update to apply the cursor change
+    else:
+        if 'HolePos' in project_config:
+            del project_config["HolePos"]
+        if 'HoleScale' in project_config:
+            del project_config["HoleScale"]
 
     RectangleWindowTitle = CropWindowTitle
 
@@ -2224,6 +2309,15 @@ def match_level_color(t):
         return "orange"
     return "green"
 
+
+def match_level_color_bgr(t):
+    if t < 0.7:
+        return (0,0,255)
+    if t < 0.9:
+        return (0,165,255)
+    return (0,255,0)
+
+
 def match_template(frame_idx, template, img, thres):
     result = []
     best_match = 0
@@ -2239,7 +2333,8 @@ def match_template(frame_idx, template, img, thres):
 
     # convert img to grey
     img_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    img_bw = cv2.threshold(img_gray, thres, 255, cv2.THRESH_TRUNC | cv2.THRESH_TRIANGLE)[1]  #THRESH_TRUNC, THRESH_BINARY
+    img_bw = cv2.threshold(img_gray, thres, 255, cv2.THRESH_TRUNC)[1]  #THRESH_TRUNC, THRESH_BINARY
+
     # img_edges = cv2.Canny(image=img_bw, threshold1=100, threshold2=20)  # Canny Edge Detection
     img_final = img_bw
 
@@ -2281,7 +2376,7 @@ def match_template(frame_idx, template, img, thres):
 
     # logging.debug(f"Trying Frame {frame_idx} with template {best_match_idx}, top left is {top_left}")
 
-    return top_left, round(maxVal,2)
+    return top_left, round(maxVal,2), img_final
 
 
 """
@@ -2318,7 +2413,7 @@ def terminate_threads(user_terminated):
     logging.debug("Signaling exit event for threads")
     frame_encoding_event.set()
     while active_threads > 0:
-        frame_encoding_queue.put((END_TOKEN, 0))    # Threads might be stuck reading from queue, ass item to allow them to exit
+        frame_encoding_queue.put((END_TOKEN, 0))    # Threads might be stuck reading from queue, add item to allow them to exit
         logging.debug(f"Waiting for threads to stop ({active_threads} remaining)")
         check_subprocess_event_queue(user_terminated)
         win.update()
@@ -2462,11 +2557,11 @@ def stabilize_image(frame_idx, img, img_ref, img_ref_alt = None):
     global stabilization_bounds_alert, stabilization_bounds_alert_counter
     global stabilization_bounds_alert_checkbox
     global project_name
-    global frame_fill_type, stabilization_type
+    global frame_fill_type, extended_stabilization
     global CsvFile, GenerateCsv, CsvFramesOffPercent
     global stabilization_threshold_match_label
     global debug_template_match
-    global current_frame_label
+    global perform_stabilization
 
     # Get image dimensions to perform image shift later
     width = img_ref.shape[1]
@@ -2479,67 +2574,47 @@ def stabilize_image(frame_idx, img, img_ref, img_ref_alt = None):
 
 
     # Search film hole pattern
-    WorkStabilizationThreshold = 250
-    if stabilization_type.get() == 'fast':
-        LowerStabilizationThreshold = 200
-    else:
-        LowerStabilizationThreshold = 50
     best_match_level = 0
-    loop_count = 0
     best_match_index = 0
     best_top_left = [0,0]
 
     # Get sprocket hole area
     left_stripe_image = get_image_left_stripe(img_ref)
+    #WorkStabilizationThreshold = np.percentile(left_stripe_image, 90)
     img_ref_alt_used = False
     while True:
-        loop_count += 1
-        top_left, match_level = match_template(frame_idx, film_hole_template, left_stripe_image, float(WorkStabilizationThreshold))
+        top_left, match_level, img_matched = match_template(frame_idx, film_hole_template, left_stripe_image, 255)
         if match_level >= 0.85:
             break
-        if match_level > best_match_level:
-            best_match_index = loop_count
-            best_match_level = match_level
-            best_top_left = top_left
-        if loop_count >= 20 and best_match_index == 1:  # If best match is still 1st one after 10 loops, take it
-            # logging.debug("Break -  Thr %s, match_level %.2f, best match level %.2f", WorkStabilizationThreshold, match_level, best_match_level)
-            if not img_ref_alt_used and img_ref_alt is not None:
-                left_stripe_image = get_image_left_stripe(img_ref_alt)
-                WorkStabilizationThreshold = 250
-                loop_count = 0
-                img_ref_alt_used = True
-            else:
-                match_level = best_match_level
-                top_left = best_top_left
-                break
-        elif float(WorkStabilizationThreshold) > LowerStabilizationThreshold:
-            # logging.debug("Match level %.2f, decreasing Thr %s", match_level, WorkStabilizationThreshold)
-            WorkStabilizationThreshold = float(WorkStabilizationThreshold) - (20 if stabilization_type.get() == 'fast' else 10)
         else:
-            # logging.debug("Break, exhausted list. Best match %.2f", best_match_level)
-            if not img_ref_alt_used and img_ref_alt is not None:
-                left_stripe_image = get_image_left_stripe(img_ref_alt)
-                WorkStabilizationThreshold = 250
-                loop_count = 0
-                img_ref_alt_used = True
-            else:
-                match_level = best_match_level
-                top_left = best_top_left
-                break
+            if match_level > best_match_level:
+                best_match_level = match_level
+                best_top_left = top_left
+                best_img_matched = img_matched
+        if not img_ref_alt_used and img_ref_alt is not None:
+            left_stripe_image = get_image_left_stripe(img_ref_alt)
+            img_ref_alt_used = True
+        else:
+            match_level = best_match_level
+            top_left = best_top_left
+            img_matched = best_img_matched
+            break
+    debug_template_display_frame(img_matched)
+
     if debug_template_match and top_left[1] != -1 :
-        cv2.rectangle(img, (top_left[0], top_left[1]), (top_left[0] + TemplateBottomRight[0] - TemplateTopLeft[0], top_left[1] + TemplateBottomRight[1] - TemplateTopLeft[1]), (0, 0, 255), 2)
-    if top_left[1] != -1 and match_level > 0.7:
+        cv2.rectangle(img, (top_left[0], top_left[1]), (top_left[0] + TemplateBottomRight[0] - TemplateTopLeft[0], top_left[1] + TemplateBottomRight[1] - TemplateTopLeft[1]), match_level_color_bgr(match_level), 2)
+        cv2.rectangle(img, (HoleSearchTopLeft[0], HoleSearchTopLeft[1]), (HoleSearchBottomRight[0], HoleSearchBottomRight[1]), (255, 255, 255), 2)
+    if top_left[1] != -1 and match_level > 0.1:
         move_x = hole_template_pos[0] - top_left[0]
         move_y = hole_template_pos[1] - top_left[1]
-        if abs(move_x) > 50:  # if horizontal shift too big, ignore it
+        if abs(move_x) > 150:  # if horizontal shift too big, ignore it
             move_x = 0
             move_y = 0
     else:   # If match is not good, keep the frame where it is, will probabyl look better
         move_x = 0
         move_y = 0
     logging.debug(f"Frame {frame_idx}: top left {top_left}, move_y:{move_y}, move_x:{move_x}")
-    if debug_template_match:
-        current_frame_label.config(text=f"Current Frm:{frame_idx}, Tmp.Pos.:{top_left}, ΔX:{move_x}, ΔY:{move_y}")
+    debug_template_display_info(frame_idx, top_left, move_x, move_y)
     # Try to figure out if there will be a part missing
     # at the bottom, or the top
     missing_rows = 0
@@ -2586,36 +2661,35 @@ def stabilize_image(frame_idx, img, img_ref, img_ref_alt = None):
             missing_fragment = translated_image[CropBottomRight[1]-missing_rows:CropBottomRight[1],0:width]
         elif missing_bottom < 0:
             missing_fragment = translated_image[CropTopLeft[1]:CropTopLeft[1]+missing_rows, 0:width]
-    # Create the translation matrix using move_x and move_y (NumPy array)
-    translation_matrix = np.array([
-        [1, 0, move_x],
-        [0, 1, move_y]
-    ], dtype=np.float32)
-    # Apply the translation to the image
-    translated_image = cv2.warpAffine(src=img, M=translation_matrix,
-                                      dsize=(width, height))
-
-    # Check if frame fill is enabled, and required: Add missing fragment
-    # Check if there is a gap in the frame, if so, and one of the 'fill' functions is enabled, fill accordingly
-    if missing_rows > 0 and ConvertLoopRunning:
-        if frame_fill_type.get() == 'fake':
-            if missing_top < 0:
-                translated_image[CropTopLeft[1]:CropTopLeft[1]+missing_rows,0:width] = missing_fragment
-            elif missing_bottom < 0:
-                translated_image[CropBottomRight[1]-missing_rows:CropBottomRight[1],0:width] = missing_fragment
-        elif frame_fill_type.get() == 'dumb':
-            if missing_top < 0:
-                translated_image = translated_image[missing_rows+CropTopLeft[1]:height,0:width]
-                translated_image = cv2.copyMakeBorder(src=translated_image, top=missing_rows+CropTopLeft[1], bottom=0, left=0, right=0,
-                                                      borderType=cv2.BORDER_REPLICATE)
-            elif missing_bottom < 0:
-                translated_image = translated_image[0:CropBottomRight[1]-missing_rows, 0:width]
-                translated_image = cv2.copyMakeBorder(src=translated_image, top=0, bottom=CropBottomRight[1]-missing_rows, left=0, right=0,
-                                                      borderType=cv2.BORDER_REPLICATE)
-
-    if debug_template_match:
-        cv2.rectangle(translated_image, (TemplateTopLeft[0], TemplateTopLeft[1]), (TemplateBottomRight[0], TemplateBottomRight[1]), (0, 255, 0), 2)
-        cv2.rectangle(translated_image, (HoleSearchTopLeft[0], HoleSearchTopLeft[1]), (HoleSearchBottomRight[0], HoleSearchBottomRight[1]), (255, 255, 255), 2)
+    # Create the translation matrix using move_x and move_y (NumPy array): This is the actual stabilization
+    # We double-check the check box since this function might be called just to debug template detection
+    if perform_stabilization.get():
+        translation_matrix = np.array([
+            [1, 0, move_x],
+            [0, 1, move_y]
+        ], dtype=np.float32)
+        # Apply the translation to the image
+        translated_image = cv2.warpAffine(src=img, M=translation_matrix,
+                                          dsize=(width, height))
+        # Check if frame fill is enabled, and required: Add missing fragment
+        # Check if there is a gap in the frame, if so, and one of the 'fill' functions is enabled, fill accordingly
+        if missing_rows > 0 and ConvertLoopRunning:
+            if frame_fill_type.get() == 'fake':
+                if missing_top < 0:
+                    translated_image[CropTopLeft[1]:CropTopLeft[1]+missing_rows,0:width] = missing_fragment
+                elif missing_bottom < 0:
+                    translated_image[CropBottomRight[1]-missing_rows:CropBottomRight[1],0:width] = missing_fragment
+            elif frame_fill_type.get() == 'dumb':
+                if missing_top < 0:
+                    translated_image = translated_image[missing_rows+CropTopLeft[1]:height,0:width]
+                    translated_image = cv2.copyMakeBorder(src=translated_image, top=missing_rows+CropTopLeft[1], bottom=0, left=0, right=0,
+                                                          borderType=cv2.BORDER_REPLICATE)
+                elif missing_bottom < 0:
+                    translated_image = translated_image[0:CropBottomRight[1]-missing_rows, 0:width]
+                    translated_image = cv2.copyMakeBorder(src=translated_image, top=0, bottom=CropBottomRight[1]-missing_rows, left=0, right=0,
+                                                          borderType=cv2.BORDER_REPLICATE)
+    else:
+        translated_image = img
 
     return translated_image
 
@@ -2759,9 +2833,13 @@ def get_source_dir_file_list():
     sample_frame = CurrentFrame + int((len(SourceDirFileList) - CurrentFrame) * 0.1)
     work_image = cv2.imread(SourceDirFileList[sample_frame], cv2.IMREAD_UNCHANGED)
     # Next 3 statements were done only if batch mode was not active, but they are needed in all cases
-    set_hole_search_area(work_image)
-    detect_film_type()
-    set_film_type()
+    if BatchJobRunning:
+        logging.debug("Skipping hole template adjustment in batch mode")
+    else:
+        logging.debug("Adjusting hole template...")
+        set_hole_search_area(work_image)
+        detect_film_type()
+        set_film_type()
     # Select area window should be proportional to screen height
     # Deduct 120 pixels (approximately) for taskbar + window title
     area_select_image_factor = (screen_height - 200) / work_image.shape[0]
@@ -2770,7 +2848,7 @@ def get_source_dir_file_list():
     if CropBottomRight == (0,0):
         CropBottomRight = (work_image.shape[1], work_image.shape[0])
 
-    set_best_template()
+    set_best_template(0, len(SourceDirFileList))
     widget_status_update(NORMAL)
 
     return len(SourceDirFileList)
@@ -2821,6 +2899,7 @@ def valid_generated_frame_range():
 def set_hole_search_area(img):
     global HoleSearchTopLeft, HoleSearchBottomRight
     global film_hole_template, film_corner_template, TemplateTopLeft
+    global extended_stabilization
 
     # Adjust left stripe width (search area)
     img_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
@@ -2829,7 +2908,10 @@ def set_hole_search_area(img):
     # Detect corner in image, to adjust search area width
     result = cv2.matchTemplate(img_target, film_corner_template, cv2.TM_CCOEFF_NORMED)
     (minVal, maxVal, minLoc, maxLoc) = cv2.minMaxLoc(result)
-    left_stripe_width = max(maxLoc[0] + 70 + 50, TemplateTopLeft[0] + film_hole_template.shape[1]) # Corner template left pos is at maxLoc[0], we add 70 (50% template width) + 20 (to get some black)
+    left_stripe_width = max(maxLoc[0] + 70 + 50, TemplateTopLeft[0] + film_hole_template.shape[1]) # Corner template left pos is at maxLoc[0], we add 70 (50% template width) + 50 (to get some black area)
+    if extended_stabilization.get():
+        logging.debug("Extended stabilization requested: Widening search area by 50 pixels")
+        left_stripe_width += 50     # If precise stabilization, make search area wider (although not clear this will help instead of making it worse)
 
     # Initialize default values for perforation search area,
     # as they are relative to image size
@@ -3030,6 +3112,7 @@ def frame_encode(frame_idx):
     global CropTopLeft, CropBottomRight
     global app_status_label
     global subprocess_event_queue
+    global debug_template_match
 
     images_to_merge = []
     img_ref_aux = None
@@ -3085,7 +3168,7 @@ def frame_encode(frame_idx):
         register_frame()
         if perform_rotation.get():
             img = rotate_image(img)
-        if perform_stabilization.get():
+        if perform_stabilization.get() or debug_template_match:
             img = stabilize_image(frame_idx, img, img_ref, img_ref_aux)
         if perform_cropping.get():
             img = crop_image(img, CropTopLeft, CropBottomRight)
@@ -3649,7 +3732,7 @@ def afterscan_init():
     global LogLevel
     global PreviewWidth, PreviewHeight
     global screen_height
-    global BigSize
+    global BigSize, FontSize
     global MergeMertens
 
     # Initialize logging
@@ -3674,18 +3757,20 @@ def afterscan_init():
     # Get screen size - maxsize gives the usable screen size
     screen_width, screen_height = win.maxsize()
     # Set dimensions of UI elements adapted to screen size
-    if screen_height >= 1000:
+    if (screen_height >= 1000 and not ForceSmallSize) or ForceBigSize:
         BigSize = True
+        FontSize = 11
         PreviewWidth = 700
         PreviewHeight = 540
         app_width = PreviewWidth + 420
-        app_height = PreviewHeight + 310
+        app_height = PreviewHeight + 330
     else:
         BigSize = False
+        FontSize = 8
         PreviewWidth = 500
         PreviewHeight = 380
-        app_width = PreviewWidth + 420
-        app_height = PreviewHeight + 470
+        app_width = PreviewWidth + 380
+        app_height = PreviewHeight + 330
 
     win.title('AfterScan ' + __version__)  # setting title of the window
     win.geometry('1080x700')  # setting the size of the window
@@ -3761,19 +3846,23 @@ def build_ui():
     global frame_from_str, frame_to_str, frame_from_entry, frame_to_entry, frames_separator_label
     global suspend_on_joblist_end
     global frame_fill_type
-    global stabilization_type
+    global extended_stabilization, extended_stabilization_checkbox
     global RotationAngle
     global suspend_on_completion
     global perform_fill_none_rb, perform_fill_fake_rb, perform_fill_dumb_rb
-    global fast_stabilization_rb, precise_stabilization_rb
     global ExpertMode
     global display_template
+    global BigSize, FontSize
 
     # Create a frame to add a border to the preview
     left_area_frame = Frame(win)
     #left_area_frame.grid(row=0, column=0, padx=5, pady=5, sticky=N)
     left_area_frame.pack(side=LEFT, padx=5, pady=5, anchor=N)
-    draw_capture_canvas = Canvas(left_area_frame, bg='dark grey',
+    # Create a LabelFrame to act as a border
+    border_frame = tk.LabelFrame(left_area_frame, bd=2, relief=tk.GROOVE)
+    border_frame.pack(expand=True, fill="both", padx=5, pady=5)
+    # Create the canvas
+    draw_capture_canvas = Canvas(border_frame, bg='dark grey',
                                  width=PreviewWidth, height=PreviewHeight)
     draw_capture_canvas.pack(side=TOP, anchor=N)
 
@@ -3788,46 +3877,45 @@ def build_ui():
 
     # Create frame to display current frame and slider
     frame_frame = LabelFrame(regular_top_section_frame, text='Current frame',
-                               width=35, height=10)
+                               width=35, height=10, font=("Arial", FontSize))
     frame_frame.grid(row=0, column=0, sticky=W)
 
     frame_selected = IntVar()
     frame_slider = Scale(frame_frame, orient=HORIZONTAL, from_=0, to=0,
                          variable=frame_selected, command=select_scale_frame,
                          length=120, label='Global:',
-                         highlightthickness=1, takefocus=1)
+                         highlightthickness=1, takefocus=1, font=("Arial", FontSize))
     frame_slider.pack(side=BOTTOM, ipady=4)
     frame_slider.set(CurrentFrame)
 
     # Application status label
-    app_status_label = Label(regular_top_section_frame, width=45, borderwidth=2,
+    app_status_label = Label(regular_top_section_frame, width=46 if BigSize else 55, borderwidth=2,
                              relief="groove", text='Status: Idle',
-                             highlightthickness=1)
-    app_status_label.grid(row=1, column=0, columnspan=3, sticky=W,
-                          pady=5)
+                             highlightthickness=1, font=("Arial", FontSize))
+    app_status_label.grid(row=1, column=0, columnspan=3, pady=5)
 
     # Application Exit button
     Exit_btn = Button(regular_top_section_frame, text="Exit", width=10,
                       height=5, command=exit_app, activebackground='red',
-                      activeforeground='white', wraplength=80)
+                      activeforeground='white', wraplength=80, font=("Arial", FontSize))
     Exit_btn.grid(row=0, column=1, sticky=W, padx=5)
 
 
     # Application start button
     Go_btn = Button(regular_top_section_frame, text="Start", width=12, height=5,
                     command=start_convert, activebackground='green',
-                    activeforeground='white', wraplength=80)
+                    activeforeground='white', wraplength=80, font=("Arial", FontSize))
     Go_btn.grid(row=0, column=2, sticky=W)
 
     # Create frame to select source and target folders *******************************
     folder_frame = LabelFrame(right_area_frame, text='Folder selection', width=50,
-                              height=8)
-    folder_frame.pack(side=TOP, padx=2, pady=2, anchor=W, ipadx=5)
+                              height=8, font=("Arial", FontSize))
+    folder_frame.pack(side=TOP, padx=2, pady=2, ipadx=5)
 
     source_folder_frame = Frame(folder_frame)
     source_folder_frame.pack(side=TOP)
-    frames_source_dir = Entry(source_folder_frame, width=36,
-                                    borderwidth=1)
+    frames_source_dir = Entry(source_folder_frame, width=36 if BigSize else 42,
+                                    borderwidth=1, font=("Arial", FontSize))
     frames_source_dir.pack(side=LEFT)
     frames_source_dir.delete(0, 'end')
     frames_source_dir.insert('end', SourceDir)
@@ -3837,19 +3925,19 @@ def build_ui():
     source_folder_btn = Button(source_folder_frame, text='Source', width=6,
                                height=1, command=set_source_folder,
                                activebackground='green',
-                               activeforeground='white', wraplength=80)
+                               activeforeground='white', wraplength=80, font=("Arial", FontSize))
     source_folder_btn.pack(side=LEFT)
 
     target_folder_frame = Frame(folder_frame)
     target_folder_frame.pack(side=TOP)
-    frames_target_dir = Entry(target_folder_frame, width=36,
-                                    borderwidth=1)
+    frames_target_dir = Entry(target_folder_frame, width=36 if BigSize else 42,
+                                    borderwidth=1, font=("Arial", FontSize))
     frames_target_dir.pack(side=LEFT)
     frames_target_dir.bind('<<Paste>>', lambda event, entry=frames_target_dir: on_paste_all_entries(event, entry))
     target_folder_btn = Button(target_folder_frame, text='Target', width=6,
                                height=1, command=set_frames_target_folder,
                                activebackground='green',
-                               activeforeground='white', wraplength=80)
+                               activeforeground='white', wraplength=80, font=("Arial", FontSize))
     target_folder_btn.pack(side=LEFT)
 
     save_bg = source_folder_btn['bg']
@@ -3861,17 +3949,17 @@ def build_ui():
     # Define post-processing area *********************************************
     postprocessing_frame = LabelFrame(right_area_frame,
                                       text='Frame post-processing',
-                                      width=40, height=8)
+                                      width=40, height=8, font=("Arial", FontSize))
     postprocessing_frame.pack(side=TOP, padx=2, pady=2, ipadx=5)
     postprocessing_row = 0
 
     # Radio buttons to select R8/S8. Required to select adequate pattern, and match position
     film_type = StringVar()
     film_type_S8_rb = Radiobutton(postprocessing_frame, text="Super 8", command=set_film_type,
-                                  variable=film_type, value='S8')
+                                  variable=film_type, width=11 if BigSize else 14, value='S8', font=("Arial", FontSize))
     film_type_S8_rb.grid(row=postprocessing_row, column=0, sticky=W)
     film_type_R8_rb = Radiobutton(postprocessing_frame, text="Regular 8", command=set_film_type,
-                                  variable=film_type, value='R8')
+                                  variable=film_type, width=11 if BigSize else 14, value='R8', font=("Arial", FontSize))
     film_type_R8_rb.grid(row=postprocessing_row, column=1, sticky=W)
     film_type.set(project_config["FilmType"])
     postprocessing_row += 1
@@ -3881,7 +3969,7 @@ def build_ui():
     encode_all_frames_checkbox = tk.Checkbutton(
         postprocessing_frame, text='Encode all frames',
         variable=encode_all_frames, onvalue=True, offvalue=False,
-        command=encode_all_frames_selection, width=14)
+        command=encode_all_frames_selection, width=14, font=("Arial", FontSize))
     encode_all_frames_checkbox.grid(row=postprocessing_row, column=0,
                                            columnspan=3, sticky=W)
     postprocessing_row += 1
@@ -3889,19 +3977,19 @@ def build_ui():
     # Entry to enter start/end frames
     frames_to_encode_label = tk.Label(postprocessing_frame,
                                       text='Frame range:',
-                                      width=12)
+                                      width=12, font=("Arial", FontSize))
     frames_to_encode_label.grid(row=postprocessing_row, column=0, columnspan=2, sticky=W)
     frame_from_str = tk.StringVar(value=str(from_frame))
-    frame_from_entry = Entry(postprocessing_frame, textvariable=frame_from_str, width=6, borderwidth=1)
+    frame_from_entry = Entry(postprocessing_frame, textvariable=frame_from_str, width=5, borderwidth=1, font=("Arial", FontSize))
     frame_from_entry.grid(row=postprocessing_row, column=1, sticky=W)
     frame_from_entry.config(state=NORMAL)
     frame_from_entry.bind("<Double - Button - 1>", update_frame_from)
     frame_from_entry.bind('<<Paste>>', lambda event, entry=frame_from_entry: on_paste_all_entries(event, entry))
     frame_to_str = tk.StringVar(value=str(from_frame))
-    frames_separator_label = tk.Label(postprocessing_frame, text='to', width=4)
-    frames_separator_label.grid(row=postprocessing_row, column=1, sticky=E)
-    frame_to_entry = Entry(postprocessing_frame, textvariable=frame_to_str, width=6, borderwidth=1)
-    frame_to_entry.grid(row=postprocessing_row, column=2, sticky=W)
+    frames_separator_label = tk.Label(postprocessing_frame, text='to', width=2, font=("Arial", FontSize))
+    frames_separator_label.grid(row=postprocessing_row, column=1)
+    frame_to_entry = Entry(postprocessing_frame, textvariable=frame_to_str, width=5, borderwidth=1, font=("Arial", FontSize))
+    frame_to_entry.grid(row=postprocessing_row, column=1, sticky=E)
     frame_to_entry.config(state=NORMAL)
     frame_to_entry.bind("<Double - Button - 1>", update_frame_to)
     frame_to_entry.bind('<<Paste>>', lambda event, entry=frame_to_entry: on_paste_all_entries(event, entry))
@@ -3913,7 +4001,7 @@ def build_ui():
     perform_rotation_checkbox = tk.Checkbutton(
         postprocessing_frame, text='Rotate image:',
         variable=perform_rotation, onvalue=True, offvalue=False, width=11,
-        command=perform_rotation_selection)
+        command=perform_rotation_selection, font=("Arial", FontSize))
     perform_rotation_checkbox.grid(row=postprocessing_row, column=0,
                                         columnspan=1, sticky=W)
     perform_rotation_checkbox.config(state=NORMAL)
@@ -3926,15 +4014,15 @@ def build_ui():
         postprocessing_frame,
         command=(rotation_angle_selection_aux, '%d'), width=5,
         textvariable=rotation_angle_str, from_=-5, to=5,
-        format="%.1f", increment=0.1)
+        format="%.1f", increment=0.1, font=("Arial", FontSize))
     rotation_angle_spinbox.grid(row=postprocessing_row, column=1, sticky=W)
     rotation_angle_spinbox.bind("<FocusOut>", rotation_angle_spinbox_focus_out)
     rotation_angle_selection('down')
     rotation_angle_label = tk.Label(postprocessing_frame,
-                                      text='°       ',
-                                      width=4)
-    rotation_angle_label.grid(row=postprocessing_row, column=1,
-                                columnspan=1, sticky=E)
+                                      text='°',
+                                      width=1, font=("Arial", FontSize))
+    rotation_angle_label.grid(row=postprocessing_row, column=1)
+    rotation_angle_label.config(state=NORMAL)
     postprocessing_row += 1
 
     # Check box to do stabilization or not
@@ -3942,22 +4030,20 @@ def build_ui():
     perform_stabilization_checkbox = tk.Checkbutton(
         postprocessing_frame, text='Stabilize',
         variable=perform_stabilization, onvalue=True, offvalue=False, width=7,
-        command=perform_stabilization_selection)
+        command=perform_stabilization_selection, font=("Arial", FontSize))
     perform_stabilization_checkbox.grid(row=postprocessing_row, column=0,
                                         columnspan=1, sticky=W)
     # Label to display the match level of current frame to template
-    stabilization_threshold_match_label = Label(postprocessing_frame, width=4, borderwidth=1, relief='sunken')
+    stabilization_threshold_match_label = Label(postprocessing_frame, width=4, borderwidth=1, relief='sunken', font=("Arial", FontSize))
     stabilization_threshold_match_label.grid(row=postprocessing_row, column=0, sticky=E)
 
-    # Radio buttons to selected between fast and precide stabilization
-    stabilization_type = StringVar()
-    fast_stabilization_rb = Radiobutton(postprocessing_frame, text='Fast',
-                                    variable=stabilization_type, value='fast')
-    fast_stabilization_rb.grid(row=postprocessing_row, column=1)
-    precise_stabilization_rb = Radiobutton(postprocessing_frame, text='Precise',
-                                    variable=stabilization_type, value='precise')
-    precise_stabilization_rb.grid(row=postprocessing_row, column=2)
-    stabilization_type.set('fast')
+    # Extended search checkbox (replace radio buttons for fast/precise stabilization)
+    extended_stabilization = tk.BooleanVar(value=False)
+    extended_stabilization_checkbox = tk.Checkbutton(
+        postprocessing_frame, text='Extended search',
+        variable=extended_stabilization, onvalue=True, offvalue=False, width=20,
+        command=extended_stabilization_selection, font=("Arial", FontSize))
+    extended_stabilization_checkbox.grid(row=postprocessing_row, column=1, columnspan=2)
 
     postprocessing_row += 1
 
@@ -3966,24 +4052,24 @@ def build_ui():
     perform_cropping_checkbox = tk.Checkbutton(
         postprocessing_frame, text='Crop', variable=perform_cropping,
         onvalue=True, offvalue=False, command=perform_cropping_selection,
-        width=4)
+        width=4, font=("Arial", FontSize))
     perform_cropping_checkbox.grid(row=postprocessing_row, column=0, sticky=W)
     force_4_3_crop = tk.BooleanVar(value=False)
     force_4_3_crop_checkbox = tk.Checkbutton(
         postprocessing_frame, text='4:3', variable=force_4_3_crop,
         onvalue=True, offvalue=False, command=force_4_3_selection,
-        width=4)
+        width=4, font=("Arial", FontSize))
     force_4_3_crop_checkbox.grid(row=postprocessing_row, column=0, sticky=E)
     force_16_9_crop = tk.BooleanVar(value=False)
     force_16_9_crop_checkbox = tk.Checkbutton(
         postprocessing_frame, text='16:9', variable=force_16_9_crop,
         onvalue=True, offvalue=False, command=force_16_9_selection,
-        width=4)
+        width=4, font=("Arial", FontSize))
     force_16_9_crop_checkbox.grid(row=postprocessing_row, column=1, sticky=W)
     cropping_btn = Button(postprocessing_frame, text='Define crop area',
                           width=12, height=1, command=select_cropping_area,
                           activebackground='green', activeforeground='white',
-                          wraplength=120)
+                          wraplength=120, font=("Arial", FontSize))
     cropping_btn.grid(row=postprocessing_row, column=2, sticky=E)
     postprocessing_row += 1
 
@@ -3992,7 +4078,7 @@ def build_ui():
     perform_sharpness_checkbox = tk.Checkbutton(
         postprocessing_frame, text='Sharpen', variable=perform_sharpness,
         onvalue=True, offvalue=False, command=perform_sharpness_selection,
-        width=7)
+        width=7, font=("Arial", FontSize))
     perform_sharpness_checkbox.grid(row=postprocessing_row, column=0, sticky=W)
 
     # Check box to perform denoise
@@ -4000,7 +4086,7 @@ def build_ui():
     perform_denoise_checkbox = tk.Checkbutton(
         postprocessing_frame, text='Denoise', variable=perform_denoise,
         onvalue=True, offvalue=False, command=perform_denoise_selection,
-        width=7)
+        width=7, font=("Arial", FontSize))
     perform_denoise_checkbox.grid(row=postprocessing_row, column=1, sticky=W)
     postprocessing_row += 1
 
@@ -4013,13 +4099,13 @@ def build_ui():
     # captured without the required part.
     frame_fill_type = StringVar()
     perform_fill_none_rb = Radiobutton(postprocessing_frame, text='No frame fill',
-                                    variable=frame_fill_type, value='none')
+                                    variable=frame_fill_type, value='none', font=("Arial", FontSize))
     perform_fill_none_rb.grid(row=postprocessing_row, column=0, sticky=W)
     perform_fill_fake_rb = Radiobutton(postprocessing_frame, text='Fake fill',
-                                    variable=frame_fill_type, value='fake')
+                                    variable=frame_fill_type, value='fake', font=("Arial", FontSize))
     perform_fill_fake_rb.grid(row=postprocessing_row, column=1, sticky=W)
     perform_fill_dumb_rb = Radiobutton(postprocessing_frame, text='Dumb fill',
-                                    variable=frame_fill_type, value='dumb')
+                                    variable=frame_fill_type, value='dumb', font=("Arial", FontSize))
     perform_fill_dumb_rb.grid(row=postprocessing_row, column=2, sticky=W)
     frame_fill_type.set('fake')
 
@@ -4031,7 +4117,7 @@ def build_ui():
                                                          text='Alert when image out of bounds',
                                                          variable=stabilization_bounds_alert,
                                                          onvalue=True, offvalue=False,
-                                                         width=40)
+                                                         width=40, font=("Arial", FontSize))
     stabilization_bounds_alert_checkbox.grid(row=postprocessing_row, column=0, columnspan=3, sticky=W)
 
     postprocessing_row += 1
@@ -4039,7 +4125,7 @@ def build_ui():
     # Define video generating area ************************************
     video_frame = LabelFrame(right_area_frame,
                              text='Video generation',
-                             width=50, height=8)
+                             width=50, height=8, font=("Arial", FontSize))
     video_frame.pack(side=TOP, padx=2, pady=2, ipadx=5)
     video_row = 0
 
@@ -4050,7 +4136,7 @@ def build_ui():
                                              variable=generate_video,
                                              onvalue=True, offvalue=False,
                                              command=generate_video_selection,
-                                             width=5)
+                                             width=5, font=("Arial", FontSize))
     generate_video_checkbox.grid(row=video_row, column=0, sticky=W)
     generate_video_checkbox.config(state=NORMAL if ffmpeg_installed
                                    else DISABLED)
@@ -4059,7 +4145,7 @@ def build_ui():
     skip_frame_regeneration_cb = tk.Checkbutton(
         video_frame, text='Skip Frame regeneration',
         variable=skip_frame_regeneration, onvalue=True, offvalue=False,
-        width=20)
+        width=20, font=("Arial", FontSize))
     skip_frame_regeneration_cb.grid(row=video_row, column=1,
                                     columnspan=2, sticky=W)
     skip_frame_regeneration_cb.config(state=NORMAL if ffmpeg_installed
@@ -4067,7 +4153,7 @@ def build_ui():
     video_row += 1
 
     # Video target folder
-    video_target_dir = Entry(video_frame, width=36, borderwidth=1)
+    video_target_dir = Entry(video_frame, width=36, borderwidth=1, font=("Arial", FontSize))
     video_target_dir.grid(row=video_row, column=0, columnspan=2,
                              sticky=W)
     video_target_dir.delete(0, 'end')
@@ -4076,14 +4162,14 @@ def build_ui():
     video_target_folder_btn = Button(video_frame, text='Target', width=6,
                                height=1, command=set_video_target_folder,
                                activebackground='green',
-                               activeforeground='white', wraplength=80)
+                               activeforeground='white', wraplength=80, font=("Arial", FontSize))
     video_target_folder_btn.grid(row=video_row, column=2, columnspan=2, sticky=W)
     video_row += 1
 
     # Video filename
-    video_filename_label = Label(video_frame, text='Video filename:')
+    video_filename_label = Label(video_frame, text='Video filename:', font=("Arial", FontSize))
     video_filename_label.grid(row=video_row, column=0, sticky=W)
-    video_filename_name = Entry(video_frame, width=26, borderwidth=1)
+    video_filename_name = Entry(video_frame, width=26 if BigSize else 33, borderwidth=1, font=("Arial", FontSize))
     video_filename_name.grid(row=video_row, column=1, columnspan=2,
                              sticky=W)
     video_filename_name.delete(0, 'end')
@@ -4092,9 +4178,9 @@ def build_ui():
     video_row += 1
 
     # Video title (add title at the start of the video)
-    video_title_label = Label(video_frame, text='Video title:')
+    video_title_label = Label(video_frame, text='Video title:', font=("Arial", FontSize))
     video_title_label.grid(row=video_row, column=0, sticky=W)
-    video_title_name = Entry(video_frame, width=26, borderwidth=1)
+    video_title_name = Entry(video_frame, width=26 if BigSize else 33, borderwidth=1, font=("Arial", FontSize))
     video_title_name.grid(row=video_row, column=1, columnspan=2,
                              sticky=W)
     video_title_name.delete(0, 'end')
@@ -4127,13 +4213,13 @@ def build_ui():
     # Create FPS Dropdown menu
     video_fps_frame = Frame(video_frame)
     video_fps_frame.grid(row=video_row, column=0, sticky=W)
-    video_fps_label = Label(video_fps_frame, text='FPS:')
+    video_fps_label = Label(video_fps_frame, text='FPS:', font=("Arial", FontSize))
     video_fps_label.pack(side=LEFT, anchor=W)
     video_fps_label.config(state=DISABLED)
     video_fps_dropdown = OptionMenu(video_fps_frame,
                                     video_fps_dropdown_selected, *fps_list,
                                     command=set_fps)
-    video_fps_dropdown.config(takefocus=1)
+    video_fps_dropdown.config(takefocus=1, font=("Arial", FontSize))
     video_fps_dropdown.pack(side=LEFT, anchor=E)
     video_fps_dropdown.config(state=DISABLED)
 
@@ -4144,16 +4230,16 @@ def build_ui():
     ffmpeg_preset = StringVar()
     ffmpeg_preset_rb1 = Radiobutton(ffmpeg_preset_frame,
                                     text="Best quality (slow)",
-                                    variable=ffmpeg_preset, value='veryslow')
+                                    variable=ffmpeg_preset, value='veryslow', font=("Arial", FontSize))
     ffmpeg_preset_rb1.pack(side=TOP, anchor=W)
     ffmpeg_preset_rb1.config(state=DISABLED)
     ffmpeg_preset_rb2 = Radiobutton(ffmpeg_preset_frame, text="Medium",
-                                    variable=ffmpeg_preset, value='medium')
+                                    variable=ffmpeg_preset, value='medium', font=("Arial", FontSize))
     ffmpeg_preset_rb2.pack(side=TOP, anchor=W)
     ffmpeg_preset_rb2.config(state=DISABLED)
     ffmpeg_preset_rb3 = Radiobutton(ffmpeg_preset_frame,
                                     text="Fast (low quality)",
-                                    variable=ffmpeg_preset, value='veryfast')
+                                    variable=ffmpeg_preset, value='veryfast', font=("Arial", FontSize))
     ffmpeg_preset_rb3.pack(side=TOP, anchor=W)
     ffmpeg_preset_rb3.config(state=DISABLED)
     ffmpeg_preset.set('medium')
@@ -4169,21 +4255,21 @@ def build_ui():
     # Create resolution Dropdown menu
     resolution_frame = Frame(video_frame)
     resolution_frame.grid(row=video_row, column=0, columnspan= 2, sticky=W)
-    resolution_label = Label(resolution_frame, text='Resolution:')
+    resolution_label = Label(resolution_frame, text='Resolution:', font=("Arial", FontSize))
     resolution_label.pack(side=LEFT, anchor=W)
     resolution_label.config(state=DISABLED)
     resolution_dropdown = OptionMenu(resolution_frame,
                                     resolution_dropdown_selected, *resolution_dict.keys(),
                                     command=set_resolution)
-    resolution_dropdown.config(takefocus=1)
+    resolution_dropdown.config(takefocus=1, font=("Arial", FontSize))
     resolution_dropdown.pack(side=LEFT, anchor=E)
     resolution_dropdown.config(state=DISABLED)
     video_row += 1
 
     # Custom ffmpeg path
-    custom_ffmpeg_path_label = Label(video_frame, text='Custom FFMpeg path:')
+    custom_ffmpeg_path_label = Label(video_frame, text='Custom FFMpeg path:', font=("Arial", FontSize))
     custom_ffmpeg_path_label.grid(row=video_row, column=0, sticky=W)
-    custom_ffmpeg_path = Entry(video_frame, width=26, borderwidth=1)
+    custom_ffmpeg_path = Entry(video_frame, width=26 if BigSize else 33, borderwidth=1, font=("Arial", FontSize))
     custom_ffmpeg_path.grid(row=video_row, column=1, columnspan=2, sticky=W)
     custom_ffmpeg_path.delete(0, 'end')
     custom_ffmpeg_path.insert('end', FfmpegBinName)
@@ -4195,7 +4281,7 @@ def build_ui():
     if ExpertMode:
         extra_frame = LabelFrame(right_area_frame,
                                  text='Extra options',
-                                 width=50, height=8)
+                                 width=50, height=8, font=("Arial", FontSize))
         extra_frame.pack(side=TOP, padx=5, pady=5, ipadx=5, ipady=5)
         extra_row = 0
 
@@ -4205,14 +4291,14 @@ def build_ui():
                                           width=16, height=1,
                                           command=select_custom_template,
                                           activebackground='green',
-                                          activeforeground='white')
+                                          activeforeground='white', font=("Arial", FontSize))
         custom_stabilization_btn.config(relief=SUNKEN if CustomTemplateDefined else RAISED)
         custom_stabilization_btn.grid(row=extra_row, column=0, columnspan=1, padx=5, pady=5, sticky=W)
 
         # Spinbox to select stabilization threshold
         stabilization_threshold_label = tk.Label(extra_frame,
                                                  text='Threshold:',
-                                                 width=11)
+                                                 width=11, font=("Arial", FontSize))
         stabilization_threshold_label.grid(row=extra_row, column=1,
                                            columnspan=1, sticky=E)
         stabilization_threshold_str = tk.StringVar(value=str(StabilizationThreshold))
@@ -4221,7 +4307,7 @@ def build_ui():
         stabilization_threshold_spinbox = tk.Spinbox(
             extra_frame,
             command=(stabilization_threshold_selection_aux, '%d'), width=6,
-            textvariable=stabilization_threshold_str, from_=0, to=255)
+            textvariable=stabilization_threshold_str, from_=0, to=255, font=("Arial", FontSize))
         stabilization_threshold_spinbox.grid(row=extra_row, column=2, sticky=W)
         stabilization_threshold_spinbox.bind("<FocusOut>", stabilization_threshold_spinbox_focus_out)
 
@@ -4234,19 +4320,19 @@ def build_ui():
                                                      text='Display template troubleshooting info',
                                                      variable=display_template,
                                                      onvalue=True, offvalue=False,
-                                                     command=display_template_selection,
-                                                     width=32)
+                                                     command=debug_template_popup,
+                                                     width=33 if BigSize else 41, font=("Arial", FontSize))
             display_template_checkbox.grid(row=extra_row, column=0, columnspan=2, sticky=W)
 
 
     # Define job list area ***************************************************
     job_list_frame = LabelFrame(left_area_frame,
                              text='Job List',
-                             width=67, height=8)
+                             width=67, height=8, font=("Arial", FontSize))
     job_list_frame.pack(side=TOP, padx=2, pady=2, anchor=W)
 
     # job listbox
-    job_list_listbox = Listbox(job_list_frame, width=65 if BigSize else 42, height=13)
+    job_list_listbox = Listbox(job_list_frame, width=65 if BigSize else 60, height=13 if BigSize else 19, font=("Arial", FontSize))
     job_list_listbox.grid(column=0, row=0, padx=5, pady=2, ipadx=5)
     job_list_listbox.bind("<Delete>", job_list_delete_current)
     job_list_listbox.bind("<Return>", job_list_load_current)
@@ -4275,25 +4361,25 @@ def build_ui():
     # Add job button
     add_job_btn = Button(job_list_btn_frame, text="Add job", width=12, height=1,
                     command=job_list_add_current, activebackground='green',
-                    activeforeground='white', wraplength=100)
+                    activeforeground='white', wraplength=100, font=("Arial", FontSize))
     add_job_btn.pack(side=TOP, padx=2, pady=2)
 
     # Delete job button
     delete_job_btn = Button(job_list_btn_frame, text="Delete job", width=12, height=1,
                     command=job_list_delete_selected, activebackground='green',
-                    activeforeground='white', wraplength=100)
+                    activeforeground='white', wraplength=100, font=("Arial", FontSize))
     delete_job_btn.pack(side=TOP, padx=2, pady=2)
 
     # Rerun job button
     rerun_job_btn = Button(job_list_btn_frame, text="Rerun job", width=12, height=1,
                     command=job_list_rerun_selected, activebackground='green',
-                    activeforeground='white', wraplength=100)
+                    activeforeground='white', wraplength=100, font=("Arial", FontSize))
     rerun_job_btn.pack(side=TOP, padx=2, pady=2)
 
     # Start processing job button
     start_batch_btn = Button(job_list_btn_frame, text="Start batch", width=12, height=1,
                     command=start_processing_job_list, activebackground='green',
-                    activeforeground='white', wraplength=100)
+                    activeforeground='white', wraplength=100, font=("Arial", FontSize))
     start_batch_btn.pack(side=TOP, padx=2, pady=2)
 
     # Suspend on end checkbox
@@ -4304,17 +4390,17 @@ def build_ui():
     #     width=13)
     # suspend_on_joblist_end_cb.pack(side=TOP, padx=2, pady=2)
 
-    suspend_on_completion_label = Label(job_list_btn_frame, text='Suspend on:')
+    suspend_on_completion_label = Label(job_list_btn_frame, text='Suspend on:', font=("Arial", FontSize))
     suspend_on_completion_label.pack(side=TOP, anchor=W, padx=2, pady=2)
     suspend_on_completion = StringVar()
     suspend_on_batch_completion_rb = Radiobutton(job_list_btn_frame, text="Job completion",
-                                  variable=suspend_on_completion, value='job_completion')
+                                  variable=suspend_on_completion, value='job_completion', font=("Arial", FontSize))
     suspend_on_batch_completion_rb.pack(side=TOP, anchor=W, padx=2, pady=2)
     suspend_on_job_completion_rb = Radiobutton(job_list_btn_frame, text="Batch completion",
-                                  variable=suspend_on_completion, value='batch_completion')
+                                  variable=suspend_on_completion, value='batch_completion', font=("Arial", FontSize))
     suspend_on_job_completion_rb.pack(side=TOP, anchor=W, padx=2, pady=2)
     no_suspend_rb = Radiobutton(job_list_btn_frame, text="No suspend",
-                                  variable=suspend_on_completion, value='no_suspend')
+                                  variable=suspend_on_completion, value='no_suspend', font=("Arial", FontSize))
     no_suspend_rb.pack(side=TOP, anchor=W, padx=2, pady=2)
 
     suspend_on_completion.set("no_suspend")
@@ -4360,7 +4446,7 @@ def main(argv):
     global job_list
     global project_settings
     global default_project_config
-    global is_demo
+    global is_demo, ForceSmallSize, ForceBigSize
     global GenerateCsv
     global suspend_on_joblist_end
     global BatchAutostart
@@ -4394,7 +4480,7 @@ def main(argv):
     film_wb_template =  cv2.imread(hole_template_wb_filename, cv2.IMREAD_GRAYSCALE)
     film_corner_template = cv2.imread(hole_template_filename_corner, cv2.IMREAD_GRAYSCALE)
 
-    opts, args = getopt.getopt(argv, "hiel:dcst:")
+    opts, args = getopt.getopt(argv, "hiel:dcst:12")
 
     for opt, arg in opts:
         if opt == '-l':
@@ -4411,6 +4497,10 @@ def main(argv):
             BatchAutostart = True
         if opt == '-t':
             num_threads = int(arg)
+        if opt == '-1':
+            ForceSmallSize = True
+        if opt == '-2':
+            ForceBigSize = True
         elif opt == '-h':
             print("AfterScan")
             print("  -l <log mode>  Set log level:")
@@ -4420,6 +4510,7 @@ def main(argv):
             print("  -c             Generate CSV file with misaligned frames")
             print("  -s             Initiate batch on startup (and suspend on batch completion)")
             print("  -t <num>       Number of threads")
+            print("  -1             Initiate on 'small screen' mode (resolution lower than than Full HD)")
             exit()
 
     LogLevel = getattr(logging, LoggingMode.upper(), None)
