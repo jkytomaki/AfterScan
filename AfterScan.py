@@ -19,9 +19,9 @@ __author__ = 'Juan Remirez de Esparza'
 __copyright__ = "Copyright 2022, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
-__version__ = "1.9.6"
+__version__ = "1.9.7"
 __date__ = "2024-01-18"
-__version_highlight__ = "Tooltips added"
+__version_highlight__ = "Fixes for tooltips"
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
 __status__ = "Development"
@@ -269,6 +269,7 @@ IsMac = False
 is_demo = False
 ForceSmallSize = False
 ForceBigSize = False
+DisableTooltips = False
 debug_enabled = False
 debug_template_match = False
 developer_debug = False
@@ -3819,6 +3820,9 @@ def format_tooltip_text(text, max_line_width):
 
 
 def show_tooltip(widget, text):
+    global DisableTooltips
+    if widget["state"] == 'disabled' or DisableTooltips:
+        return
     x, y, _, _ = widget.bbox("insert")
     x += widget.winfo_rootx() + 25
     y += widget.winfo_rooty() + 25
@@ -3827,7 +3831,7 @@ def show_tooltip(widget, text):
     tooltip_window.wm_overrideredirect(True)
     tooltip_window.wm_geometry(f"+{x}+{y}")
 
-    formatted_text = format_tooltip_text(text, 40)
+    formatted_text = format_tooltip_text(text, 60)
     label = tk.Label(tooltip_window, text=formatted_text, background="light yellow", relief="solid", borderwidth=1, font=("Arial", FontSize))
     label.pack()
 
@@ -4198,6 +4202,7 @@ def build_ui():
                                                          onvalue=True, offvalue=False,
                                                          width=40, font=("Arial", FontSize))
     stabilization_bounds_alert_checkbox.grid(row=postprocessing_row, column=0, columnspan=3, sticky=W)
+    setup_tooltip(stabilization_bounds_alert_checkbox, "Check to sound an alert each time a badly aligned frame (requiring fill-in) is detected.")
 
     postprocessing_row += 1
 
@@ -4562,6 +4567,8 @@ def main(argv):
     global BatchAutostart
     global num_threads
     global developer_debug
+    global DisableTooltips
+
 
     LoggingMode = "INFO"
 
@@ -4590,7 +4597,7 @@ def main(argv):
     film_wb_template =  cv2.imread(hole_template_wb_filename, cv2.IMREAD_GRAYSCALE)
     film_corner_template = cv2.imread(hole_template_filename_corner, cv2.IMREAD_GRAYSCALE)
 
-    opts, args = getopt.getopt(argv, "hiel:dcst:12")
+    opts, args = getopt.getopt(argv, "hiel:dcst:12n")
 
     for opt, arg in opts:
         if opt == '-l':
@@ -4611,11 +4618,14 @@ def main(argv):
             ForceSmallSize = True
         if opt == '-2':
             ForceBigSize = True
+        if opt == '-n':
+            DisableTooltips = True
         elif opt == '-h':
             print("AfterScan")
             print("  -l <log mode>  Set log level:")
             print("      <log mode> = [DEBUG|INFO|WARNING|ERROR]")
             print("  -i             Ignore existing config")
+            print("  -n             Disable Tooltips")
             print("  -e             Enable expert mode")
             print("  -c             Generate CSV file with misaligned frames")
             print("  -s             Initiate batch on startup (and suspend on batch completion)")
