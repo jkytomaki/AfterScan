@@ -19,7 +19,7 @@ __author__ = 'Juan Remirez de Esparza'
 __copyright__ = "Copyright 2022, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
-__version__ = "1.9.21"
+__version__ = "1.9.22"
 __date__ = "2024-01-23"
 __version_highlight__ = "Bring back custom templates"
 __maintainer__ = "Juan Remirez de Esparza"
@@ -1322,7 +1322,10 @@ def widget_status_update(widget_state=0, button_action=0):
         if ExpertMode:
             custom_stabilization_btn.config(state=widget_state)
             stabilization_threshold_spinbox.config(state=widget_state)
-        perform_cropping_checkbox.config(state=widget_state if perform_stabilization.get() and CropAreaDefined and not is_demo else DISABLED)
+        if is_demo:
+            perform_cropping_checkbox.config(state=NORMAL)
+        else:
+            perform_cropping_checkbox.config(state=widget_state if perform_stabilization.get() and CropAreaDefined else DISABLED)
         cropping_btn.config(state=widget_state if perform_stabilization.get() else DISABLED)
         force_4_3_crop_checkbox.config(state=widget_state if perform_stabilization.get() else DISABLED)
         force_16_9_crop_checkbox.config(state=widget_state if perform_stabilization.get() else DISABLED)
@@ -4551,6 +4554,7 @@ def main(argv):
     global developer_debug
 
     LoggingMode = "INFO"
+    go_disable_tooptips = False
 
     # Create job dictionary
     job_list = {}
@@ -4599,7 +4603,7 @@ def main(argv):
         if opt == '-2':
             ForceBigSize = True
         if opt == '-n':
-            disable_tooltips()
+            go_disable_tooptips = True
         elif opt == '-h':
             print("AfterScan")
             print("  -l <log mode>  Set log level:")
@@ -4618,6 +4622,8 @@ def main(argv):
         raise ValueError('Invalid log level: %s' % LogLevel)
 
     afterscan_init()
+    if go_disable_tooptips:
+        disable_tooltips()
 
     load_general_config()
 
