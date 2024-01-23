@@ -19,7 +19,7 @@ __author__ = 'Juan Remirez de Esparza'
 __copyright__ = "Copyright 2022, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
-__version__ = "1.9.20"
+__version__ = "1.9.21"
 __date__ = "2024-01-23"
 __version_highlight__ = "Bring back custom templates"
 __maintainer__ = "Juan Remirez de Esparza"
@@ -668,9 +668,7 @@ def decode_project_config():
                 film_hole_template = cv2.imread(hole_template_filename, cv2.IMREAD_GRAYSCALE)
                 TemplateTopLeft = expected_hole_template_pos_custom
                 TemplateBottomRight = (expected_hole_template_pos_custom[0] + film_hole_template.shape[1], expected_hole_template_pos_custom[1] + film_hole_template.shape[0])
-                print(f">>>>>>>>>>>>>>>>>>filename: {hole_template_filename}")
             expected_hole_template_pos = expected_hole_template_pos_custom
-            print(f">>>>>>>>>>>>>>>>>>expected pos: {expected_hole_template_pos}, size: {film_hole_template.shape}")
             set_film_type()
         else:
             if 'CustomTemplateFilename' in project_config:
@@ -2295,7 +2293,6 @@ def select_custom_template():
             expected_hole_template_pos = expected_hole_template_pos_custom
             CustomTemplateWindowTitle = "Captured custom template. Press any key to continue."
             project_config['CustomTemplateExpectedPos'] = expected_hole_template_pos_custom
-            print(f">>>>>>>>>>>>>>>>>>expected pos: {expected_hole_template_pos}, threshold: {StabilizationThreshold}")
             win_x = int(img_final.shape[1] * area_select_image_factor)
             win_y = int(img_final.shape[0] * area_select_image_factor)
             cv2.namedWindow(CustomTemplateWindowTitle, flags=cv2.WINDOW_GUI_NORMAL)
@@ -2628,7 +2625,6 @@ def stabilize_image(frame_idx, img, img_ref, img_ref_alt = None):
     debug_template_display_frame(img_matched)
 
     if debug_template_match and top_left[1] != -1 :
-        print(f"****** match_level: {match_level}, TemplateTopLeft: {TemplateTopLeft}, TemplateBottomRight: {TemplateBottomRight}")
         cv2.rectangle(img, (top_left[0], top_left[1]), (top_left[0] + TemplateBottomRight[0] - TemplateTopLeft[0], top_left[1] + TemplateBottomRight[1] - TemplateTopLeft[1]), match_level_color_bgr(match_level), 2)
         cv2.rectangle(img, (HoleSearchTopLeft[0], HoleSearchTopLeft[1]), (HoleSearchBottomRight[0], HoleSearchBottomRight[1]), (255, 255, 255), 2)
     if top_left[1] != -1 and match_level > 0.1:
