@@ -19,9 +19,9 @@ __author__ = 'Juan Remirez de Esparza'
 __copyright__ = "Copyright 2022, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
-__version__ = "1.9.30"
-__date__ = "2024-01-23"
-__version_highlight__ = "Handling of PNG files in addition to JPG"
+__version__ = "1.9.31"
+__date__ = "2024-01-26"
+__version_highlight__ = "Various bugfixes"
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
 __status__ = "Development"
@@ -614,7 +614,7 @@ def decode_project_config():
         video_target_dir.delete(0, 'end')
         video_target_dir.insert('end', VideoTargetDir)
         video_target_dir.after(100, video_target_dir.xview_moveto, 1)
-    if 'CurrentFrame' in project_config:
+    if 'CurrentFrame' in project_config and not BatchJobRunning: # only if project loaded by user, otherwise it alters start encoding frame in batch mode
         CurrentFrame = project_config["CurrentFrame"]
         CurrentFrame = max(CurrentFrame, 0)
         frame_slider.set(CurrentFrame)
@@ -992,6 +992,7 @@ def job_processing_loop():
     global BatchJobRunning
     global project_config_from_file
     global suspend_on_completion
+    global CurrentFrame
 
     job_started = False
     for entry in job_list:
@@ -1001,9 +1002,12 @@ def job_processing_loop():
             idx = job_list_listbox.get(0, "end").index(entry)
             job_list_listbox.itemconfig(idx, fg='blue')
             CurrentJobEntry = entry
-            logging.debug("Processing %s, starting from frame %i, %s frames",
-                         entry, job_list[entry]['project']['CurrentFrame'],
-                         job_list[entry]['project']['FramesToEncode'])
+            if 'FrameFrom' in job_list[entry]['project']:
+                CurrentFrame = job_list[entry]['project']['FrameFrom']
+                logging.debug(f"Set current Frame to {CurrentFrame}")
+            else:
+                CurrentFrame = 0
+            logging.debug(f"Processing {entry}, starting from frame {CurrentFrame}, {job_list[entry]['project']['FramesToEncode']} frames")
             project_config_from_file = False
             project_config = job_list[entry]['project'].copy()
             decode_project_config()
@@ -1730,7 +1734,7 @@ def select_scale_frame(selected_frame):
     global frame_scale_refresh_done, frame_scale_refresh_pending
     global frame_slider
 
-    if not ConvertLoopRunning:  # Do not refresh during conversion loop
+    if not ConvertLoopRunning and not BatchJobRunning:  # Do not refresh during conversion loop
         frame_slider.focus()
         CurrentFrame = int(selected_frame)
         project_config["CurrentFrame"] = CurrentFrame
@@ -2371,7 +2375,7 @@ def match_template(frame_idx, template, img, thres):
     iw = img.shape[1]
     ih = img.shape[0]
     if (tw >= iw or th >= ih):
-        logging.error("Template (%ix%i) bigger than image  (%ix%i)",
+        logging.error("Template (%ix%i) bigger than search area (%ix%i)",
                       tw, th, iw, ih)
         return (0, 0, 0)
 
@@ -2567,12 +2571,17 @@ def resize_image(img, percent):
 
 
 def get_image_left_stripe(img):
-    global HoleSearchTopLeft, HoleSearchBottomRight
+    global HoleSearchTopLeft, HoleSearchBottomRight, film_hole_template
     # Get partial image where the hole should be (to facilitate template search
     # by OpenCV). We do the calculations inline instead of calling the function
     # since we need the intermediate values
     # Default values defined at display initialization time, after source
     # folder is defined
+    # If template wider than search area, make search area bigger (including +100 to have some margin)
+    if film_hole_template.shape[1] > HoleSearchBottomRight[0] - HoleSearchTopLeft[0]:
+        logging.debug(f"Making left stripe wider: {HoleSearchBottomRight[0] - HoleSearchTopLeft[0]}")
+        HoleSearchBottomRight = (HoleSearchBottomRight[0] + film_hole_template.shape[1] + 100, HoleSearchBottomRight[1])
+        logging.debug(f"Making left stripe wider: {HoleSearchBottomRight[0] - HoleSearchTopLeft[0]}")
     horizontal_range = (HoleSearchTopLeft[0], HoleSearchBottomRight[0])
     vertical_range = (HoleSearchTopLeft[1], HoleSearchBottomRight[1])
     return img[vertical_range[0]:vertical_range[1], horizontal_range[0]:horizontal_range[1]]
@@ -2648,10 +2657,12 @@ def stabilize_image(frame_idx, img, img_ref, img_ref_alt = None):
     if top_left[1] != -1 and match_level > 0.1:
         move_x = hole_template_pos[0] - top_left[0]
         move_y = hole_template_pos[1] - top_left[1]
-        if abs(move_x) > 150:  # if horizontal shift too big, ignore it
+        if abs(move_x) > 150 or abs(move_y) > 350:  # if shift too big, ignore it, probably for the better
+            logging.warning(f"Shift too big ({move_x}, {move_y}), ignoring it.")
             move_x = 0
             move_y = 0
-    else:   # If match is not good, keep the frame where it is, will probabyl look better
+    else:   # If match is not good, keep the frame where it is, will probably look better
+        logging.warning(f"Template match not good ({match_level}, ignoring it.")
         move_x = 0
         move_y = 0
     logging.debug(f"Frame {frame_idx}: top left {top_left}, move_y:{move_y}, move_x:{move_x}")
@@ -2957,7 +2968,12 @@ def valid_generated_frame_range():
         if file_to_check in TargetDirFileList:
             file_count += 1
         else:
-            logging.error("File %s missing.", file_to_check)
+            # Double check if file really does not exist
+            if os.path.exists(file_to_check):
+                logging.warning("File %s missing from target list, but file exists.", file_to_check)
+                file_count += 1
+            else:
+                logging.error("File %s missing.", file_to_check)
 
     logging.debug("Checking frame range %i-%i: %i files found",
                   first_absolute_frame + StartFrame,
@@ -3285,6 +3301,9 @@ def frame_update_ui(frame_idx, merged):
     frame_slider.set(frame_idx)
     frame_slider.config(label='Processed:' +
                               str(frame_idx + first_absolute_frame - StartFrame))
+    fps = 18 if film_type.get() == 'S8' else 16
+    time_str = f"Film time: {(frame_idx//fps) // 60:02}:{(frame_idx//fps) % 60:02}"
+    frame_slider_time.config(text=time_str)
     status_str = f"Status: Generating{' merged' if merged else ''} frames {((frame_idx - StartFrame) * 100 / frames_to_encode):.1f}%"
     if FPM_CalculatedValue != -1:  # FPM not calculated yet, display some indication
         status_str = status_str + ' (FPM:%d)' % (FPM_CalculatedValue)
@@ -3298,6 +3317,7 @@ def frame_encoding_thread(queue, event, id):
     global last_displayed_image
 
     try:
+        logging.debug(f"Thread {id} started")
         while not event.is_set():
             message = queue.get()
             if not os.path.isdir(SourceDir):
@@ -3660,16 +3680,16 @@ def video_generation_loop():
         elif not valid_generated_frame_range():
             status_str = "Status: No frames to encode"
             app_status_label.config(text=status_str, fg='red')
+            logging.error(f"Cannot generate video {TargetVideoFilename}, due to some frames missing in range "
+                          f"{StartFrame+first_absolute_frame}, {StartFrame+first_absolute_frame+frames_to_encode}")
             if not BatchJobRunning:
-                tk.messagebox.showwarning(
+                tk.messagebox.showerror(
                     "Frames missing",
                     "Video cannot be generated.\r\n"
                     f"Not all frames in specified range ({StartFrame+first_absolute_frame}, {StartFrame+first_absolute_frame+frames_to_encode}) exist in target folder to "
                     "allow video generation.\r\n"
                     "Please regenerate frames making sure option "
                     "\'Skip Frame regeneration\' is not selected, and try again.")
-            logging.error(f"Cannot generate video {TargetVideoFilename}, due to some frames missing in range "
-                          f"{StartFrame+first_absolute_frame}, {StartFrame+first_absolute_frame+frames_to_encode}")
             generation_exit(success = False)  # Restore all settings to normal
         else:
             get_target_dir_file_list()  # Refresh target dir file list here as well for batch mode encoding
@@ -3708,6 +3728,9 @@ def video_generation_loop():
                     frame_slider.set(StartFrame + first_absolute_frame + encoded_frame)
                     frame_slider.config(label='Processed:' +
                                               str(encoded_frame))
+                    fps = 18 if film_type.get() == 'S8' else 16
+                    time_str = f"Film time: {(encoded_frame // fps) // 60:02}:{(encoded_frame // fps) % 60:02}"
+                    frame_slider_time.config(text=time_str)
                     status_str = "Status: Generating video %.1f%%" % (encoded_frame*100/(frames_to_encode+title_num_frames))
                     app_status_label.config(text=status_str, fg='black')
                     display_output_frame_by_number(encoded_frame)
@@ -3917,7 +3940,7 @@ def build_ui():
     global FfmpegBinName
     global skip_frame_regeneration
     global hole_template_filename
-    global frame_slider, CurrentFrame, frame_selected
+    global frame_slider, frame_slider_time, CurrentFrame, frame_selected
     global film_type
     global job_list_listbox
     global app_status_label
@@ -3963,8 +3986,11 @@ def build_ui():
 
     # Create frame to display current frame and slider
     frame_frame = LabelFrame(regular_top_section_frame, text='Current frame',
-                               width=35, height=10, font=("Arial", FontSize))
+                               width=35, height=10, font=("Arial", FontSize-2))
     frame_frame.grid(row=0, column=0, sticky=W)
+
+    frame_slider_time = Label(frame_frame, width=12, text='Film time:', font=("Arial", FontSize-2))
+    frame_slider_time.pack(side=BOTTOM)
 
     frame_selected = IntVar()
     frame_slider = Scale(frame_frame, orient=HORIZONTAL, from_=0, to=0,
@@ -3973,7 +3999,7 @@ def build_ui():
                          highlightthickness=1, takefocus=1, font=("Arial", FontSize))
     frame_slider.pack(side=BOTTOM, ipady=4)
     frame_slider.set(CurrentFrame)
-    
+
     setup_tooltip(frame_slider, "Use the slider to browse around the frames to be processed.")
 
     # Application status label
@@ -4000,7 +4026,7 @@ def build_ui():
 
     # Create frame to select source and target folders *******************************
     folder_frame = LabelFrame(right_area_frame, text='Folder selection', width=50,
-                              height=8, font=("Arial", FontSize))
+                              height=8, font=("Arial", FontSize-2))
     folder_frame.pack(side=TOP, padx=2, pady=2, ipadx=5)
 
     source_folder_frame = Frame(folder_frame)
@@ -4049,7 +4075,7 @@ def build_ui():
     # Define post-processing area *********************************************
     postprocessing_frame = LabelFrame(right_area_frame,
                                       text='Frame post-processing',
-                                      width=40, height=8, font=("Arial", FontSize))
+                                      width=40, height=8, font=("Arial", FontSize-2))
     postprocessing_frame.pack(side=TOP, padx=2, pady=2, ipadx=5)
     postprocessing_row = 0
 
@@ -4259,7 +4285,7 @@ def build_ui():
     # Define video generating area ************************************
     video_frame = LabelFrame(right_area_frame,
                              text='Video generation',
-                             width=50, height=8, font=("Arial", FontSize))
+                             width=50, height=8, font=("Arial", FontSize-2))
     video_frame.pack(side=TOP, padx=2, pady=2, ipadx=5)
     video_row = 0
 
@@ -4435,7 +4461,7 @@ def build_ui():
     if ExpertMode:
         extra_frame = LabelFrame(right_area_frame,
                                  text='Extra options',
-                                 width=50, height=8, font=("Arial", FontSize))
+                                 width=50, height=8, font=("Arial", FontSize-2))
         extra_frame.pack(side=TOP, padx=5, pady=5, ipadx=5, ipady=5)
         extra_row = 0
 
@@ -4475,7 +4501,7 @@ def build_ui():
     # Define job list area ***************************************************
     job_list_frame = LabelFrame(left_area_frame,
                              text='Job List',
-                             width=67, height=8, font=("Arial", FontSize))
+                             width=67, height=8, font=("Arial", FontSize-2))
     job_list_frame.pack(side=TOP, padx=2, pady=2, anchor=W)
 
     # job listbox
