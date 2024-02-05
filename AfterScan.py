@@ -19,10 +19,10 @@ __author__ = 'Juan Remirez de Esparza'
 __copyright__ = "Copyright 2022, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
-__version__ = "1.10.6"
+__version__ = "1.11.0"
 __data_version__ = "1.0"
-__date__ = "2024-02-01"
-__version_highlight__ = "Code cleanup: Factorize templates in class"
+__date__ = "2024-02-05"
+__version_highlight__ = "Gamma correction + Bugfixes"
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
 __status__ = "Development"
@@ -147,7 +147,6 @@ TargetVideoFilename = ""
 TargetVideoTitle = ""
 SourceDir = ""
 TargetDir = ""
-VideoTargetDir = ""
 file_type = 'jpg'
 file_type_out = file_type
 FrameInputFilenamePatternList_jpg = "picture-?????.jpg"
@@ -276,16 +275,18 @@ IsMac = False
 is_demo = False
 ForceSmallSize = False
 ForceBigSize = False
-debug_enabled = False
+dev_debug_enabled = False
 debug_template_match = False
 developer_debug = False
 developer_debug_file_flag = os.path.join(script_dir, "developer.txt")
 
-GenerateCsv = True
+GenerateCsv = False
 CsvFilename = ""
 CsvPathName = ""
 CsvFile = 0
 CsvFramesOffPercent = 0
+match_level_average = 0
+match_level_average_counter = 0
 
 # Token to be inserted in each queue on program closure, to allow threads to shut down cleanly
 END_TOKEN = "TERMINATE_PROCESS"
@@ -314,9 +315,9 @@ class Template:
             self.template = cv2.imread(filename, cv2.IMREAD_GRAYSCALE)
             self.scaled_template = resize_image(self.template, self.scale)
             # Calculate the white on black proportion to help with detection
-            white_pixel_count = cv2.countNonZero(self.scaled_template)
+            self.white_pixel_count = cv2.countNonZero(self.scaled_template)
             total_pixels = self.scaled_template.size
-            self.wb_proportion = white_pixel_count / total_pixels
+            self.wb_proportion = self.white_pixel_count / total_pixels
             self.size = (self.template.shape[1],self.template.shape[0])
             self.scaled_size = (int(self.size[0] * self.scale),
                                 int(self.size[1] * self.scale))
@@ -327,15 +328,17 @@ class Template:
             self.size = (0,0)
             self.scaled_size = (0,0)
 
-    def refresh_template(self):
+    def refresh(self):
         self.template = cv2.imread(self.filename, cv2.IMREAD_GRAYSCALE)
         self.scaled_template = resize_image(self.template, self.scale)
-        white_pixel_count = cv2.countNonZero(self.scaled_template)
+        self.white_pixel_count = cv2.countNonZero(self.scaled_template)
         total_pixels = self.scaled_template.size
-        self.wb_proportion = white_pixel_count / total_pixels
+        self.wb_proportion = self.white_pixel_count / total_pixels
         self.size = (self.template.shape[1], self.template.shape[0])
         self.scaled_size = (int(self.size[0] * self.scale),
                             int(self.size[1] * self.scale))
+        self.scaled_position = (int(self.position[0] * self.scale),
+                                int(self.position[1] * self.scale))
 
 
 class TemplateList:
@@ -353,7 +356,7 @@ class TemplateList:
         if exists:
             t.filename = filename
             t.position = position
-            t.refresh_template()
+            t.refresh()
             target = t
         else:
             target = Template(name, filename, type, position)
@@ -417,8 +420,14 @@ class TemplateList:
     def get_active_type(self):
         return self.active_template.type
 
+    def get_active_white_pixel_count(self):
+        return self.active_template.white_pixel_count
+
     def get_active_wb_proportion(self):
         return self.active_template.wb_proportion
+
+    def set_active_wb_proportion(self, proportion):
+        self.active_template.wb_proportion = proportion
 
 
 
@@ -460,17 +469,19 @@ def set_project_defaults():
     global perform_cropping, generate_video, resolution_dropdown_selected
     global frame_slider, encode_all_frames, frames_to_encode_str
     global perform_stabilization, skip_frame_regeneration, ffmpeg_preset
-    global video_filename_name, video_title_name
+    global video_filename_str, video_title_str
     global frame_from_str, frame_to_str
     global frame_fill_type, extended_stabilization
     global perform_denoise, perform_sharpness
 
     project_config["PerformCropping"] = False
     perform_cropping.set(project_config["PerformCropping"])
-    project_config["PerformSharpness"] = False
-    perform_sharpness.set(project_config["PerformSharpness"])
     project_config["PerformDenoise"] = False
     perform_denoise.set(project_config["PerformDenoise"])
+    project_config["PerformSharpness"] = False
+    perform_sharpness.set(project_config["PerformSharpness"])
+    project_config["PerformGammaCorrection"] = False
+    perform_gamma_correction.set(project_config["PerformGammaCorrection"])
     project_config["FrameFillType"] = 'none'
     frame_fill_type.set(project_config["FrameFillType"])
     project_config["GenerateVideo"] = False
@@ -494,17 +505,21 @@ def set_project_defaults():
     project_config["FFmpegPreset"] = "veryslow"
     ffmpeg_preset.set(project_config["FFmpegPreset"])
     project_config["VideoFilename"] = ""
-    video_filename_name.delete(0, 'end')
-    video_filename_name.insert('end', project_config["VideoFilename"])
+    video_filename_str.set(project_config["VideoFilename"])
     project_config["VideoTitle"] = ""
-    video_title_name.delete(0, 'end')
-    video_title_name.insert('end', project_config["VideoTitle"])
+    video_title_str.set(project_config["VideoTitle"])
     project_config["FillBorders"] = False
 
 
 def save_general_config():
     # Write config data upon exit
     general_config["GeneralConfigDate"] = str(datetime.now())
+    general_config["WindowPos"] = win.geometry()
+    try:
+        if template_popup_window.winfo_exists():
+            general_config["TemplatePopupWindowPos"] = template_popup_window.geometry()
+    except Exception as e:
+        logging.debug(f"Error (expected) while trying to save template popup window geometry: {e}")
     if not IgnoreConfig:
         with open(general_config_filename, 'w+') as f:
             json.dump(general_config, f)
@@ -513,10 +528,6 @@ def save_general_config():
 def load_general_config():
     global general_config
     global general_config_filename
-    global LastSessionDate
-    global SourceDir, TargetDir
-    global project_name
-    global FfmpegBinName
 
     # Check if persisted data file exist: If it does, load it
     if not IgnoreConfig and os.path.isfile(general_config_filename):
@@ -529,6 +540,13 @@ def load_general_config():
     logging.debug("Reading general config")
     for item in general_config:
         logging.debug("%s=%s", item, str(general_config[item]))
+
+
+def decode_general_config():
+    global SourceDir
+    global project_name
+    global FfmpegBinName
+    global general_config
 
     if 'SourceDir' in general_config:
         SourceDir = general_config["SourceDir"]
@@ -595,12 +613,10 @@ def load_project_settings():
                 tk.messagebox.showerror(
                     "Invalid project file",
                     f"The project file {project_settings_filename} saved in disk is invalid."
-                    "Project defaults will be loaded and existing file will be overwritten upon exit"
+                    "Project defaults will be loaded and existing file will be overwritten upon exit "
                     "(and a backup file generated in case you want to recover information from it)")
             else:
                 # New version is a list
-                global_info = {'data_version': __data_version__, 'code_version': __version__,
-                               'save_date': str(datetime.now())}
                 logging.info(f"Loading project file: {saved_list[0]['data_version']},  {saved_list[0]['code_version']},  {saved_list[0]['save_date']}")
                 project_settings = saved_list[1]
                 projects_loaded = True
@@ -631,9 +647,9 @@ def save_project_config():
     global ffmpeg_preset
     global StabilizeAreaDefined
     global CurrentFrame
-    global video_filename_name, video_title_name
+    global video_filename_str, video_title_str
     global frame_from_str, frame_to_str
-    global perform_denoise, perform_sharpness
+    global perform_denoise, perform_sharpness, perform_gamma_correction
 
     # Do not save if current project comes from batch job
     if not project_config_from_file or IgnoreConfig:
@@ -646,12 +662,14 @@ def save_project_config():
     project_config["FFmpegPreset"] = ffmpeg_preset.get()
     project_config["ProjectConfigDate"] = str(datetime.now())
     project_config["PerformCropping"] = perform_cropping.get()
-    project_config["PerformSharpness"] = perform_sharpness.get()
     project_config["PerformDenoise"] = perform_denoise.get()
+    project_config["PerformSharpness"] = perform_sharpness.get()
+    project_config["PerformGammaCorrection"] = perform_gamma_correction.get()
+    project_config["GammaCorrectionValue"] = float(gamma_correction_str.get())
     project_config["FrameFillType"] = frame_fill_type.get()
     project_config["ExtendedStabilization"] = extended_stabilization.get()
-    project_config["VideoFilename"] = video_filename_name.get()
-    project_config["VideoTitle"] = video_title_name.get()
+    project_config["VideoTitle"] = video_title_str.get()
+    project_config["VideoFilename"] = video_filename_str.get()
     project_config["FrameFrom"] = frame_from_str.get()
     project_config["FrameTo"] = frame_to_str.get()
     if StabilizeAreaDefined:
@@ -705,7 +723,7 @@ def load_project_config():
     widget_status_update(NORMAL)
 
 def decode_project_config():        
-    global SourceDir, TargetDir, VideoTargetDir
+    global SourceDir, TargetDir
     global project_config
     global template_list
     global project_config_basename, project_config_filename
@@ -714,7 +732,7 @@ def decode_project_config():
     global resolution_dropdown, resolution_dropdown_selected
     global encode_all_frames, frames_to_encode
     global skip_frame_regeneration
-    global generate_video, video_filename_name, video_title_name
+    global generate_video, video_filename_name
     global CropTopLeft, CropBottomRight, perform_cropping
     global StabilizeAreaDefined, film_type
     global StabilizationThreshold
@@ -725,7 +743,7 @@ def decode_project_config():
     global frame_fill_type
     global extended_stabilization
     global Force43, Force169
-    global perform_denoise, perform_sharpness
+    global perform_denoise, perform_sharpness, perform_gamma_correction, gamma_correction_str
 
     if 'SourceDir' in project_config:
         SourceDir = project_config["SourceDir"]
@@ -748,12 +766,10 @@ def decode_project_config():
         frames_target_dir.insert('end', TargetDir)
         frames_target_dir.after(100, frames_target_dir.xview_moveto, 1)
     if 'VideoTargetDir' in project_config:
-        VideoTargetDir = project_config["VideoTargetDir"]
+        video_target_dir_str.set(project_config["VideoTargetDir"])
         # If directory in configuration does not exist, set current working dir
-        if not os.path.isdir(VideoTargetDir):
-            VideoTargetDir = TargetDir  # use frames target dir as fallback option
-        video_target_dir.delete(0, 'end')
-        video_target_dir.insert('end', VideoTargetDir)
+        if not os.path.isdir(video_target_dir_str.get()):
+            video_target_dir_str.set(TargetDir)  # use frames target dir as fallback option
         video_target_dir.after(100, video_target_dir.xview_moveto, 1)
     if 'CurrentFrame' in project_config and not BatchJobRunning: # only if project loaded by user, otherwise it alters start encoding frame in batch mode
         CurrentFrame = project_config["CurrentFrame"]
@@ -823,8 +839,13 @@ def decode_project_config():
                 f"The custom template saved for project {template_name} is invalid."
                 "Please redefine custom template for this project.")
             del project_config['CustomTemplateFilename']
-        template_list.add(template_name, full_path_template_filename, "custom", expected_hole_template_pos_custom)
-        debug_template_refresh_template()
+            # Invalid custom template defined, set default one
+            set_film_type()
+            project_config["CustomTemplateDefined"] = False
+        else:
+            logging.debug(f"Adding custom template {template_name} from configuration to template list (filename {full_path_template_filename})")
+            template_list.add(template_name, full_path_template_filename, "custom", expected_hole_template_pos_custom)
+            debug_template_refresh_template()
     else:
         # No custom template defined, set default one
         set_film_type()
@@ -833,14 +854,22 @@ def decode_project_config():
         perform_cropping.set(project_config["PerformCropping"])
     else:
         perform_cropping.set(False)
-    if 'PerformSharpness' in project_config:
-        perform_sharpness.set(project_config["PerformSharpness"])
-    else:
-        perform_sharpness.set(False)
     if 'PerformDenoise' in project_config:
         perform_denoise.set(project_config["PerformDenoise"])
     else:
         perform_denoise.set(False)
+    if 'PerformSharpness' in project_config:
+        perform_sharpness.set(project_config["PerformSharpness"])
+    else:
+        perform_sharpness.set(False)
+    if 'PerformGammaCorrection' in project_config:
+        perform_gamma_correction.set(project_config["PerformGammaCorrection"])
+    else:
+        perform_gamma_correction.set(False)
+    if 'GammaCorrectionValue' in project_config:
+        gamma_correction_str.set(project_config["GammaCorrectionValue"])
+    else:
+        gamma_correction_str.set("2.2")
     if 'CropRectangle' in project_config:
         CropBottomRight = tuple(project_config["CropRectangle"][1])
         CropTopLeft = tuple(project_config["CropRectangle"][0])
@@ -874,17 +903,9 @@ def decode_project_config():
         generate_video.set(False)
     generate_video_selection()
     if 'VideoFilename' in project_config:
-        TargetVideoFilename = project_config["VideoFilename"]
-        video_filename_name.delete(0, 'end')
-        video_filename_name.insert('end', TargetVideoFilename)
-    else:
-        video_filename_name.delete(0, 'end')
+        video_filename_str.set(project_config["VideoFilename"])
     if 'VideoTitle' in project_config:
-        TargetVideoTitle = project_config["VideoTitle"]
-        video_title_name.delete(0, 'end')
-        video_title_name.insert('end', TargetVideoTitle)
-    else:
-        video_title_name.delete(0, 'end')
+        video_title_str.set(project_config["VideoTitle"])
     if 'skip_frame_regeneration' in project_config:
         skip_frame_regeneration.set(project_config["skip_frame_regeneration"])
     else:
@@ -928,10 +949,15 @@ Job list support functions
 ##########################
 """
 
+
 def job_list_process_selection(evt):
     global job_list
     global job_list_listbox
     global rerun_job_btn
+    global job_list_listbox_disabled
+
+    if job_list_listbox_disabled:
+        return
 
     # Note here that Tkinter passes an event object to onselect()
     # w = evt.widget - We already know the widget
@@ -949,13 +975,16 @@ def job_list_process_selection(evt):
 def job_list_add_current():
     global job_list, template_list
     global CurrentFrame, StartFrame, frames_to_encode
-    global project_config, video_filename_name
+    global project_config, video_filename_str
     global job_list_listbox
     global encode_all_frames, SourceDirFileList
     global frame_from_str, frame_to_str
     global resolution_dropdown_selected
+    global job_list_listbox_disabled
 
-    entry_name = video_filename_name.get()
+    if job_list_listbox_disabled:
+        return
+    entry_name = video_filename_str.get()
     if entry_name == "":
         entry_name = os.path.split(SourceDir)[1]
     if project_config["FilmType"] == 'R8':
@@ -1023,12 +1052,15 @@ def job_list_add_current():
 def job_list_load_selected():
     global job_list
     global CurrentFrame, StartFrame, frames_to_encode
-    global project_config, video_filename_name
+    global project_config
     global job_list_listbox
     global encode_all_frames, SourceDirFileList
     global frame_from_str, frame_to_str
     global resolution_dropdown_selected
+    global job_list_listbox_disabled
 
+    if job_list_listbox_disabled:
+        return
     selected = job_list_listbox.curselection()
     if selected != ():
         entry_name = job_list_listbox.get(selected[0])  # we pick fist item as curselection returns a list
@@ -1052,6 +1084,10 @@ def job_list_load_selected():
 def job_list_delete_selected():
     global job_list
     global job_list_listbox
+    global job_list_listbox_disabled
+
+    if job_list_listbox_disabled:
+        return
     selected = job_list_listbox.curselection()
     if selected != ():
         job_list.pop(job_list_listbox.get(selected))
@@ -1065,6 +1101,10 @@ def job_list_delete_selected():
 def job_list_rerun_selected():
     global job_list
     global job_list_listbox
+    global job_list_listbox_disabled
+
+    if job_list_listbox_disabled:
+        return
 
     selected_indices = job_list_listbox.curselection()
     if selected_indices != ():
@@ -1160,15 +1200,27 @@ def job_processing_loop():
 
 
 def job_list_delete_current(event):
+    global job_list_listbox_disabled
+
+    if job_list_listbox_disabled:
+        return
     job_list_delete_selected()
 
 
 def job_list_load_current(event):
+    global job_list_listbox_disabled
+
+    if job_list_listbox_disabled:
+        return
     job_list_load_selected()
 
 
 def job_list_rerun_current(event):
     global job_list, job_list_listbox
+    global job_list_listbox_disabled
+
+    if job_list_listbox_disabled:
+        return
     job_list_rerun_selected()
     selected_index = job_list_listbox.curselection()
     if selected_index:
@@ -1199,6 +1251,10 @@ def sync_job_list_with_listbox():
 
 def job_list_move_up(event):
     global job_list_listbox, job_list
+    global job_list_listbox_disabled
+
+    if job_list_listbox_disabled:
+        return
     selected_index = job_list_listbox.curselection()
     if selected_index:
         idx = selected_index[0]
@@ -1219,6 +1275,10 @@ def job_list_move_up(event):
 
 def job_list_move_down(event):
     global job_list_listbox, job_list
+    global job_list_listbox_disabled
+
+    if job_list_listbox_disabled:
+        return
     selected_index = job_list_listbox.curselection()
     if selected_index:
         idx = selected_index[0]
@@ -1381,11 +1441,10 @@ def set_frames_target_folder():
 
 
 def set_video_target_folder():
-    global VideoTargetDir
     global video_target_dir
 
     VideoTargetDir = filedialog.askdirectory(
-        initialdir=VideoTargetDir,
+        initialdir=video_target_dir_str.get(),
         title="Select folder where to store generated video")
 
     if not VideoTargetDir:
@@ -1396,11 +1455,10 @@ def set_video_target_folder():
             "Video target folder cannot be the same as source folder.")
         return
     else:
-        video_target_dir.delete(0, 'end')
-        video_target_dir.insert('end', VideoTargetDir)
+        video_target_dir_str.set(VideoTargetDir)
         video_target_dir.after(100, video_target_dir.xview_moveto, 1)
 
-    project_config["VideoTargetDir"] = VideoTargetDir
+    project_config["VideoTargetDir"] = video_target_dir_str.get()
 
 
 """
@@ -1411,7 +1469,7 @@ UI support commands & functions
 
 
 def widget_status_update(widget_state=0, button_action=0):
-    global CropTopLeft, CropBottomRight
+    global CropTopLeft, CropBottomRight, CropAreaDefined
     global frame_slider, Go_btn, Exit_btn
     global frames_source_dir, source_folder_btn
     global frames_target_dir, target_folder_btn
@@ -1423,6 +1481,7 @@ def widget_status_update(widget_state=0, button_action=0):
     global perform_stabilization
     global perform_stabilization_checkbox, stabilization_threshold_spinbox
     global perform_cropping_checkbox, perform_denoise_checkbox, perform_sharpness_checkbox
+    global perform_gamma_correction_checkbox, gamma_correction_spinbox
     global force_4_3_crop_checkbox, force_16_9_crop_checkbox
     global custom_stabilization_btn
     global generate_video_checkbox, skip_frame_regeneration_cb
@@ -1439,6 +1498,7 @@ def widget_status_update(widget_state=0, button_action=0):
     global extended_stabilization_checkbox
     global SourceDirFileList
     global template_list
+    global job_list_listbox_disabled
 
     if widget_state != 0:
         CropAreaDefined = CropTopLeft != (0, 0) and CropBottomRight != (0, 0)
@@ -1474,6 +1534,8 @@ def widget_status_update(widget_state=0, button_action=0):
         force_16_9_crop_checkbox.config(state=widget_state if perform_stabilization.get() else DISABLED)
         perform_denoise_checkbox.config(state=widget_state)
         perform_sharpness_checkbox.config(state=widget_state)
+        perform_gamma_correction_checkbox.config(state=widget_state)
+        gamma_correction_spinbox.config(state=widget_state)
         film_type_S8_rb.config(state=DISABLED if template_list.get_active_type() == 'custom' else widget_state)
         film_type_R8_rb.config(state=DISABLED if template_list.get_active_type() == 'custom' else widget_state)
         generate_video_checkbox.config(state=widget_state if ffmpeg_installed else DISABLED)
@@ -1489,10 +1551,16 @@ def widget_status_update(widget_state=0, button_action=0):
         ffmpeg_preset_rb1.config(state=widget_state if project_config["GenerateVideo"] else DISABLED)
         ffmpeg_preset_rb2.config(state=widget_state if project_config["GenerateVideo"] else DISABLED)
         ffmpeg_preset_rb3.config(state=widget_state if project_config["GenerateVideo"] else DISABLED)
+        custom_ffmpeg_path.config(state=widget_state if project_config["GenerateVideo"] else DISABLED)
         start_batch_btn.config(state=widget_state if button_action != start_batch_btn else NORMAL)
         add_job_btn.config(state=widget_state)
         delete_job_btn.config(state=widget_state)
         rerun_job_btn.config(state=widget_state)
+        #job_list_listbox.config(state=widget_state)
+        if widget_state == DISABLED:
+            job_list_listbox_disabled = True
+        else:
+            job_list_listbox_disabled = False
     # Handle a few specific widgets having extra conditions
     if len(SourceDirFileList) == 0:
         perform_stabilization_checkbox.config(state=DISABLED)
@@ -1502,6 +1570,8 @@ def widget_status_update(widget_state=0, button_action=0):
         force_16_9_crop_checkbox.config(state=DISABLED)
         perform_denoise_checkbox.config(state=DISABLED)
         perform_sharpness_checkbox.config(state=DISABLED)
+        perform_gamma_correction_checkbox.config(state=DISABLED)
+        gamma_correction_spinbox.config(state=DISABLED)
     if ExpertMode:
         custom_stabilization_btn.config(relief=SUNKEN if template_list.get_active_type() == 'custom' else RAISED)
 
@@ -1554,7 +1624,7 @@ def perform_rotation_selection():
     win.after(5, scale_display_update)
 
 
-def rotation_angle_selection(updown):
+def rotation_angle_selection():
     global rotation_angle_spinbox, rotation_angle_str
     global RotationAngle
     RotationAngle = rotation_angle_spinbox.get()
@@ -1688,11 +1758,13 @@ def set_resolution(selected):
 
 
 def display_template_popup_closure():
-    global template_popup_window, display_template_popup, debug_template_match
+    global debug_template_match
 
     debug_template_match = False
 
     display_template_popup.set(False)
+
+    general_config["TemplatePopupWindowPos"] = template_popup_window.geometry()
 
     template_popup_window.destroy()
 
@@ -1705,7 +1777,7 @@ def debug_template_popup():
     global CropTopLeft, CropBottomRight
     global debug_template_match, debug_template_width, debug_template_height
     global current_frame_text, crop_text, film_type_text
-    global search_area_text, template_type_text, hole_pos_text, template_size_text, template_wb_proportion_text
+    global search_area_text, template_type_text, hole_pos_text, template_size_text, template_wb_proportion_text, template_threshold_text
     global left_stripe_canvas, left_stripe_stabilized_canvas, template_canvas
     global SourceDirFileList, CurrentFrame
 
@@ -1723,6 +1795,9 @@ def debug_template_popup():
     template_popup_window.title("Hole Template match debug info")
 
     template_popup_window.minsize(width=300, height=template_popup_window.winfo_height())
+
+    if 'TemplatePopupWindowPos' in general_config:
+        template_popup_window.geometry(f"+{general_config['TemplatePopupWindowPos'].split('+', 1)[1]}")
 
     # Create three vertical frames in the bottom horizontal frame
     left_frame = Frame(template_popup_window, width=60, height=8)
@@ -1748,23 +1823,23 @@ def debug_template_popup():
     template_canvas = Canvas(left_frame, bg='dark grey',
                                  width=debug_template_width, height=template_canvas_height)
     template_canvas.pack(side=TOP, anchor=N)
-    setup_tooltip(template_canvas, "This is the active template")
+    setup_tooltip(template_canvas, "Active template used to locate sprocket hole(s)")
 
     DisplayableImage = ImageTk.PhotoImage(Image.fromarray(aux))
     template_canvas.create_image(0, int(hole_template_pos[1]*0.33), anchor=NW, image=DisplayableImage)
     template_canvas.image = DisplayableImage
 
-    # Create Canvas to display image left stripe (non stabilized)
-    left_stripe_canvas = Canvas(center_frame, bg='dark grey',
-                                 width=debug_template_width, height=debug_template_height)
-    left_stripe_canvas.pack(side=LEFT, anchor=N)
-    setup_tooltip(left_stripe_canvas, "This is the template search area of current frame")
-
     # Create Canvas to display image left stripe (stabilized)
     left_stripe_stabilized_canvas = Canvas(center_frame, bg='dark grey',
                                  width=debug_template_width, height=debug_template_height)
     left_stripe_stabilized_canvas.pack(side=LEFT, anchor=N)
-    setup_tooltip(left_stripe_stabilized_canvas, "This is the current frame, stabilized")
+    setup_tooltip(left_stripe_stabilized_canvas, "Current frame after stabilization, with detected template highlighted in green, orange or red depending on the quality of the match")
+
+    # Create Canvas to display image left stripe (non stabilized)
+    left_stripe_canvas = Canvas(center_frame, bg='dark grey',
+                                 width=debug_template_width, height=debug_template_height)
+    left_stripe_canvas.pack(side=LEFT, anchor=N)
+    setup_tooltip(left_stripe_canvas, "Template search area for current frame before stabilization, used to find template")
 
     # Add a label with the film type
     film_type_text = tk.StringVar()
@@ -1796,11 +1871,19 @@ def debug_template_popup():
     template_size_label.pack(pady=5, padx=10, anchor="center")
     template_size_text.set(f"Template Size: {template_list.get_active_size()}")
 
+    '''
     #Label with template white on black proportion
     template_wb_proportion_text = tk.StringVar()
     template_wb_proportion_label = Label(right_frame, textvariable=template_wb_proportion_text, font=("Arial", FontSize))
     template_wb_proportion_label.pack(pady=5, padx=10, anchor="center")
     template_wb_proportion_text.set(f"WoB proportion: {int(template_list.get_active_wb_proportion() * 100)}%")
+    '''
+
+    #Label with template white on black proportion
+    template_threshold_text = tk.StringVar()
+    template_threshold_label = Label(right_frame, textvariable=template_threshold_text, font=("Arial", FontSize))
+    template_threshold_label.pack(pady=5, padx=10, anchor="center")
+    template_threshold_text.set("Threshold: 0")
 
     #Label with search area
     search_area_text = tk.StringVar()
@@ -1823,10 +1906,12 @@ def debug_template_popup():
     debug_template_match = False
 
 
-def debug_template_display_info(frame_idx, top_left, move_x, move_y):
-    global current_frame_text
+def debug_template_display_info(frame_idx, threshold, top_left, move_x, move_y):
+    global current_frame_text, template_threshold_text
+
     if debug_template_match:
         current_frame_text.set(f"Current Frm:{frame_idx}, Tmp.Pos.:{top_left}, ΔX:{move_x}, ΔY:{move_y}")
+        template_threshold_text.set(f"Threshold: {threshold}")
 
 
 def debug_template_display_frame_raw(img):
@@ -1845,9 +1930,8 @@ def debug_template_display_frame_stabilized(img):
     global left_stripe_stabilized_canvas
 
     if debug_template_match:
-        img = get_image_left_stripe(img)
-        img_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        debug_template_display_frame(left_stripe_stabilized_canvas, img_gray)
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        debug_template_display_frame(left_stripe_stabilized_canvas, img)
 
 
 def debug_template_refresh_template():
@@ -1866,7 +1950,7 @@ def debug_template_refresh_template():
         hole_pos_text.set(f"Expected template pos: {hole_template_pos}")
         template_type_text.set(f"Template type: {template_list.get_active_type()}")
         template_size_text.set(f"Template Size: {template_list.get_active_size()}")
-        template_wb_proportion_text.set(f"WoB proportion: {int(template_list.get_active_wb_proportion()*100)}%")
+        # template_wb_proportion_text.set(f"WoB proportion: {template_list.get_active_wb_proportion()*100:2.1f}%")
         film_type_text.set(f"Film type: {film_type.get()}")
 
 def debug_template_display_frame(canvas, img):
@@ -1874,7 +1958,7 @@ def debug_template_display_frame(canvas, img):
 
     if debug_template_match:
         try:
-            height, width = img.shape
+            height, width = img.shape[:2]
             ratio = debug_template_height / height
             ratio = 0.33
             resized_image = cv2.resize(img, (int(width*ratio), int(height*ratio)))
@@ -1977,7 +2061,7 @@ def detect_film_type():
         other_film_type = 'R8'
 
     if template_1 is None or template_2 is None:
-        logging.debug(f"Invalid detection templated, cannot determine film type.")
+        logging.debug("Invalid detection templated, cannot determine film type.")
         tk.messagebox.showerror("Film detection failed",
             "Templates to detect film type are missing, please set film type manually.")
         return
@@ -2161,8 +2245,10 @@ def select_rectangle_area(is_cropping=False):
     window_visible = 1
     cv2.namedWindow(RectangleWindowTitle, cv2.WINDOW_GUI_NORMAL)
     # Force the window to have focus (otherwise it won't take any keys)
-    #cv2.setWindowProperty(RectangleWindowTitle, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
-    cv2.setWindowProperty(RectangleWindowTitle, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_NORMAL)
+    # No valid method has been found so far to force the opencv to hav efocus. Apparently it is not simple
+    cv2.setWindowProperty(RectangleWindowTitle,cv2.WND_PROP_FULLSCREEN,cv2.WINDOW_FULLSCREEN)
+    cv2.setWindowProperty(RectangleWindowTitle,cv2.WND_PROP_FULLSCREEN,cv2.WINDOW_NORMAL)
+
     # Capture mouse events
     cv2.setMouseCallback(RectangleWindowTitle, draw_rectangle)
     # rectangle_refresh = False
@@ -2180,6 +2266,7 @@ def select_rectangle_area(is_cropping=False):
             copy = work_image.copy()
             cv2.rectangle(copy, (ix, iy), (x_, y_), (0, 255, 0), line_thickness)
             cv2.imshow(RectangleWindowTitle, copy)
+            rectangle_refresh = False
         k = cv2.waitKeyEx(1) & 0xFF
         inc_ix = 0
         inc_x = 0
@@ -2287,6 +2374,7 @@ def select_cropping_area():
 
     RectangleWindowTitle = CropWindowTitle
 
+
     if select_rectangle_area(is_cropping=True):
         CropAreaDefined = True
         widget_status_update(NORMAL, 0)
@@ -2304,7 +2392,7 @@ def select_cropping_area():
         CropTopLeft = (0, 0)
         CropBottomRight = (0, 0)
 
-    project_config["CropRectangle"] = CropTopLeft, CropBottomRight
+    project_config["CropRectangle"] = (CropTopLeft, CropBottomRight)
     perform_cropping_checkbox.config(state=NORMAL if CropAreaDefined
                                      else DISABLED)
 
@@ -2419,6 +2507,7 @@ def set_film_type():
     if template_list.set_active(film_type.get(), film_type.get()):
         project_config["FilmType"] = film_type.get()
         debug_template_refresh_template()
+        logging.debug(f"Setting {film_type.get()} template as active")
         return True
     else:
         tk.messagebox.showerror(
@@ -2443,7 +2532,9 @@ def match_level_color_bgr(t):
     return (0,255,0)
 
 
+# img is directly the left stripe (search area)
 def match_template(frame_idx, template, img):
+    global min_thres
     tw = template.shape[1]
     th = template.shape[0]
     iw = img.shape[1]
@@ -2454,26 +2545,21 @@ def match_template(frame_idx, template, img):
         return (0, 0, 0)
 
     # convert img to grey, checking various thresholds
-    best_thres = 0
-    best_wb_proportion = 1
+    # in order to calculate the white on black proportion correctly, we saved the number of white pixels in the
+    # template, but we divide it by the number of pixels in the search area, as it is wider
+    img_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)    # reduced left stripe to calculate white on black proportion
+    # Apply best threshold on full left stripe
     img_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    for thres in range(155, 255, 10):
-        img_bw = cv2.threshold(img_gray, thres, 255, cv2.THRESH_BINARY)[1]  #THRESH_TRUNC, THRESH_BINARY
-        white_pixel_count = cv2.countNonZero(img_bw)
-        total_pixels = img_bw.size
-        if abs((white_pixel_count/total_pixels)-template_list.get_active_wb_proportion()) < best_wb_proportion:
-            best_wb_proportion = abs((white_pixel_count/total_pixels)-template_list.get_active_wb_proportion())
-            best_thres = thres
-            img_final = img_bw
+    #img_final = cv2.threshold(img_gray, best_thres, 255, cv2.THRESH_BINARY)[1]  #THRESH_TRUNC, THRESH_BINARY
+    # Apply Otsu's thresholding
+    best_thres, img_final = cv2.threshold(img_gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
     #img_edges = cv2.Canny(image=img_bw, threshold1=100, threshold2=1)  # Canny Edge Detection
     aux = cv2.matchTemplate(img_final, template, cv2.TM_CCOEFF_NORMED)
     (minVal, maxVal, minLoc, maxLoc) = cv2.minMaxLoc(aux)
     top_left = maxLoc
 
-    logging.debug(f"Trying Frame {frame_idx} with threshold {best_thres}, top left is {top_left}")
-
-    return top_left, round(maxVal,2), img_final
+    return int(best_thres), top_left, round(maxVal,2), img_final
 
 
 """
@@ -2507,6 +2593,9 @@ def terminate_threads(user_terminated):
     logging.debug("Signaling exit event for threads")
     frame_encoding_event.set()
     while active_threads > 0:
+        if frame_encoding_queue.qsize() <= 4:
+            frame_encoding_queue.put((END_TOKEN, 0))
+            logging.debug("Inserting end token to encoding queue")
         logging.debug(f"Waiting for threads to stop ({active_threads} remaining)")
         check_subprocess_event_queue(user_terminated)
         win.update()
@@ -2550,7 +2639,7 @@ Support functions for core business
 
 
 def debug_display_image(window_name, img):
-    if debug_enabled:
+    if dev_debug_enabled:
         cv2.namedWindow(window_name)
         if img.shape[0] >= 2 and img.shape[1] >= 2:
             img_s = resize_image(img, 0.5)
@@ -2630,7 +2719,16 @@ def get_image_left_stripe(img):
         logging.debug(f"Making left stripe wider: {HoleSearchBottomRight[0] - HoleSearchTopLeft[0]}")
     horizontal_range = (HoleSearchTopLeft[0], HoleSearchBottomRight[0])
     vertical_range = (HoleSearchTopLeft[1], HoleSearchBottomRight[1])
-    return img[vertical_range[0]:vertical_range[1], horizontal_range[0]:horizontal_range[1]]
+    return np.copy(img[vertical_range[0]:vertical_range[1], horizontal_range[0]:horizontal_range[1]])
+
+
+def gamma_correct_image(src, gamma):
+    invGamma = 1 / gamma
+
+    table = [((i / 255) ** invGamma) * 255 for i in range(256)]
+    table = np.array(table, np.uint8)
+
+    return cv2.LUT(src, table)
 
 
 def rotate_image(img):
@@ -2644,7 +2742,7 @@ def rotate_image(img):
     rotated = cv2.warpAffine(img, M, (w, h))
     return rotated
 
-def stabilize_image(frame_idx, img, img_ref, img_ref_alt = None):
+def stabilize_image(frame_idx, img, img_ref, img_ref_alt = None, id = -1):
     global SourceDirFileList
     global first_absolute_frame, StartFrame
     global HoleSearchTopLeft, HoleSearchBottomRight
@@ -2653,11 +2751,12 @@ def stabilize_image(frame_idx, img, img_ref, img_ref_alt = None):
     global stabilization_bounds_alert_checkbox
     global project_name
     global frame_fill_type, extended_stabilization
-    global CsvFile, GenerateCsv, CsvFramesOffPercent
+    global CsvFramesOffPercent
     global stabilization_threshold_match_label
     global debug_template_match
     global perform_stabilization
     global template_list
+    global match_level_average, match_level_average_counter
 
     # Get image dimensions to perform image shift later
     width = img_ref.shape[1]
@@ -2675,7 +2774,8 @@ def stabilize_image(frame_idx, img, img_ref, img_ref_alt = None):
     #WorkStabilizationThreshold = np.percentile(left_stripe_image, 90)
     img_ref_alt_used = False
     while True:
-        top_left, match_level, img_matched = match_template(frame_idx, film_hole_template, left_stripe_image)
+        thres, top_left, match_level, img_matched = match_template(frame_idx, film_hole_template, left_stripe_image)
+        match_level = max(0, match_level)   # in some cases, not sure why, match level is negative
         if match_level >= 0.85:
             break
         else:
@@ -2693,9 +2793,6 @@ def stabilize_image(frame_idx, img, img_ref, img_ref_alt = None):
             break
     debug_template_display_frame_raw(img_matched)
 
-    if debug_template_match and top_left[1] != -1 :
-        cv2.rectangle(img, (top_left[0], top_left[1]), (top_left[0] + template_list.get_active_size()[0], top_left[1] + template_list.get_active_size()[1]), match_level_color_bgr(match_level), 2)
-        cv2.rectangle(img, (HoleSearchTopLeft[0], HoleSearchTopLeft[1]), (HoleSearchBottomRight[0], HoleSearchBottomRight[1]), (255, 255, 255), 2)
     if top_left[1] != -1 and match_level > 0.1:
         move_x = hole_template_pos[0] - top_left[0]
         move_y = hole_template_pos[1] - top_left[1]
@@ -2707,8 +2804,9 @@ def stabilize_image(frame_idx, img, img_ref, img_ref_alt = None):
         logging.warning(f"Template match not good ({match_level}, ignoring it.")
         move_x = 0
         move_y = 0
-    logging.debug(f"Frame {frame_idx}: top left {top_left}, move_y:{move_y}, move_x:{move_x}")
-    debug_template_display_info(frame_idx, top_left, move_x, move_y)
+    log_line = f"T{id} - " if id != -1 else ""
+    logging.debug(log_line+f"Frame {frame_idx:5d}: threshold: {thres:3d}, top left: ({top_left[0]:4d},{top_left[0]:4d}), move_x:{move_x:4d}, move_y:{move_y:4d}")
+    debug_template_display_info(frame_idx, thres, top_left, move_x, move_y)
     # Try to figure out if there will be a part missing
     # at the bottom, or the top
     missing_rows = 0
@@ -2731,33 +2829,38 @@ def stabilize_image(frame_idx, img, img_ref, img_ref_alt = None):
     stabilization_threshold_match_label.config(fg='white', bg=match_level_color(match_level),
                                                text=str(int(match_level * 100)))
     if ConvertLoopRunning:
-        if missing_bottom < 0 or missing_top < 0:
-            stabilization_bounds_alert_counter += 1
-            if stabilization_bounds_alert.get():
-                win.bell()
+        # Calculate rolling average of match level
+        match_level_average_counter += 1
+        match_level_average = (match_level_average * match_level_average_counter + match_level) / (match_level_average_counter + 1)
+        if missing_rows > 0 or match_level < 0.9:
+            if missing_rows > 0:
+                stabilization_bounds_alert_counter += 1
+                if stabilization_bounds_alert.get():
+                    win.bell()
             if GenerateCsv:
                 CsvFile.write('%i, %i, %i\n' % (first_absolute_frame+frame_idx, missing_rows, int(match_level*100)))
     if frame_idx-StartFrame > 0:
         CsvFramesOffPercent = stabilization_bounds_alert_counter * 100 / (frame_idx-StartFrame)
     stabilization_bounds_alert_checkbox.config(text='Alert when image out of bounds (%i, %.1f%%)' % (
             stabilization_bounds_alert_counter, CsvFramesOffPercent))
-    # Check if frame fill is enabled, and required: Extract missing fragment
-    if frame_fill_type.get() == 'fake' and ConvertLoopRunning and missing_rows > 0:
-        # Perform temporary horizontal stabilization only first, to extract missing fragment
-        translation_matrix = np.array([
-            [1, 0, move_x],
-            [0, 1, 0]
-        ], dtype=np.float32)
-        # Apply the translation to the image
-        translated_image = cv2.warpAffine(src=img, M=translation_matrix,
-                                          dsize=(width, height))
-        if missing_top < 0:
-            missing_fragment = translated_image[CropBottomRight[1]-missing_rows:CropBottomRight[1],0:width]
-        elif missing_bottom < 0:
-            missing_fragment = translated_image[CropTopLeft[1]:CropTopLeft[1]+missing_rows, 0:width]
     # Create the translation matrix using move_x and move_y (NumPy array): This is the actual stabilization
     # We double-check the check box since this function might be called just to debug template detection
     if perform_stabilization.get():
+        # Check if frame fill is enabled, and required: Extract missing fragment
+        if frame_fill_type.get() == 'fake' and ConvertLoopRunning and missing_rows > 0:
+            # Perform temporary horizontal stabilization only first, to extract missing fragment
+            translation_matrix = np.array([
+                [1, 0, move_x],
+                [0, 1, 0]
+            ], dtype=np.float32)
+            # Apply the translation to the image
+            translated_image = cv2.warpAffine(src=img, M=translation_matrix,
+                                              dsize=(width, height))
+            if missing_top < 0:
+                missing_fragment = translated_image[CropBottomRight[1]-missing_rows:CropBottomRight[1],0:width]
+            elif missing_bottom < 0:
+                missing_fragment = translated_image[CropTopLeft[1]:CropTopLeft[1]+missing_rows, 0:width]
+
         translation_matrix = np.array([
             [1, 0, move_x],
             [0, 1, move_y]
@@ -2782,9 +2885,19 @@ def stabilize_image(frame_idx, img, img_ref, img_ref_alt = None):
                     translated_image = translated_image[0:CropBottomRight[1]-missing_rows, 0:width]
                     translated_image = cv2.copyMakeBorder(src=translated_image, top=0, bottom=CropBottomRight[1]-missing_rows, left=0, right=0,
                                                           borderType=cv2.BORDER_REPLICATE)
-        debug_template_display_frame_stabilized(translated_image)
     else:
         translated_image = img
+    # Drew stabilization rectangles only for image in popup debug window to allow having it activated while encoding
+    if debug_template_match and top_left[1] != -1 :
+        if not perform_stabilization.get():
+            move_x = 0
+            move_y = 0
+        left_stripe_img = get_image_left_stripe(translated_image)
+        cv2.rectangle(left_stripe_img, (top_left[0] + move_x, top_left[1] + move_y),
+                      (top_left[0] + template_list.get_active_size()[0] + move_x, top_left[1] + template_list.get_active_size()[1] + move_y), match_level_color_bgr(match_level), 2)
+        # No need for a search area rectangle, since the image in the debug popup is already that rectangle
+        # cv2.rectangle(left_stripe_img, (HoleSearchTopLeft[0] + move_x, HoleSearchTopLeft[1] + move_y), (HoleSearchBottomRight[0] + move_x, HoleSearchBottomRight[1] + move_y), (255, 255, 255), 2)
+        debug_template_display_frame_stabilized(left_stripe_img)
 
     return translated_image
 
@@ -2881,13 +2994,14 @@ def get_source_dir_file_list():
     SourceDirFileList_jpg = list(glob(os.path.join(
         SourceDir,
         FrameInputFilenamePatternList_jpg)))
-    SourceDirFileList_png = list(glob(os.path.join(
-        SourceDir,
-        FrameInputFilenamePatternList_png)))
-    SourceDirFileList = sorted(SourceDirFileList_jpg + SourceDirFileList_png)
-    if len(SourceDirFileList_png) != 0:
-        file_type_out = 'png'   # If we have png files in the input, we default to png for the output
+    if len(SourceDirFileList_jpg) == 0:     # Only try to read if there are no JPG at all
+        SourceDirFileList_png = list(glob(os.path.join(
+            SourceDir,
+            FrameInputFilenamePatternList_png)))
+        SourceDirFileList = sorted(SourceDirFileList_png)
+        file_type_out = 'png'  # If we have png files in the input, we default to png for the output
     else:
+        SourceDirFileList = sorted(SourceDirFileList_jpg)
         file_type_out = 'jpg'
 
     SourceDirHdrFileList_jpg = list(glob(os.path.join(
@@ -2960,9 +3074,13 @@ def get_source_dir_file_list():
     frame_height = work_image.shape[0]
     # Next 3 statements were done only if batch mode was not active, but they are needed in all cases
     if BatchJobRunning:
-        logging.debug("Skipping hole template adjustment in batch mode")
+        # why skipping it?
+        # logging.debug("Skipping hole template adjustment in batch mode")
+        logging.debug("Adjusting hole template in batch mode...")
+        set_hole_search_area(work_image)
+        detect_film_type()
     else:
-        logging.debug("Adjusting hole template...")
+        logging.debug("Adjusting hole template in standard mode...")
         set_hole_search_area(work_image)
         detect_film_type()
     # Select area window should be proportional to screen height
@@ -3028,7 +3146,8 @@ def valid_generated_frame_range():
 
 def set_hole_search_area(img):
     global HoleSearchTopLeft, HoleSearchBottomRight
-    global TemplateTopLeft
+    global TemplateTopLeft, template_list
+    global template_wb_proportion_text
     global extended_stabilization
 
     # Adjust left stripe width (search area)
@@ -3040,7 +3159,7 @@ def set_hole_search_area(img):
     result = cv2.matchTemplate(img_target, film_corner_template, cv2.TM_CCOEFF_NORMED)
     (minVal, maxVal, minLoc, maxLoc) = cv2.minMaxLoc(result)
     left_stripe_width = maxLoc[0] + template_list.get_active_size()[0]
-    left_stripe_width += 250 * int(img.shape[0]/1520)   # Increase width, proportional to the image size (250 pixels for default size 2028x1520)
+    left_stripe_width += 80 * int(img.shape[0]/1520)   # Increase width, proportional to the image size (250 pixels for default size 2028x1520)
     logging.debug(f"Calculated left stripe width: {left_stripe_width}")
     if extended_stabilization.get():
         logging.debug("Extended stabilization requested: Widening search area by 50 pixels")
@@ -3055,7 +3174,13 @@ def set_hole_search_area(img):
     # has been defined, therefore we initialized them here
     HoleSearchTopLeft = (0, 0)
     HoleSearchBottomRight = (left_stripe_width, height)   # Before, search area width was 20% of image width
-
+    '''
+    # Now that we know the size of search area for the current project, we can calculate the WoB proportion
+    # Width of search area as it is wider, and height of template as it is shorter
+    template_list.set_active_wb_proportion(template_list.get_active_white_pixel_count() / (left_stripe_width * template_list.get_active_size()[1]))
+    if debug_template_match:
+        template_wb_proportion_text.set(f"WoB proportion: {template_list.get_active_wb_proportion() * 100:2.1f}%")
+    '''
 
 """
 ########################
@@ -3088,7 +3213,7 @@ def start_convert():
     global BatchJobRunning
     global job_list, CurrentJobEntry
     global stabilization_bounds_alert_counter
-    global CsvFilename, CsvPathName, GenerateCsv, CsvFile
+    global CsvFilename, CsvPathName, CsvFile, match_level_average, match_level_average_counter
     global FPM_LastMinuteFrameTimes
 
     if ConvertLoopRunning:
@@ -3133,19 +3258,17 @@ def start_convert():
         win.update()
 
         if project_config["GenerateVideo"]:
-            TargetVideoFilename = video_filename_name.get()
+            TargetVideoFilename = video_filename_str.get()
             name, ext = os.path.splitext(TargetVideoFilename)
             if TargetVideoFilename == "":   # Assign default if no filename
                 TargetVideoFilename = (
                     "AfterScan-" +
                     datetime.now().strftime("%Y_%m_%d-%H-%M-%S") + ".mp4")
-                video_filename_name.delete(0, 'end')
-                video_filename_name.insert('end', TargetVideoFilename)
+                video_filename_str.set(TargetVideoFilename)
             elif ext not in ['.mp4', '.MP4', '.mkv', '.MKV']:     # ext == "" does not work if filename contains dots ('Av. Manzanares')
                 TargetVideoFilename += ".mp4"
-                video_filename_name.delete(0, 'end')
-                video_filename_name.insert('end', TargetVideoFilename)
-            elif os.path.isfile(os.path.join(VideoTargetDir, TargetVideoFilename)):
+                video_filename_str.set(TargetVideoFilename)
+            elif os.path.isfile(os.path.join(video_target_dir_str.get(), TargetVideoFilename)):
                 if not BatchJobRunning:
                     error_msg = (TargetVideoFilename + " already exist in target "
                                  "folder. Overwrite?")
@@ -3158,7 +3281,7 @@ def start_convert():
         if not generate_video.get() or not skip_frame_regeneration.get():
             # Check if CSV option selected
             if GenerateCsv:
-                CsvFilename = video_filename_name.get()
+                CsvFilename = video_filename_str.get()
                 name, ext = os.path.splitext(CsvFilename)
                 if name == "":  # Assign default if no filename
                     name = "AfterScan-"
@@ -3169,6 +3292,8 @@ def start_convert():
                 CsvPathName = os.path.join(CsvPathName, CsvFilename)
                 CsvFile = open(CsvPathName, "w")
             clear_image()
+            match_level_average = 0
+            match_level_average_counter = 0
             # Multiprocessing: Start all threads before encoding
             start_threads()
             win.after(1, frame_generation_loop)
@@ -3250,7 +3375,8 @@ def frame_encode(frame_idx, id):
     images_to_merge = []
     img_ref_aux = None
 
-    logging.debug(f"Thread {id}, starting to encode Frame {frame_idx}")
+    if dev_debug_enabled:
+        logging.debug(f"Thread {id}, starting to encode Frame {frame_idx}")
 
     # Get current file(s)
     if HdrFilesOnly:    # Legacy HDR (before 2 Dec 2023): Dedicated filename
@@ -3309,7 +3435,7 @@ def frame_encode(frame_idx, id):
         if perform_rotation.get():
             img = rotate_image(img)
         if perform_stabilization.get() or debug_template_match:
-            img = stabilize_image(frame_idx, img, img_ref, img_ref_aux)
+            img = stabilize_image(frame_idx, img, img_ref, img_ref_aux, id)
         if perform_cropping.get():
             img = crop_image(img, CropTopLeft, CropBottomRight)
         else:
@@ -3323,6 +3449,8 @@ def frame_encode(frame_idx, id):
                                        [-1, -1, -1]])
             # applying kernels to the input image to get the sharpened image
             img = cv2.filter2D(img, -1, sharpen_filter)
+        if perform_gamma_correction.get():
+            img = gamma_correct_image(img, float(gamma_correction_str.get()))
 
         # Before we used to display every other frame, but just discovered that it makes no difference to performance
         # Instead of displaying image, we add it to a queue to be processed in main loop
@@ -3338,7 +3466,8 @@ def frame_encode(frame_idx, id):
         if os.path.isdir(TargetDir):
             target_file = os.path.join(TargetDir, FrameOutputFilenamePattern % (first_absolute_frame + frame_idx, file_type_out))
             cv2.imwrite(target_file, img)
-    logging.debug(f"Thread {id}, finalized to encode Frame {frame_idx}")
+    if dev_debug_enabled:
+        logging.debug(f"Thread {id}, finalized to encode Frame {frame_idx}")
 
     return len(images_to_merge) != 0
 
@@ -3394,7 +3523,6 @@ def check_subprocess_event_queue(user_terminated):
     global subprocess_event_queue
     global last_displayed_image, active_threads
     global stabilization_bounds_alert_checkbox, stabilization_bounds_alert_counter
-    global CsvFramesOffPercent
     global ConvertLoopRunning
     global file_type_out
 
@@ -3435,7 +3563,6 @@ def frame_generation_loop():
     global BatchJobRunning
     global ffmpeg_success, ffmpeg_encoding_status
     global TargetDirFileList
-    global GenerateCsv, CsvFile
     global frame_slider
     global MergeMertens
     global FPM_CalculatedValue
@@ -3454,10 +3581,13 @@ def frame_generation_loop():
 
     if CurrentFrame >= StartFrame + frames_to_encode and last_displayed_image+1 >= StartFrame + frames_to_encode:
         FPM_CalculatedValue = -1
-        status_str = "Status: Frame generation OK"
+        # write average match quality in the status line, and in the widget
+        status_str = f"Status: Frame generation OK - AvgQ: {int(match_level_average*100)}"
         app_status_label.config(text=status_str, fg='green')
-        # Clear display queue
-        #subprocess_event_queue.queue.clear()
+        stabilization_threshold_match_label.config(fg='white', bg=match_level_color(match_level_average),
+                                                   text=str(int(match_level_average * 100)))
+        # Clear display queue (does not seem to work as expected, leave commented for now)
+        # subprocess_event_queue.queue.clear()
         last_displayed_image = 0
         win.update()
         # Refresh Target dir file list
@@ -3466,7 +3596,7 @@ def frame_generation_loop():
         if GenerateCsv:
             CsvFile.close()
             name, ext = os.path.splitext(CsvPathName)
-            name = name + ' (%d frames, %.1f%% KO)' % (frames_to_encode, CsvFramesOffPercent) + '.csv'
+            name = f"{name} ({frames_to_encode} frames, {CsvFramesOffPercent:.1f}% KO, Avg match level {int(match_level_average*100)}).csv"
             os.rename(CsvPathName, name)
         # Stop threads
         terminate_threads(False)
@@ -3478,7 +3608,6 @@ def frame_generation_loop():
         else:
             generation_exit()
         CurrentFrame -= 1  # Prevent being out of range
-        stabilization_threshold_match_label.config(fg='lightgray', bg='lightgray', text='')
         win.update()
         return
 
@@ -3578,20 +3707,19 @@ def draw_multiple_line_text(image, text, font, text_color, num_lines):
 
 
 def video_create_title():
-    global video_title_name, TargetVideoTitle
+    global video_title_str
     global VideoFps
     global StartFrame, first_absolute_frame, title_num_frames, frames_to_encode
     global file_type_out
 
-    if len(video_title_name.get()):   # if title defined --> kiki
-        TargetVideoTitle = video_title_name.get()
-        title_duration = round(len(video_title_name.get())*50/1000) # 50 ms per char
+    if len(video_title_str.get()):   # if title defined --> kiki
+        title_duration = round(len(video_title_str.get())*50/1000) # 50 ms per char
         title_duration = min(title_duration, 10)    # no more than 10 sec
         title_duration = max(title_duration, 3)    # no less than 3 sec
         title_num_frames = min(title_duration * VideoFps, frames_to_encode-1)
         # Custom font style and font size
         img = Image.open(os.path.join(TargetDir, FrameOutputFilenamePattern % (StartFrame + first_absolute_frame, file_type_out)))
-        myFont, num_lines = get_adjusted_font(img, TargetVideoTitle)
+        myFont, num_lines = get_adjusted_font(img, video_title_str.get())
         if myFont == 0:
             return
         title_frame_idx = StartFrame + first_absolute_frame
@@ -3605,8 +3733,7 @@ def video_create_title():
             # Call draw Method to add 2D graphics in an image
             #I1 = ImageDraw.Draw(img)
             # Add Text to an image
-            #I1.multiline_text((28, 36), TargetVideoTitle, font=myFont, fill=(255, 0, 0))
-            draw_multiple_line_text(img, TargetVideoTitle, myFont, (255,255,255), num_lines)
+            draw_multiple_line_text(img, video_title_str.get(), myFont, (255,255,255), num_lines)
             # Display edited image
             #img.show()
 
@@ -3689,7 +3816,7 @@ def call_ffmpeg():
          '-crf', '18',
          '-pix_fmt', 'yuv420p',
          '-map', '[v]',
-         os.path.join(VideoTargetDir,
+         os.path.join(video_target_dir_str.get(),
                       TargetVideoFilename)])
 
     logging.debug("Generated ffmpeg command: %s", cmd_ffmpeg)
@@ -3757,7 +3884,7 @@ def video_generation_loop():
         if ConvertLoopExitRequested:
             ffmpeg_process.terminate()
             logging.warning("Video generation terminated by user for %s",
-                         os.path.join(VideoTargetDir, TargetVideoFilename))
+                         os.path.join(video_target_dir_str.get(), TargetVideoFilename))
             status_str = "Status: Cancelled by user"
             app_status_label.config(text=status_str, fg='red')
             tk.messagebox.showinfo(
@@ -3765,7 +3892,7 @@ def video_generation_loop():
                 "\r\nVideo generation by FFMPEG has been stopped by user "
                 "action.")
             generation_exit(success = False)  # Restore all settings to normal
-            os.remove(os.path.join(VideoTargetDir, TargetVideoFilename))
+            os.remove(os.path.join(video_target_dir_str.get(), TargetVideoFilename))
         else:
             line = ffmpeg_process.stdout.readline().strip()
             logging.debug(line)
@@ -3796,7 +3923,7 @@ def video_generation_loop():
         last_displayed_image = 0
         # And display results
         if ffmpeg_success:
-            logging.debug("Video generated OK: %s", os.path.join(VideoTargetDir, TargetVideoFilename))
+            logging.debug("Video generated OK: %s", os.path.join(video_target_dir_str.get(), TargetVideoFilename))
             status_str = "Status: Video generated OK"
             app_status_label.config(text=status_str, fg='green')
             if not BatchJobRunning:
@@ -3805,9 +3932,9 @@ def video_generation_loop():
                     "\r\nVideo encoding has finalized successfully. "
                     "You can find your video in the target folder, "
                     "as stated below\r\n" +
-                    os.path.join(VideoTargetDir, TargetVideoFilename))
+                    os.path.join(video_target_dir_str.get(), TargetVideoFilename))
         else:
-            logging.error("Video generation failed for %s", os.path.join(VideoTargetDir, TargetVideoFilename))
+            logging.error("Video generation failed for %s", os.path.join(video_target_dir_str.get(), TargetVideoFilename))
             status_str = "Status: Video generation failed"
             app_status_label.config(text=status_str, fg='red')
             if not BatchJobRunning:
@@ -3878,18 +4005,8 @@ def init_display():
     win.after(5, scale_display_update)
 
 
-def afterscan_init():
-    global win
-    global TopWinX
-    global TopWinY
-    global WinInitDone
-    global SourceDir
+def init_logging():
     global LogLevel
-    global PreviewWidth, PreviewHeight
-    global screen_height
-    global BigSize, FontSize
-    global MergeMertens, AlignMtb
-
     # Initialize logging
     log_path = aux_dir
     if log_path == "":
@@ -3906,6 +4023,18 @@ def afterscan_init():
 
     logging.info("AfterScann %s (%s)", __version__, __date__)
     logging.info("Log file: %s", log_file_fullpath)
+
+
+def afterscan_init():
+    global win
+    global TopWinX
+    global TopWinY
+    global WinInitDone
+    global SourceDir
+    global PreviewWidth, PreviewHeight
+    global screen_height
+    global BigSize, FontSize
+    global MergeMertens, AlignMtb
 
     win = Tk()  # Create main window, store it in 'win'
 
@@ -3930,6 +4059,8 @@ def afterscan_init():
     win.title('AfterScan ' + __version__)  # setting title of the window
     win.geometry('1080x700')  # setting the size of the window
     win.geometry('+50+50')  # setting the position of the window
+    if 'WindowPos' in general_config:
+         win.geometry(f"+{general_config['WindowPos'].split('+', 1)[1]}")
     # Prevent window resize
     win.minsize(app_width, app_height)
     win.maxsize(app_width, app_height)
@@ -3961,10 +4092,11 @@ def afterscan_init():
 def build_ui():
     global win
     global SourceDir
-    global frames_source_dir, frames_target_dir, video_target_dir
+    global frames_source_dir, frames_target_dir, video_target_dir, video_target_dir_str
     global perform_cropping, cropping_btn
     global perform_denoise, perform_denoise_checkbox
     global perform_sharpness, perform_sharpness_checkbox
+    global perform_gamma_correction_checkbox, gamma_correction_spinbox
     global generate_video, generate_video_checkbox
     global encode_all_frames, encode_all_frames_checkbox
     global frames_to_encode_str, frames_to_encode, frames_to_encode_label
@@ -3978,21 +4110,22 @@ def build_ui():
     global rotation_angle_spinbox, rotation_angle_str
     global custom_stabilization_btn, stabilization_threshold_label
     global perform_cropping_checkbox, Crop_btn
+    global perform_gamma_correction, gamma_correction_str
     global force_4_3_crop_checkbox, force_4_3_crop
     global force_16_9_crop_checkbox, force_16_9_crop
     global Go_btn
     global Exit_btn
     global video_fps_dropdown_selected, skip_frame_regeneration_cb
-    global video_fps_dropdown, video_fps_label, video_filename_name, video_title_name
+    global video_fps_dropdown, video_fps_label, video_filename_name, video_filename_str, video_title_name, video_title_str
     global resolution_dropdown, resolution_label, resolution_dropdown_selected
-    global video_target_dir, video_target_folder_btn, video_filename_label, video_title_label
+    global video_target_folder_btn, video_filename_label, video_title_label
     global ffmpeg_preset
     global ffmpeg_preset_rb1, ffmpeg_preset_rb2, ffmpeg_preset_rb3
     global FfmpegBinName
     global skip_frame_regeneration
     global frame_slider, frame_slider_time, CurrentFrame, frame_selected
     global film_type
-    global job_list_listbox
+    global job_list_listbox, job_list_listbox_disabled
     global app_status_label
     global PreviewWidth, PreviewHeight
     global left_area_frame
@@ -4051,7 +4184,7 @@ def build_ui():
     frame_slider.pack(side=BOTTOM, ipady=4)
     frame_slider.set(CurrentFrame)
 
-    setup_tooltip(frame_slider, "Use the slider to browse around the frames to be processed.")
+    setup_tooltip(frame_slider, "Browse around frames to be processed")
 
     # Application status label
     app_status_label = Label(regular_top_section_frame, width=46 if BigSize else 55, borderwidth=2,
@@ -4065,7 +4198,7 @@ def build_ui():
                       activeforeground='white', wraplength=80, font=("Arial", FontSize))
     Exit_btn.grid(row=0, column=1, sticky=W, padx=5)
 
-    setup_tooltip(Exit_btn, "Click here to exit AfterScan.")
+    setup_tooltip(Exit_btn, "Exit AfterScan")
 
     # Application start button
     Go_btn = Button(regular_top_section_frame, text="Start", width=12, height=5,
@@ -4073,7 +4206,7 @@ def build_ui():
                     activeforeground='white', wraplength=80, font=("Arial", FontSize))
     Go_btn.grid(row=0, column=2, sticky=W)
 
-    setup_tooltip(Go_btn, "Click here to start post-processing with the current parameters")
+    setup_tooltip(Go_btn, "Start post-processing using current settings")
 
     # Create frame to select source and target folders *******************************
     folder_frame = LabelFrame(right_area_frame, text='Folder selection', width=50,
@@ -4090,7 +4223,7 @@ def build_ui():
     frames_source_dir.after(100, frames_source_dir.xview_moveto, 1)
     frames_source_dir.bind('<<Paste>>', lambda event, entry=frames_source_dir: on_paste_all_entries(event, entry))
 
-    setup_tooltip(frames_source_dir, "Enter the directory where the source frames are located.")
+    setup_tooltip(frames_source_dir, "Directory where the source frames are located")
 
     source_folder_btn = Button(source_folder_frame, text='Source', width=6,
                                height=1, command=set_source_folder,
@@ -4098,7 +4231,7 @@ def build_ui():
                                activeforeground='white', wraplength=80, font=("Arial", FontSize))
     source_folder_btn.pack(side=LEFT)
 
-    setup_tooltip(source_folder_btn, "Click here to select the directory where the source frames are located.")
+    setup_tooltip(source_folder_btn, "Selects the directory where the source frames are located")
 
     target_folder_frame = Frame(folder_frame)
     target_folder_frame.pack(side=TOP)
@@ -4107,7 +4240,7 @@ def build_ui():
     frames_target_dir.pack(side=LEFT)
     frames_target_dir.bind('<<Paste>>', lambda event, entry=frames_target_dir: on_paste_all_entries(event, entry))
     
-    setup_tooltip(frames_target_dir, "Enter the directory where the generated frames will be stored.")
+    setup_tooltip(frames_target_dir, "Directory where generated frames will be stored")
 
     target_folder_btn = Button(target_folder_frame, text='Target', width=6,
                                height=1, command=set_frames_target_folder,
@@ -4115,7 +4248,7 @@ def build_ui():
                                activeforeground='white', wraplength=80, font=("Arial", FontSize))
     target_folder_btn.pack(side=LEFT)
 
-    setup_tooltip(target_folder_btn, "Click here to select the directory where the generated frames will be stored.")
+    setup_tooltip(target_folder_btn, "Selects the directory where the generated frames will be stored")
 
     save_bg = source_folder_btn['bg']
     save_fg = source_folder_btn['fg']
@@ -4135,11 +4268,11 @@ def build_ui():
     film_type_S8_rb = Radiobutton(postprocessing_frame, text="Super 8", variable=film_type, command=set_film_type,
                                   width=11 if BigSize else 14, value='S8', font=("Arial", FontSize))
     film_type_S8_rb.grid(row=postprocessing_row, column=0, sticky=W)
-    setup_tooltip(film_type_S8_rb, "Select for Super 8 film.")
+    setup_tooltip(film_type_S8_rb, "Handle as Super 8 film")
     film_type_R8_rb = Radiobutton(postprocessing_frame, text="Regular 8", variable=film_type, command=set_film_type,
                                   width=11 if BigSize else 14, value='R8', font=("Arial", FontSize))
     film_type_R8_rb.grid(row=postprocessing_row, column=1, sticky=W)
-    setup_tooltip(film_type_R8_rb, "Select for 8mm (Regular 8) film.")
+    setup_tooltip(film_type_R8_rb, "Handle as 8mm (Regular 8) film")
     film_type.set(project_config["FilmType"])
     postprocessing_row += 1
 
@@ -4165,7 +4298,7 @@ def build_ui():
     frame_from_entry.config(state=NORMAL)
     frame_from_entry.bind("<Double - Button - 1>", update_frame_from)
     frame_from_entry.bind('<<Paste>>', lambda event, entry=frame_from_entry: on_paste_all_entries(event, entry))
-    setup_tooltip(frame_from_entry, "Enter first frame to be processed, if not encoding the entire set.")
+    setup_tooltip(frame_from_entry, "First frame to be processed, if not encoding the entire set")
     frame_to_str = tk.StringVar(value=str(from_frame))
     frames_separator_label = tk.Label(postprocessing_frame, text='to', width=2, font=("Arial", FontSize))
     frames_separator_label.grid(row=postprocessing_row, column=1)
@@ -4174,7 +4307,7 @@ def build_ui():
     frame_to_entry.config(state=NORMAL)
     frame_to_entry.bind("<Double - Button - 1>", update_frame_to)
     frame_to_entry.bind('<<Paste>>', lambda event, entry=frame_to_entry: on_paste_all_entries(event, entry))
-    setup_tooltip(frame_to_entry, "Enter last frame to be processed, if not encoding the entire set.")
+    setup_tooltip(frame_to_entry, "Last frame to be processed, if not encoding the entire set")
 
     postprocessing_row += 1
 
@@ -4187,21 +4320,20 @@ def build_ui():
     perform_rotation_checkbox.grid(row=postprocessing_row, column=0,
                                         columnspan=1, sticky=W)
     perform_rotation_checkbox.config(state=NORMAL)
-    setup_tooltip(perform_rotation_checkbox, "Check if frames need to be rotated.")
+    setup_tooltip(perform_rotation_checkbox, "Rotate generated frames")
 
     # Spinbox to select rotation angle
     rotation_angle_str = tk.StringVar(value=str(0))
-    rotation_angle_selection_aux = postprocessing_frame.register(
-        rotation_angle_selection)
+    #rotation_angle_selection_aux = postprocessing_frame.register(rotation_angle_selection)
     rotation_angle_spinbox = tk.Spinbox(
         postprocessing_frame,
-        command=(rotation_angle_selection_aux, '%d'), width=5,
+        command=rotation_angle_selection, width=5,
         textvariable=rotation_angle_str, from_=-5, to=5,
         format="%.1f", increment=0.1, font=("Arial", FontSize))
     rotation_angle_spinbox.grid(row=postprocessing_row, column=1, sticky=W)
     rotation_angle_spinbox.bind("<FocusOut>", rotation_angle_spinbox_focus_out)
-    setup_tooltip(rotation_angle_spinbox, "Enter the frame rotation angle.")
-    rotation_angle_selection('down')
+    setup_tooltip(rotation_angle_spinbox, "Angle to use when rotating frames")
+    #rotation_angle_selection('down')
     rotation_angle_label = tk.Label(postprocessing_frame,
                                       text='°',
                                       width=1, font=("Arial", FontSize))
@@ -4217,11 +4349,11 @@ def build_ui():
         command=perform_stabilization_selection, font=("Arial", FontSize))
     perform_stabilization_checkbox.grid(row=postprocessing_row, column=0,
                                         columnspan=1, sticky=W)
-    setup_tooltip(perform_stabilization_checkbox, "Check to stabilize frames. Sprocket hole is used as common reference, it needs to be clearly visible.")
+    setup_tooltip(perform_stabilization_checkbox, "Stabilize generated frames. Sprocket hole is used as common reference, it needs to be clearly visible")
     # Label to display the match level of current frame to template
     stabilization_threshold_match_label = Label(postprocessing_frame, width=4, borderwidth=1, relief='sunken', font=("Arial", FontSize))
     stabilization_threshold_match_label.grid(row=postprocessing_row, column=1, sticky=W)
-    setup_tooltip(stabilization_threshold_match_label, "This value shows the dynamic quality of sprocket hole template matching. Green is good, orange acceptable, red is bad.")
+    setup_tooltip(stabilization_threshold_match_label, "This value shows the dynamic quality of sprocket hole template matching. Green is good, orange acceptable, red is bad")
 
     # Extended search checkbox (replace radio buttons for fast/precise stabilization)
     extended_stabilization = tk.BooleanVar(value=False)
@@ -4231,7 +4363,7 @@ def build_ui():
         command=extended_stabilization_selection, font=("Arial", FontSize))
     #extended_stabilization_checkbox.grid(row=postprocessing_row, column=1, columnspan=2)
     extended_stabilization_checkbox.forget()
-    setup_tooltip(extended_stabilization_checkbox, "Check to xtend the area where AfterScan looks for sprocket holes. In some rare cases this might help.")
+    setup_tooltip(extended_stabilization_checkbox, "Extend the area where AfterScan looks for sprocket holes. In some rare cases this might help")
 
     # Custom film perforation template
     custom_stabilization_btn = Button(postprocessing_frame,
@@ -4243,7 +4375,7 @@ def build_ui():
     custom_stabilization_btn.config(relief=SUNKEN if template_list.get_active_type() == 'Custom' else RAISED)
     custom_stabilization_btn.grid(row=postprocessing_row, column=1, columnspan=2, padx=5, pady=5, sticky=E)
     setup_tooltip(custom_stabilization_btn,
-                  "If you prefer to use a customized template for your project, instead of the automatic one selected by AfterScan, lick on this button to define it.")
+                  "If you prefer to use a customized template for your project, instead of the automatic one selected by AfterScan, lick on this button to define it")
 
     postprocessing_row += 1
 
@@ -4254,47 +4386,64 @@ def build_ui():
         onvalue=True, offvalue=False, command=perform_cropping_selection,
         width=4, font=("Arial", FontSize))
     perform_cropping_checkbox.grid(row=postprocessing_row, column=0, sticky=W)
-    setup_tooltip(perform_cropping_checkbox, "Check to crop frames to the defined limits ('Define crop area' button).")
+    setup_tooltip(perform_cropping_checkbox, "Crop generated frames to the user-defined limits ('Define crop area' button)")
     force_4_3_crop = tk.BooleanVar(value=False)
     force_4_3_crop_checkbox = tk.Checkbutton(
         postprocessing_frame, text='4:3', variable=force_4_3_crop,
         onvalue=True, offvalue=False, command=force_4_3_selection,
         width=4, font=("Arial", FontSize))
     force_4_3_crop_checkbox.grid(row=postprocessing_row, column=0, sticky=E)
-    setup_tooltip(force_4_3_crop_checkbox, "Check to enforce 4:3 aspect ratio when defining the cropping rectangle.")
+    setup_tooltip(force_4_3_crop_checkbox, "Enforce 4:3 aspect ratio when defining the cropping rectangle")
     force_16_9_crop = tk.BooleanVar(value=False)
     force_16_9_crop_checkbox = tk.Checkbutton(
         postprocessing_frame, text='16:9', variable=force_16_9_crop,
         onvalue=True, offvalue=False, command=force_16_9_selection,
         width=4, font=("Arial", FontSize))
     force_16_9_crop_checkbox.grid(row=postprocessing_row, column=1, sticky=W)
-    setup_tooltip(force_16_9_crop_checkbox, "Check to enforce 16:9 aspect ratio when defining the cropping rectangle.")
+    setup_tooltip(force_16_9_crop_checkbox, "Enforce 16:9 aspect ratio when defining the cropping rectangle")
     cropping_btn = Button(postprocessing_frame, text='Define crop area',
                           width=12, height=1, command=select_cropping_area,
                           activebackground='green', activeforeground='white',
                           wraplength=120, font=("Arial", FontSize))
     cropping_btn.grid(row=postprocessing_row, column=2, sticky=E)
-    setup_tooltip(cropping_btn, "Click in order to open a popup window to define the cropping rectange.")
+    setup_tooltip(cropping_btn, "Open popup window to define the cropping rectangle")
 
     postprocessing_row += 1
-
-    # Check box to perform sharpness
-    perform_sharpness = tk.BooleanVar(value=False)
-    perform_sharpness_checkbox = tk.Checkbutton(
-        postprocessing_frame, text='Sharpen', variable=perform_sharpness,
-        onvalue=True, offvalue=False, command=perform_sharpness_selection,
-        width=7, font=("Arial", FontSize))
-    perform_sharpness_checkbox.grid(row=postprocessing_row, column=0, sticky=W)
-    setup_tooltip(perform_sharpness_checkbox, "Check to apply sharpen algorithm (using 'filter2D' in OpenCV) to the generated frames")
 
     # Check box to perform denoise
     perform_denoise = tk.BooleanVar(value=False)
     perform_denoise_checkbox = tk.Checkbutton(
         postprocessing_frame, text='Denoise', variable=perform_denoise,
         onvalue=True, offvalue=False, command=perform_denoise_selection,
-        width=7, font=("Arial", FontSize))
-    perform_denoise_checkbox.grid(row=postprocessing_row, column=1, sticky=W)
-    setup_tooltip(perform_denoise_checkbox, "Check to apply denoise algorithm (using 'fastNlMeansDenoisingColored(' in OpenCV) to the generated frames")
+        font=("Arial", FontSize))
+    perform_denoise_checkbox.grid(row=postprocessing_row, column=0, sticky=W)
+    setup_tooltip(perform_denoise_checkbox, "Apply denoise algorithm (using OpenCV's 'fastNlMeansDenoisingColored') to the generated frames")
+
+    # Check box to perform sharpness
+    perform_sharpness = tk.BooleanVar(value=False)
+    perform_sharpness_checkbox = tk.Checkbutton(
+        postprocessing_frame, text='Sharpen', variable=perform_sharpness,
+        onvalue=True, offvalue=False, command=perform_sharpness_selection,
+        font=("Arial", FontSize))
+    perform_sharpness_checkbox.grid(row=postprocessing_row, column=1, sticky=W)
+    setup_tooltip(perform_sharpness_checkbox, "Apply sharpen algorithm (using OpenCV's 'filter2D') to the generated frames")
+
+    # Check box to do gamma correction
+    perform_gamma_correction = tk.BooleanVar(value=False)
+    perform_gamma_correction_checkbox = tk.Checkbutton(
+        postprocessing_frame, text='GC:', variable=perform_gamma_correction,
+        onvalue=True, offvalue=False, font=("Arial", FontSize))
+    perform_gamma_correction_checkbox.grid(row=postprocessing_row, column=2, sticky=W)
+    perform_gamma_correction_checkbox.config(state=NORMAL)
+    setup_tooltip(perform_gamma_correction_checkbox, "Apply gamma correction to the generated frames")
+
+    # Spinbox for gamma correction
+    gamma_correction_str = tk.StringVar(value="2.2")
+    gamma_correction_spinbox = tk.Spinbox(postprocessing_frame, width=3,
+        textvariable=gamma_correction_str, from_=-4, to=4, format="%.1f", increment=0.1, font=("Arial", FontSize))
+    gamma_correction_spinbox.grid(row=postprocessing_row, column=2, sticky=E)
+    setup_tooltip(gamma_correction_spinbox, "Gamma correction value (default is 2.2)")
+
     postprocessing_row += 1
 
     # This checkbox enables 'fake' frame completion when, due to stabilization process, part of the frame is lost at the
@@ -4308,15 +4457,15 @@ def build_ui():
     perform_fill_none_rb = Radiobutton(postprocessing_frame, text='No frame fill',
                                     variable=frame_fill_type, value='none', font=("Arial", FontSize))
     perform_fill_none_rb.grid(row=postprocessing_row, column=0, sticky=W)
-    setup_tooltip(perform_fill_none_rb, "Badly aligned frames will be left with the missing part of the image black after stabilization.")
+    setup_tooltip(perform_fill_none_rb, "Badly aligned frames will be left with the missing part of the image black after stabilization")
     perform_fill_fake_rb = Radiobutton(postprocessing_frame, text='Fake fill',
                                     variable=frame_fill_type, value='fake', font=("Arial", FontSize))
     perform_fill_fake_rb.grid(row=postprocessing_row, column=1, sticky=W)
-    setup_tooltip(perform_fill_fake_rb, "Badly aligned frames will have the missing part of the image completed with a fragment of the next/previous frame after stabilization.")
+    setup_tooltip(perform_fill_fake_rb, "Badly aligned frames will have the missing part of the image completed with a fragment of the next/previous frame after stabilization")
     perform_fill_dumb_rb = Radiobutton(postprocessing_frame, text='Dumb fill',
                                     variable=frame_fill_type, value='dumb', font=("Arial", FontSize))
     perform_fill_dumb_rb.grid(row=postprocessing_row, column=2, sticky=W)
-    setup_tooltip(perform_fill_dumb_rb, "Badly aligned frames will have the missing part of the image filled with the adjacent pixel row after stabilization.")
+    setup_tooltip(perform_fill_dumb_rb, "Badly aligned frames will have the missing part of the image filled with the adjacent pixel row after stabilization")
     frame_fill_type.set('fake')
 
     postprocessing_row += 1
@@ -4329,7 +4478,7 @@ def build_ui():
                                                          onvalue=True, offvalue=False,
                                                          width=40, font=("Arial", FontSize))
     stabilization_bounds_alert_checkbox.grid(row=postprocessing_row, column=0, columnspan=3, sticky=W)
-    setup_tooltip(stabilization_bounds_alert_checkbox, "Check to sound an alert each time a badly aligned frame (requiring fill-in) is detected.")
+    setup_tooltip(stabilization_bounds_alert_checkbox, "Beep each time a badly aligned frame (requiring fill-in) is detected")
 
     postprocessing_row += 1
 
@@ -4351,7 +4500,7 @@ def build_ui():
     generate_video_checkbox.grid(row=video_row, column=0, sticky=W)
     generate_video_checkbox.config(state=NORMAL if ffmpeg_installed
                                    else DISABLED)
-    setup_tooltip(generate_video_checkbox, "Check to generate an MP4 video, after all frames have been processed.")
+    setup_tooltip(generate_video_checkbox, "Generate an MP4 video, once all frames have been processed")
 
     # Check box to skip frame regeneration
     skip_frame_regeneration = tk.BooleanVar(value=False)
@@ -4363,50 +4512,47 @@ def build_ui():
                                     columnspan=2, sticky=W)
     skip_frame_regeneration_cb.config(state=NORMAL if ffmpeg_installed
                                       else DISABLED)
-    setup_tooltip(skip_frame_regeneration_cb, "If frames have ben already generated in a previous run, and you want to only generate the vieo, check this one.")
+    setup_tooltip(skip_frame_regeneration_cb, "If frames have ben already generated in a previous run, and you want to only generate the vieo, check this one")
 
     video_row += 1
 
     # Video target folder
-    video_target_dir = Entry(video_frame, width=36, borderwidth=1, font=("Arial", FontSize))
+    video_target_dir_str = StringVar()
+    video_target_dir = Entry(video_frame, textvariable=video_target_dir_str, width=36, borderwidth=1, font=("Arial", FontSize))
     video_target_dir.grid(row=video_row, column=0, columnspan=2,
                              sticky=W)
-    video_target_dir.delete(0, 'end')
-    video_target_dir.insert('end', '')
     video_target_dir.bind('<<Paste>>', lambda event, entry=video_target_dir: on_paste_all_entries(event, entry))
-    setup_tooltip(video_target_dir, "Enter the directory where the generated video will be stored.")
+    setup_tooltip(video_target_dir, "Directory where the generated video will be stored")
 
     video_target_folder_btn = Button(video_frame, text='Target', width=6,
                                height=1, command=set_video_target_folder,
                                activebackground='green',
                                activeforeground='white', wraplength=80, font=("Arial", FontSize))
     video_target_folder_btn.grid(row=video_row, column=2, columnspan=2, sticky=W)
-    setup_tooltip(video_target_folder_btn, "Click to select the directory where the generated video will be stored.")
+    setup_tooltip(video_target_folder_btn, "Selects directory where the generated video will be stored")
     video_row += 1
 
     # Video filename
+    video_filename_str = StringVar()
     video_filename_label = Label(video_frame, text='Video filename:', font=("Arial", FontSize))
     video_filename_label.grid(row=video_row, column=0, sticky=W)
-    video_filename_name = Entry(video_frame, width=26 if BigSize else 33, borderwidth=1, font=("Arial", FontSize))
+    video_filename_name = Entry(video_frame, textvariable=video_filename_str, width=26 if BigSize else 33, borderwidth=1, font=("Arial", FontSize))
     video_filename_name.grid(row=video_row, column=1, columnspan=2,
                              sticky=W)
-    video_filename_name.delete(0, 'end')
-    video_filename_name.insert('end', TargetVideoFilename)
     video_filename_name.bind('<<Paste>>', lambda event, entry=video_filename_name: on_paste_all_entries(event, entry))
-    setup_tooltip(video_filename_name, "Enter the filename of the video to be created.")
+    setup_tooltip(video_filename_name, "Filename of video to be created")
 
     video_row += 1
 
     # Video title (add title at the start of the video)
+    video_title_str = StringVar()
     video_title_label = Label(video_frame, text='Video title:', font=("Arial", FontSize))
     video_title_label.grid(row=video_row, column=0, sticky=W)
-    video_title_name = Entry(video_frame, width=26 if BigSize else 33, borderwidth=1, font=("Arial", FontSize))
+    video_title_name = Entry(video_frame, textvariable=video_title_str, width=26 if BigSize else 33, borderwidth=1, font=("Arial", FontSize))
     video_title_name.grid(row=video_row, column=1, columnspan=2,
                              sticky=W)
-    video_title_name.delete(0, 'end')
-    video_title_name.insert('end', TargetVideoTitle)
     video_title_name.bind('<<Paste>>', lambda event, entry=video_title_name: on_paste_all_entries(event, entry))
-    setup_tooltip(video_title_name, "Video title. If entered, a simple title sequence will be generated at the start of the video, using a sequence randomly selected from the same video, running at half speed.")
+    setup_tooltip(video_title_name, "Video title. If entered, a simple title sequence will be generated at the start of the video, using a sequence randomly selected from the same video, running at half speed")
 
     video_row += 1
 
@@ -4444,7 +4590,7 @@ def build_ui():
     video_fps_dropdown.config(takefocus=1, font=("Arial", FontSize))
     video_fps_dropdown.pack(side=LEFT, anchor=E)
     video_fps_dropdown.config(state=DISABLED)
-    setup_tooltip(video_fps_dropdown, "Select the number of frames per second (FPS) of the video to be generated. Usually Super8 goes at 18 FPS, and Regular 8 at 16 FPS, although some cameras allowed to use other speeds (faster for smoother movement, slower for extended play time)")
+    setup_tooltip(video_fps_dropdown, "Number of frames per second (FPS) of the video to be generated. Usually Super8 goes at 18 FPS, and Regular 8 at 16 FPS, although some cameras allowed to use other speeds (faster for smoother movement, slower for extended play time)")
 
     # Create FFmpeg preset options
     ffmpeg_preset_frame = Frame(video_frame)
@@ -4456,19 +4602,19 @@ def build_ui():
                                     variable=ffmpeg_preset, value='veryslow', font=("Arial", FontSize))
     ffmpeg_preset_rb1.pack(side=TOP, anchor=W)
     ffmpeg_preset_rb1.config(state=DISABLED)
-    setup_tooltip(ffmpeg_preset_rb1, "Best quality, but very slow encoding. Maps to the same ffmpeg option.")
+    setup_tooltip(ffmpeg_preset_rb1, "Best quality, but very slow encoding. Maps to the same ffmpeg option")
 
     ffmpeg_preset_rb2 = Radiobutton(ffmpeg_preset_frame, text="Medium",
                                     variable=ffmpeg_preset, value='medium', font=("Arial", FontSize))
     ffmpeg_preset_rb2.pack(side=TOP, anchor=W)
     ffmpeg_preset_rb2.config(state=DISABLED)
-    setup_tooltip(ffmpeg_preset_rb2, "Compromise between quality and encoding speed. Maps to the same ffmpeg option.")
+    setup_tooltip(ffmpeg_preset_rb2, "Compromise between quality and encoding speed. Maps to the same ffmpeg option")
     ffmpeg_preset_rb3 = Radiobutton(ffmpeg_preset_frame,
                                     text="Fast (low quality)",
                                     variable=ffmpeg_preset, value='veryfast', font=("Arial", FontSize))
     ffmpeg_preset_rb3.pack(side=TOP, anchor=W)
     ffmpeg_preset_rb3.config(state=DISABLED)
-    setup_tooltip(ffmpeg_preset_rb3, "Faster encoding speed, lower quality (but not so much IMHO). Maps to the same ffmpeg option.")
+    setup_tooltip(ffmpeg_preset_rb3, "Faster encoding speed, lower quality (but not so much IMHO). Maps to the same ffmpeg option")
     ffmpeg_preset.set('medium')
     video_row += 1
 
@@ -4491,7 +4637,7 @@ def build_ui():
     resolution_dropdown.config(takefocus=1, font=("Arial", FontSize))
     resolution_dropdown.pack(side=LEFT, anchor=E)
     resolution_dropdown.config(state=DISABLED)
-    setup_tooltip(resolution_dropdown, "Select the resolution to be used when generating the video.")
+    setup_tooltip(resolution_dropdown, "Resolution to be used when generating the video")
 
     video_row += 1
 
@@ -4504,7 +4650,7 @@ def build_ui():
     custom_ffmpeg_path.insert('end', FfmpegBinName)
     custom_ffmpeg_path.bind("<FocusOut>", custom_ffmpeg_path_focus_out)
     custom_ffmpeg_path.bind('<<Paste>>', lambda event, entry=custom_ffmpeg_path: on_paste_all_entries(event, entry))
-    setup_tooltip(custom_ffmpeg_path, "Enter the path where the ffmpeg executable is installed in your system.")
+    setup_tooltip(custom_ffmpeg_path, "Path where the ffmpeg executable is installed in your system")
 
     video_row += 1
 
@@ -4532,7 +4678,7 @@ def build_ui():
         #stabilization_threshold_spinbox.grid(row=extra_row, column=2, sticky=W)
         stabilization_threshold_spinbox.forget()
         stabilization_threshold_spinbox.bind("<FocusOut>", stabilization_threshold_spinbox_focus_out)
-        setup_tooltip(stabilization_threshold_spinbox, "Threshold value to isolate the sprocket hole from the rest of the image while definint the custom template.")
+        setup_tooltip(stabilization_threshold_spinbox, "Threshold value to isolate the sprocket hole from the rest of the image while definint the custom template")
 
         extra_row += 1
 
@@ -4566,6 +4712,7 @@ def build_ui():
     job_list_listbox.bind('<<ListboxSelect>>', job_list_process_selection)
     job_list_listbox.bind("u", job_list_move_up)
     job_list_listbox.bind("d", job_list_move_down)
+    job_list_listbox_disabled = False   # to prevent processing clicks on listbox, as disabling it will prevent checkign status of each job
 
     # job listbox scrollbars
     job_list_listbox_scrollbar_y = Scrollbar(job_list_frame, orient="vertical")
@@ -4588,28 +4735,28 @@ def build_ui():
                     command=job_list_add_current, activebackground='green',
                     activeforeground='white', wraplength=100, font=("Arial", FontSize))
     add_job_btn.pack(side=TOP, padx=2, pady=2)
-    setup_tooltip(add_job_btn, "Add to job list a new job using the current settings defined on the right area of the AfterScan window.")
+    setup_tooltip(add_job_btn, "Add to job list a new job using the current settings defined on the right area of the AfterScan window")
 
     # Delete job button
     delete_job_btn = Button(job_list_btn_frame, text="Delete job", width=12, height=1,
                     command=job_list_delete_selected, activebackground='green',
                     activeforeground='white', wraplength=100, font=("Arial", FontSize))
     delete_job_btn.pack(side=TOP, padx=2, pady=2)
-    setup_tooltip(delete_job_btn, "Delete currently selected job from list.")
+    setup_tooltip(delete_job_btn, "Delete currently selected job from list")
 
     # Rerun job button
     rerun_job_btn = Button(job_list_btn_frame, text="Rerun job", width=12, height=1,
                     command=job_list_rerun_selected, activebackground='green',
                     activeforeground='white', wraplength=100, font=("Arial", FontSize))
     rerun_job_btn.pack(side=TOP, padx=2, pady=2)
-    setup_tooltip(rerun_job_btn, "Toggle 'run' state of currently selected job in list.")
+    setup_tooltip(rerun_job_btn, "Toggle 'run' state of currently selected job in list")
 
     # Start processing job button
     start_batch_btn = Button(job_list_btn_frame, text="Start batch", width=12, height=1,
                     command=start_processing_job_list, activebackground='green',
                     activeforeground='white', wraplength=100, font=("Arial", FontSize))
     start_batch_btn.pack(side=TOP, padx=2, pady=2)
-    setup_tooltip(start_batch_btn, "Start processing jobs in list.")
+    setup_tooltip(start_batch_btn, "Start processing jobs in list")
 
     # Suspend on end checkbox
     # suspend_on_joblist_end = tk.BooleanVar(value=False)
@@ -4625,15 +4772,15 @@ def build_ui():
     suspend_on_batch_completion_rb = Radiobutton(job_list_btn_frame, text="Job completion",
                                   variable=suspend_on_completion, value='job_completion', font=("Arial", FontSize))
     suspend_on_batch_completion_rb.pack(side=TOP, anchor=W, padx=2, pady=2)
-    setup_tooltip(suspend_on_batch_completion_rb, "Suspend computer when all jobs in list have been processed.")
+    setup_tooltip(suspend_on_batch_completion_rb, "Suspend computer when all jobs in list have been processed")
     suspend_on_job_completion_rb = Radiobutton(job_list_btn_frame, text="Batch completion",
                                   variable=suspend_on_completion, value='batch_completion', font=("Arial", FontSize))
     suspend_on_job_completion_rb.pack(side=TOP, anchor=W, padx=2, pady=2)
-    setup_tooltip(suspend_on_batch_completion_rb, "Suspend computer when current job being processed is complete.")
+    setup_tooltip(suspend_on_batch_completion_rb, "Suspend computer when current job being processed is complete")
     no_suspend_rb = Radiobutton(job_list_btn_frame, text="No suspend",
                                   variable=suspend_on_completion, value='no_suspend', font=("Arial", FontSize))
     no_suspend_rb.pack(side=TOP, anchor=W, padx=2, pady=2)
-    setup_tooltip(suspend_on_batch_completion_rb, "Do not suspend when done.")
+    setup_tooltip(suspend_on_batch_completion_rb, "Do not suspend when done")
 
     suspend_on_completion.set("no_suspend")
 
@@ -4699,7 +4846,7 @@ def main(argv):
 
     template_list = TemplateList()
     template_list.add("S8", hole_template_filename_s8, "S8", (44, 400))
-    template_list.add("R8", hole_template_filename_r8, "R8", (44, 44))
+    template_list.add("R8", hole_template_filename_r8, "R8", (44, 134))
     template_list.add("BW", hole_template_filename_bw, "aux", (0, 0))
     template_list.add("WB", hole_template_filename_wb, "aux", (0, 0))
     template_list.add("Corner", hole_template_filename_corner, "aux", (0, 0))
@@ -4743,12 +4890,17 @@ def main(argv):
     LogLevel = getattr(logging, LoggingMode.upper(), None)
     if not isinstance(LogLevel, int):
         raise ValueError('Invalid log level: %s' % LogLevel)
+    else:
+        init_logging()
+
+    load_general_config()
 
     afterscan_init()
+
     if go_disable_tooptips:
         disable_tooltips()
 
-    load_general_config()
+    decode_general_config()
 
     multiprocessing_init()
 
