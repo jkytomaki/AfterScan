@@ -19,10 +19,10 @@ __author__ = 'Juan Remirez de Esparza'
 __copyright__ = "Copyright 2022, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
-__version__ = "1.11.0"
+__version__ = "1.11.1"
 __data_version__ = "1.0"
-__date__ = "2024-02-05"
-__version_highlight__ = "Gamma correction + Bugfixes"
+__date__ = "2024-02-06"
+__version_highlight__ = "Some bugfixes"
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
 __status__ = "Development"
@@ -1547,6 +1547,8 @@ def widget_status_update(widget_state=0, button_action=0):
         video_title_name.config(state=widget_state if project_config["GenerateVideo"] else DISABLED)
         video_fps_dropdown.config(state=widget_state if project_config["GenerateVideo"] else DISABLED)
         resolution_dropdown.config(state=widget_state if project_config["GenerateVideo"] else DISABLED)
+        video_fps_label.config(state=widget_state if project_config["GenerateVideo"] else DISABLED)
+        resolution_label.config(state=widget_state if project_config["GenerateVideo"] else DISABLED)
         video_filename_name.config(state=widget_state if project_config["GenerateVideo"] else DISABLED)
         ffmpeg_preset_rb1.config(state=widget_state if project_config["GenerateVideo"] else DISABLED)
         ffmpeg_preset_rb2.config(state=widget_state if project_config["GenerateVideo"] else DISABLED)
@@ -2508,6 +2510,7 @@ def set_film_type():
         project_config["FilmType"] = film_type.get()
         debug_template_refresh_template()
         logging.debug(f"Setting {film_type.get()} template as active")
+        video_fps_dropdown_selected.set('18' if film_type.get() == 'S8' else '16')
         return True
     else:
         tk.messagebox.showerror(
