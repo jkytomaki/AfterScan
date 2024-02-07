@@ -4360,12 +4360,12 @@ def build_ui():
     # Extended search checkbox (replace radio buttons for fast/precise stabilization)
     extended_stabilization = tk.BooleanVar(value=False)
     extended_stabilization_checkbox = tk.Checkbutton(
-        postprocessing_frame, text='Wide',
-        variable=extended_stabilization, onvalue=True, offvalue=False, width=4,
+        postprocessing_frame, text='Extend',
+        variable=extended_stabilization, onvalue=True, offvalue=False, width=6,
         command=extended_stabilization_selection, font=("Arial", FontSize))
     extended_stabilization_checkbox.grid(row=postprocessing_row, column=1, columnspan=1, sticky=W)
     #extended_stabilization_checkbox.forget()
-    setup_tooltip(extended_stabilization_checkbox, "Extend the area where AfterScan looks for sprocket holes. In some rare cases this might help")
+    setup_tooltip(extended_stabilization_checkbox, "Extend the area where AfterScan looks for sprocket holes. In some cases this might help")
 
     # Custom film perforation template
     custom_stabilization_btn = Button(postprocessing_frame,
