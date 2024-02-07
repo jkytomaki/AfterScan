@@ -19,9 +19,9 @@ __author__ = 'Juan Remirez de Esparza'
 __copyright__ = "Copyright 2022, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
-__version__ = "1.11.1"
+__version__ = "1.11.2"
 __data_version__ = "1.0"
-__date__ = "2024-02-06"
+__date__ = "2024-02-07"
 __version_highlight__ = "Some bugfixes"
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
@@ -199,6 +199,7 @@ RotationAngle = 0.0
 StabilizeAreaDefined = False
 StabilizationThreshold = 220.0
 stabilization_bounds_alert_counter = 0
+hole_search_area_adjustment_pending = False
 CropAreaDefined = False
 RectangleTopLeft = (0, 0)
 RectangleBottomRight = (0, 0)
@@ -1649,8 +1650,9 @@ def perform_stabilization_selection():
 
 
 def extended_stabilization_selection():
-    global extended_stabilization
+    global extended_stabilization, hole_search_area_adjustment_pending
     project_config["ExtendedStabilization"] = extended_stabilization.get()
+    hole_search_area_adjustment_pending = True
     win.after(5, scale_display_update)
     widget_status_update(NORMAL)
 
@@ -1971,7 +1973,7 @@ def scale_display_update():
     global win
     global frame_scale_refresh_done, frame_scale_refresh_pending
     global CurrentFrame
-    global perform_stabilization, perform_cropping, perform_rotation
+    global perform_stabilization, perform_cropping, perform_rotation, hole_search_area_adjustment_pending
     global CropTopLeft, CropBottomRight
     global SourceDirFileList
     global debug_template_match
@@ -1991,6 +1993,9 @@ def scale_display_update():
         logging.error(
             "Error reading frame %i, skipping", frame_to_display)
     else:
+        if hole_search_area_adjustment_pending:
+            hole_search_area_adjustment_pending = False
+            set_hole_search_area(img)
         if not frame_scale_refresh_pending:
             if perform_rotation.get():
                 img = rotate_image(img)
@@ -4349,17 +4354,17 @@ def build_ui():
     setup_tooltip(perform_stabilization_checkbox, "Stabilize generated frames. Sprocket hole is used as common reference, it needs to be clearly visible")
     # Label to display the match level of current frame to template
     stabilization_threshold_match_label = Label(postprocessing_frame, width=4, borderwidth=1, relief='sunken', font=("Arial", FontSize))
-    stabilization_threshold_match_label.grid(row=postprocessing_row, column=1, sticky=W)
+    stabilization_threshold_match_label.grid(row=postprocessing_row, column=0, sticky=E)
     setup_tooltip(stabilization_threshold_match_label, "This value shows the dynamic quality of sprocket hole template matching. Green is good, orange acceptable, red is bad")
 
     # Extended search checkbox (replace radio buttons for fast/precise stabilization)
     extended_stabilization = tk.BooleanVar(value=False)
     extended_stabilization_checkbox = tk.Checkbutton(
-        postprocessing_frame, text='Extended search',
-        variable=extended_stabilization, onvalue=True, offvalue=False, width=20,
+        postprocessing_frame, text='Wide',
+        variable=extended_stabilization, onvalue=True, offvalue=False, width=4,
         command=extended_stabilization_selection, font=("Arial", FontSize))
-    #extended_stabilization_checkbox.grid(row=postprocessing_row, column=1, columnspan=2)
-    extended_stabilization_checkbox.forget()
+    extended_stabilization_checkbox.grid(row=postprocessing_row, column=1, columnspan=1, sticky=W)
+    #extended_stabilization_checkbox.forget()
     setup_tooltip(extended_stabilization_checkbox, "Extend the area where AfterScan looks for sprocket holes. In some rare cases this might help")
 
     # Custom film perforation template
