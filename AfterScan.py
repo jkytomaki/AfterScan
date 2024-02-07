@@ -19,10 +19,10 @@ __author__ = 'Juan Remirez de Esparza'
 __copyright__ = "Copyright 2022, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
-__version__ = "1.11.0"
+__version__ = "1.11.2"
 __data_version__ = "1.0"
-__date__ = "2024-02-05"
-__version_highlight__ = "Gamma correction + Bugfixes"
+__date__ = "2024-02-07"
+__version_highlight__ = "Some bugfixes"
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
 __status__ = "Development"
@@ -116,14 +116,12 @@ default_project_config = {
     "PerformDenoise": False,
     "GenerateVideo": False,
     "VideoFps": "18",
-    "VideoResolution": "Unchanged",
     "CurrentFrame": 0,
     "EncodeAllFrames": True,
     "FramesToEncode": "All",
     "StabilizationThreshold": "220",
     "PerformStabilization": False,
     "skip_frame_regeneration": False,
-    "FFmpegPreset": "veryslow",
     "VideoFilename": "",
     "VideoTitle": "",
     "FillBorders": False,
@@ -201,6 +199,7 @@ RotationAngle = 0.0
 StabilizeAreaDefined = False
 StabilizationThreshold = 220.0
 stabilization_bounds_alert_counter = 0
+hole_search_area_adjustment_pending = False
 CropAreaDefined = False
 RectangleTopLeft = (0, 0)
 RectangleBottomRight = (0, 0)
@@ -486,8 +485,6 @@ def set_project_defaults():
     frame_fill_type.set(project_config["FrameFillType"])
     project_config["GenerateVideo"] = False
     generate_video.set(project_config["GenerateVideo"])
-    project_config["VideoResolution"] = "Unchanged"
-    resolution_dropdown_selected.set(project_config["VideoResolution"])
     project_config["CurrentFrame"] = 0
     frame_slider.set(project_config["CurrentFrame"])
     project_config["EncodeAllFrames"] = True
@@ -502,8 +499,6 @@ def set_project_defaults():
     extended_stabilization.set(project_config["ExtendedStabilization"])
     project_config["skip_frame_regeneration"] = False
     skip_frame_regeneration.set(project_config["skip_frame_regeneration"])
-    project_config["FFmpegPreset"] = "veryslow"
-    ffmpeg_preset.set(project_config["FFmpegPreset"])
     project_config["VideoFilename"] = ""
     video_filename_str.set(project_config["VideoFilename"])
     project_config["VideoTitle"] = ""
@@ -935,8 +930,8 @@ def decode_project_config():
     if 'VideoResolution' in project_config:
         resolution_dropdown_selected.set(project_config["VideoResolution"])
     else:
-        resolution_dropdown_selected.set('Unchanged')
-        project_config["VideoResolution"] = 'Unchanged'
+        resolution_dropdown_selected.set('1600x1200 (UXGA)')
+        project_config["VideoResolution"] = '1600x1200 (UXGA)'
 
     widget_status_update(NORMAL)
 
@@ -1547,6 +1542,8 @@ def widget_status_update(widget_state=0, button_action=0):
         video_title_name.config(state=widget_state if project_config["GenerateVideo"] else DISABLED)
         video_fps_dropdown.config(state=widget_state if project_config["GenerateVideo"] else DISABLED)
         resolution_dropdown.config(state=widget_state if project_config["GenerateVideo"] else DISABLED)
+        video_fps_label.config(state=widget_state if project_config["GenerateVideo"] else DISABLED)
+        resolution_label.config(state=widget_state if project_config["GenerateVideo"] else DISABLED)
         video_filename_name.config(state=widget_state if project_config["GenerateVideo"] else DISABLED)
         ffmpeg_preset_rb1.config(state=widget_state if project_config["GenerateVideo"] else DISABLED)
         ffmpeg_preset_rb2.config(state=widget_state if project_config["GenerateVideo"] else DISABLED)
@@ -1653,8 +1650,9 @@ def perform_stabilization_selection():
 
 
 def extended_stabilization_selection():
-    global extended_stabilization
+    global extended_stabilization, hole_search_area_adjustment_pending
     project_config["ExtendedStabilization"] = extended_stabilization.get()
+    hole_search_area_adjustment_pending = True
     win.after(5, scale_display_update)
     widget_status_update(NORMAL)
 
@@ -1975,7 +1973,7 @@ def scale_display_update():
     global win
     global frame_scale_refresh_done, frame_scale_refresh_pending
     global CurrentFrame
-    global perform_stabilization, perform_cropping, perform_rotation
+    global perform_stabilization, perform_cropping, perform_rotation, hole_search_area_adjustment_pending
     global CropTopLeft, CropBottomRight
     global SourceDirFileList
     global debug_template_match
@@ -1995,6 +1993,9 @@ def scale_display_update():
         logging.error(
             "Error reading frame %i, skipping", frame_to_display)
     else:
+        if hole_search_area_adjustment_pending:
+            hole_search_area_adjustment_pending = False
+            set_hole_search_area(img)
         if not frame_scale_refresh_pending:
             if perform_rotation.get():
                 img = rotate_image(img)
@@ -2508,6 +2509,7 @@ def set_film_type():
         project_config["FilmType"] = film_type.get()
         debug_template_refresh_template()
         logging.debug(f"Setting {film_type.get()} template as active")
+        video_fps_dropdown_selected.set('18' if film_type.get() == 'S8' else '16')
         return True
     else:
         tk.messagebox.showerror(
@@ -4352,18 +4354,18 @@ def build_ui():
     setup_tooltip(perform_stabilization_checkbox, "Stabilize generated frames. Sprocket hole is used as common reference, it needs to be clearly visible")
     # Label to display the match level of current frame to template
     stabilization_threshold_match_label = Label(postprocessing_frame, width=4, borderwidth=1, relief='sunken', font=("Arial", FontSize))
-    stabilization_threshold_match_label.grid(row=postprocessing_row, column=1, sticky=W)
+    stabilization_threshold_match_label.grid(row=postprocessing_row, column=0, sticky=E)
     setup_tooltip(stabilization_threshold_match_label, "This value shows the dynamic quality of sprocket hole template matching. Green is good, orange acceptable, red is bad")
 
     # Extended search checkbox (replace radio buttons for fast/precise stabilization)
     extended_stabilization = tk.BooleanVar(value=False)
     extended_stabilization_checkbox = tk.Checkbutton(
-        postprocessing_frame, text='Extended search',
-        variable=extended_stabilization, onvalue=True, offvalue=False, width=20,
+        postprocessing_frame, text='Extend',
+        variable=extended_stabilization, onvalue=True, offvalue=False, width=6,
         command=extended_stabilization_selection, font=("Arial", FontSize))
-    #extended_stabilization_checkbox.grid(row=postprocessing_row, column=1, columnspan=2)
-    extended_stabilization_checkbox.forget()
-    setup_tooltip(extended_stabilization_checkbox, "Extend the area where AfterScan looks for sprocket holes. In some rare cases this might help")
+    extended_stabilization_checkbox.grid(row=postprocessing_row, column=1, columnspan=1, sticky=W)
+    #extended_stabilization_checkbox.forget()
+    setup_tooltip(extended_stabilization_checkbox, "Extend the area where AfterScan looks for sprocket holes. In some cases this might help")
 
     # Custom film perforation template
     custom_stabilization_btn = Button(postprocessing_frame,
@@ -4623,7 +4625,7 @@ def build_ui():
     resolution_dropdown_selected = StringVar()
 
     # initial menu text
-    resolution_dropdown_selected.set("Unchanged")
+    resolution_dropdown_selected.set("1600x1200 (UXGA)")
 
     # Create resolution Dropdown menu
     resolution_frame = Frame(video_frame)
