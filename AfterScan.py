@@ -19,10 +19,10 @@ __author__ = 'Juan Remirez de Esparza'
 __copyright__ = "Copyright 2022, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
-__version__ = "1.11.0"
+__version__ = "1.11.1"
 __data_version__ = "1.0"
-__date__ = "2024-02-05"
-__version_highlight__ = "Gamma correction + Bugfixes"
+__date__ = "2024-02-06"
+__version_highlight__ = "Some bugfixes"
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
 __status__ = "Development"
@@ -116,14 +116,12 @@ default_project_config = {
     "PerformDenoise": False,
     "GenerateVideo": False,
     "VideoFps": "18",
-    "VideoResolution": "Unchanged",
     "CurrentFrame": 0,
     "EncodeAllFrames": True,
     "FramesToEncode": "All",
     "StabilizationThreshold": "220",
     "PerformStabilization": False,
     "skip_frame_regeneration": False,
-    "FFmpegPreset": "veryslow",
     "VideoFilename": "",
     "VideoTitle": "",
     "FillBorders": False,
@@ -486,8 +484,6 @@ def set_project_defaults():
     frame_fill_type.set(project_config["FrameFillType"])
     project_config["GenerateVideo"] = False
     generate_video.set(project_config["GenerateVideo"])
-    project_config["VideoResolution"] = "Unchanged"
-    resolution_dropdown_selected.set(project_config["VideoResolution"])
     project_config["CurrentFrame"] = 0
     frame_slider.set(project_config["CurrentFrame"])
     project_config["EncodeAllFrames"] = True
@@ -502,8 +498,6 @@ def set_project_defaults():
     extended_stabilization.set(project_config["ExtendedStabilization"])
     project_config["skip_frame_regeneration"] = False
     skip_frame_regeneration.set(project_config["skip_frame_regeneration"])
-    project_config["FFmpegPreset"] = "veryslow"
-    ffmpeg_preset.set(project_config["FFmpegPreset"])
     project_config["VideoFilename"] = ""
     video_filename_str.set(project_config["VideoFilename"])
     project_config["VideoTitle"] = ""
@@ -935,8 +929,8 @@ def decode_project_config():
     if 'VideoResolution' in project_config:
         resolution_dropdown_selected.set(project_config["VideoResolution"])
     else:
-        resolution_dropdown_selected.set('Unchanged')
-        project_config["VideoResolution"] = 'Unchanged'
+        resolution_dropdown_selected.set('1600x1200 (UXGA)')
+        project_config["VideoResolution"] = '1600x1200 (UXGA)'
 
     widget_status_update(NORMAL)
 
@@ -1547,6 +1541,8 @@ def widget_status_update(widget_state=0, button_action=0):
         video_title_name.config(state=widget_state if project_config["GenerateVideo"] else DISABLED)
         video_fps_dropdown.config(state=widget_state if project_config["GenerateVideo"] else DISABLED)
         resolution_dropdown.config(state=widget_state if project_config["GenerateVideo"] else DISABLED)
+        video_fps_label.config(state=widget_state if project_config["GenerateVideo"] else DISABLED)
+        resolution_label.config(state=widget_state if project_config["GenerateVideo"] else DISABLED)
         video_filename_name.config(state=widget_state if project_config["GenerateVideo"] else DISABLED)
         ffmpeg_preset_rb1.config(state=widget_state if project_config["GenerateVideo"] else DISABLED)
         ffmpeg_preset_rb2.config(state=widget_state if project_config["GenerateVideo"] else DISABLED)
@@ -2508,6 +2504,7 @@ def set_film_type():
         project_config["FilmType"] = film_type.get()
         debug_template_refresh_template()
         logging.debug(f"Setting {film_type.get()} template as active")
+        video_fps_dropdown_selected.set('18' if film_type.get() == 'S8' else '16')
         return True
     else:
         tk.messagebox.showerror(
@@ -4623,7 +4620,7 @@ def build_ui():
     resolution_dropdown_selected = StringVar()
 
     # initial menu text
-    resolution_dropdown_selected.set("Unchanged")
+    resolution_dropdown_selected.set("1600x1200 (UXGA)")
 
     # Create resolution Dropdown menu
     resolution_frame = Frame(video_frame)
