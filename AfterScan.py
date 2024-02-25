@@ -19,10 +19,10 @@ __author__ = 'Juan Remirez de Esparza'
 __copyright__ = "Copyright 2022, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
-__version__ = "1.11.2"
+__version__ = "1.11.3"
 __data_version__ = "1.0"
-__date__ = "2024-02-07"
-__version_highlight__ = "Some bugfixes"
+__date__ = "2024-02-25"
+__version_highlight__ = "Migrate to Class Tooltips"
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
 __status__ = "Development"
@@ -61,7 +61,7 @@ import random
 import threading
 import queue
 from matplotlib import font_manager
-from tooltip import disable_tooltips, setup_tooltip, init_tooltips
+from tooltip import Tooltips
 
 # Frame vars
 first_absolute_frame = 0
@@ -265,7 +265,8 @@ resolution_dict = {
     "15360x8640 (16K UHD)": "15360:8640"
 }
 # Miscellaneous vars
-global win
+win = None
+as_tooltips = None
 ExpertMode = False
 IsWindows = False
 IsLinux = False
@@ -1821,7 +1822,7 @@ def debug_template_popup():
     template_canvas = Canvas(left_frame, bg='dark grey',
                                  width=debug_template_width, height=template_canvas_height)
     template_canvas.pack(side=TOP, anchor=N)
-    setup_tooltip(template_canvas, "Active template used to locate sprocket hole(s)")
+    as_tooltips.add(template_canvas, "Active template used to locate sprocket hole(s)")
 
     DisplayableImage = ImageTk.PhotoImage(Image.fromarray(aux))
     template_canvas.create_image(0, int(hole_template_pos[1]*0.33), anchor=NW, image=DisplayableImage)
@@ -1831,13 +1832,13 @@ def debug_template_popup():
     left_stripe_stabilized_canvas = Canvas(center_frame, bg='dark grey',
                                  width=debug_template_width, height=debug_template_height)
     left_stripe_stabilized_canvas.pack(side=LEFT, anchor=N)
-    setup_tooltip(left_stripe_stabilized_canvas, "Current frame after stabilization, with detected template highlighted in green, orange or red depending on the quality of the match")
+    as_tooltips.add(left_stripe_stabilized_canvas, "Current frame after stabilization, with detected template highlighted in green, orange or red depending on the quality of the match")
 
     # Create Canvas to display image left stripe (non stabilized)
     left_stripe_canvas = Canvas(center_frame, bg='dark grey',
                                  width=debug_template_width, height=debug_template_height)
     left_stripe_canvas.pack(side=LEFT, anchor=N)
-    setup_tooltip(left_stripe_canvas, "Template search area for current frame before stabilization, used to find template")
+    as_tooltips.add(left_stripe_canvas, "Template search area for current frame before stabilization, used to find template")
 
     # Add a label with the film type
     film_type_text = tk.StringVar()
@@ -4028,7 +4029,7 @@ def init_logging():
 
 
 def afterscan_init():
-    global win
+    global win, as_tooltips
     global TopWinX
     global TopWinY
     global WinInitDone
@@ -4075,7 +4076,7 @@ def afterscan_init():
     win.resizable(False, False)
 
     # Init ToolTips
-    init_tooltips(FontSize)
+    as_tooltips = Tooltips(FontSize)
 
     # Get Top window coordinates
     TopWinX = win.winfo_x()
@@ -4186,7 +4187,7 @@ def build_ui():
     frame_slider.pack(side=BOTTOM, ipady=4)
     frame_slider.set(CurrentFrame)
 
-    setup_tooltip(frame_slider, "Browse around frames to be processed")
+    as_tooltips.add(frame_slider, "Browse around frames to be processed")
 
     # Application status label
     app_status_label = Label(regular_top_section_frame, width=46 if BigSize else 55, borderwidth=2,
@@ -4200,7 +4201,7 @@ def build_ui():
                       activeforeground='white', wraplength=80, font=("Arial", FontSize))
     Exit_btn.grid(row=0, column=1, sticky=W, padx=5)
 
-    setup_tooltip(Exit_btn, "Exit AfterScan")
+    as_tooltips.add(Exit_btn, "Exit AfterScan")
 
     # Application start button
     Go_btn = Button(regular_top_section_frame, text="Start", width=12, height=5,
@@ -4208,7 +4209,7 @@ def build_ui():
                     activeforeground='white', wraplength=80, font=("Arial", FontSize))
     Go_btn.grid(row=0, column=2, sticky=W)
 
-    setup_tooltip(Go_btn, "Start post-processing using current settings")
+    as_tooltips.add(Go_btn, "Start post-processing using current settings")
 
     # Create frame to select source and target folders *******************************
     folder_frame = LabelFrame(right_area_frame, text='Folder selection', width=50,
@@ -4225,7 +4226,7 @@ def build_ui():
     frames_source_dir.after(100, frames_source_dir.xview_moveto, 1)
     frames_source_dir.bind('<<Paste>>', lambda event, entry=frames_source_dir: on_paste_all_entries(event, entry))
 
-    setup_tooltip(frames_source_dir, "Directory where the source frames are located")
+    as_tooltips.add(frames_source_dir, "Directory where the source frames are located")
 
     source_folder_btn = Button(source_folder_frame, text='Source', width=6,
                                height=1, command=set_source_folder,
@@ -4233,7 +4234,7 @@ def build_ui():
                                activeforeground='white', wraplength=80, font=("Arial", FontSize))
     source_folder_btn.pack(side=LEFT)
 
-    setup_tooltip(source_folder_btn, "Selects the directory where the source frames are located")
+    as_tooltips.add(source_folder_btn, "Selects the directory where the source frames are located")
 
     target_folder_frame = Frame(folder_frame)
     target_folder_frame.pack(side=TOP)
@@ -4242,7 +4243,7 @@ def build_ui():
     frames_target_dir.pack(side=LEFT)
     frames_target_dir.bind('<<Paste>>', lambda event, entry=frames_target_dir: on_paste_all_entries(event, entry))
     
-    setup_tooltip(frames_target_dir, "Directory where generated frames will be stored")
+    as_tooltips.add(frames_target_dir, "Directory where generated frames will be stored")
 
     target_folder_btn = Button(target_folder_frame, text='Target', width=6,
                                height=1, command=set_frames_target_folder,
@@ -4250,7 +4251,7 @@ def build_ui():
                                activeforeground='white', wraplength=80, font=("Arial", FontSize))
     target_folder_btn.pack(side=LEFT)
 
-    setup_tooltip(target_folder_btn, "Selects the directory where the generated frames will be stored")
+    as_tooltips.add(target_folder_btn, "Selects the directory where the generated frames will be stored")
 
     save_bg = source_folder_btn['bg']
     save_fg = source_folder_btn['fg']
@@ -4270,11 +4271,11 @@ def build_ui():
     film_type_S8_rb = Radiobutton(postprocessing_frame, text="Super 8", variable=film_type, command=set_film_type,
                                   width=11 if BigSize else 14, value='S8', font=("Arial", FontSize))
     film_type_S8_rb.grid(row=postprocessing_row, column=0, sticky=W)
-    setup_tooltip(film_type_S8_rb, "Handle as Super 8 film")
+    as_tooltips.add(film_type_S8_rb, "Handle as Super 8 film")
     film_type_R8_rb = Radiobutton(postprocessing_frame, text="Regular 8", variable=film_type, command=set_film_type,
                                   width=11 if BigSize else 14, value='R8', font=("Arial", FontSize))
     film_type_R8_rb.grid(row=postprocessing_row, column=1, sticky=W)
-    setup_tooltip(film_type_R8_rb, "Handle as 8mm (Regular 8) film")
+    as_tooltips.add(film_type_R8_rb, "Handle as 8mm (Regular 8) film")
     film_type.set(project_config["FilmType"])
     postprocessing_row += 1
 
@@ -4286,7 +4287,7 @@ def build_ui():
         command=encode_all_frames_selection, width=14, font=("Arial", FontSize))
     encode_all_frames_checkbox.grid(row=postprocessing_row, column=0,
                                            columnspan=3, sticky=W)
-    setup_tooltip(encode_all_frames_checkbox, "If selected, all frames in source folder will be encoded")
+    as_tooltips.add(encode_all_frames_checkbox, "If selected, all frames in source folder will be encoded")
     postprocessing_row += 1
 
     # Entry to enter start/end frames
@@ -4300,7 +4301,7 @@ def build_ui():
     frame_from_entry.config(state=NORMAL)
     frame_from_entry.bind("<Double - Button - 1>", update_frame_from)
     frame_from_entry.bind('<<Paste>>', lambda event, entry=frame_from_entry: on_paste_all_entries(event, entry))
-    setup_tooltip(frame_from_entry, "First frame to be processed, if not encoding the entire set")
+    as_tooltips.add(frame_from_entry, "First frame to be processed, if not encoding the entire set")
     frame_to_str = tk.StringVar(value=str(from_frame))
     frames_separator_label = tk.Label(postprocessing_frame, text='to', width=2, font=("Arial", FontSize))
     frames_separator_label.grid(row=postprocessing_row, column=1)
@@ -4309,7 +4310,7 @@ def build_ui():
     frame_to_entry.config(state=NORMAL)
     frame_to_entry.bind("<Double - Button - 1>", update_frame_to)
     frame_to_entry.bind('<<Paste>>', lambda event, entry=frame_to_entry: on_paste_all_entries(event, entry))
-    setup_tooltip(frame_to_entry, "Last frame to be processed, if not encoding the entire set")
+    as_tooltips.add(frame_to_entry, "Last frame to be processed, if not encoding the entire set")
 
     postprocessing_row += 1
 
@@ -4322,7 +4323,7 @@ def build_ui():
     perform_rotation_checkbox.grid(row=postprocessing_row, column=0,
                                         columnspan=1, sticky=W)
     perform_rotation_checkbox.config(state=NORMAL)
-    setup_tooltip(perform_rotation_checkbox, "Rotate generated frames")
+    as_tooltips.add(perform_rotation_checkbox, "Rotate generated frames")
 
     # Spinbox to select rotation angle
     rotation_angle_str = tk.StringVar(value=str(0))
@@ -4334,7 +4335,7 @@ def build_ui():
         format="%.1f", increment=0.1, font=("Arial", FontSize))
     rotation_angle_spinbox.grid(row=postprocessing_row, column=1, sticky=W)
     rotation_angle_spinbox.bind("<FocusOut>", rotation_angle_spinbox_focus_out)
-    setup_tooltip(rotation_angle_spinbox, "Angle to use when rotating frames")
+    as_tooltips.add(rotation_angle_spinbox, "Angle to use when rotating frames")
     #rotation_angle_selection('down')
     rotation_angle_label = tk.Label(postprocessing_frame,
                                       text='°',
@@ -4351,11 +4352,11 @@ def build_ui():
         command=perform_stabilization_selection, font=("Arial", FontSize))
     perform_stabilization_checkbox.grid(row=postprocessing_row, column=0,
                                         columnspan=1, sticky=W)
-    setup_tooltip(perform_stabilization_checkbox, "Stabilize generated frames. Sprocket hole is used as common reference, it needs to be clearly visible")
+    as_tooltips.add(perform_stabilization_checkbox, "Stabilize generated frames. Sprocket hole is used as common reference, it needs to be clearly visible")
     # Label to display the match level of current frame to template
     stabilization_threshold_match_label = Label(postprocessing_frame, width=4, borderwidth=1, relief='sunken', font=("Arial", FontSize))
     stabilization_threshold_match_label.grid(row=postprocessing_row, column=0, sticky=E)
-    setup_tooltip(stabilization_threshold_match_label, "This value shows the dynamic quality of sprocket hole template matching. Green is good, orange acceptable, red is bad")
+    as_tooltips.add(stabilization_threshold_match_label, "This value shows the dynamic quality of sprocket hole template matching. Green is good, orange acceptable, red is bad")
 
     # Extended search checkbox (replace radio buttons for fast/precise stabilization)
     extended_stabilization = tk.BooleanVar(value=False)
@@ -4365,7 +4366,7 @@ def build_ui():
         command=extended_stabilization_selection, font=("Arial", FontSize))
     extended_stabilization_checkbox.grid(row=postprocessing_row, column=1, columnspan=1, sticky=W)
     #extended_stabilization_checkbox.forget()
-    setup_tooltip(extended_stabilization_checkbox, "Extend the area where AfterScan looks for sprocket holes. In some cases this might help")
+    as_tooltips.add(extended_stabilization_checkbox, "Extend the area where AfterScan looks for sprocket holes. In some cases this might help")
 
     # Custom film perforation template
     custom_stabilization_btn = Button(postprocessing_frame,
@@ -4376,7 +4377,7 @@ def build_ui():
                                       activeforeground='white', font=("Arial", FontSize))
     custom_stabilization_btn.config(relief=SUNKEN if template_list.get_active_type() == 'Custom' else RAISED)
     custom_stabilization_btn.grid(row=postprocessing_row, column=1, columnspan=2, padx=5, pady=5, sticky=E)
-    setup_tooltip(custom_stabilization_btn,
+    as_tooltips.add(custom_stabilization_btn,
                   "If you prefer to use a customized template for your project, instead of the automatic one selected by AfterScan, lick on this button to define it")
 
     postprocessing_row += 1
@@ -4388,27 +4389,27 @@ def build_ui():
         onvalue=True, offvalue=False, command=perform_cropping_selection,
         width=4, font=("Arial", FontSize))
     perform_cropping_checkbox.grid(row=postprocessing_row, column=0, sticky=W)
-    setup_tooltip(perform_cropping_checkbox, "Crop generated frames to the user-defined limits ('Define crop area' button)")
+    as_tooltips.add(perform_cropping_checkbox, "Crop generated frames to the user-defined limits ('Define crop area' button)")
     force_4_3_crop = tk.BooleanVar(value=False)
     force_4_3_crop_checkbox = tk.Checkbutton(
         postprocessing_frame, text='4:3', variable=force_4_3_crop,
         onvalue=True, offvalue=False, command=force_4_3_selection,
         width=4, font=("Arial", FontSize))
     force_4_3_crop_checkbox.grid(row=postprocessing_row, column=0, sticky=E)
-    setup_tooltip(force_4_3_crop_checkbox, "Enforce 4:3 aspect ratio when defining the cropping rectangle")
+    as_tooltips.add(force_4_3_crop_checkbox, "Enforce 4:3 aspect ratio when defining the cropping rectangle")
     force_16_9_crop = tk.BooleanVar(value=False)
     force_16_9_crop_checkbox = tk.Checkbutton(
         postprocessing_frame, text='16:9', variable=force_16_9_crop,
         onvalue=True, offvalue=False, command=force_16_9_selection,
         width=4, font=("Arial", FontSize))
     force_16_9_crop_checkbox.grid(row=postprocessing_row, column=1, sticky=W)
-    setup_tooltip(force_16_9_crop_checkbox, "Enforce 16:9 aspect ratio when defining the cropping rectangle")
+    as_tooltips.add(force_16_9_crop_checkbox, "Enforce 16:9 aspect ratio when defining the cropping rectangle")
     cropping_btn = Button(postprocessing_frame, text='Define crop area',
                           width=12, height=1, command=select_cropping_area,
                           activebackground='green', activeforeground='white',
                           wraplength=120, font=("Arial", FontSize))
     cropping_btn.grid(row=postprocessing_row, column=2, sticky=E)
-    setup_tooltip(cropping_btn, "Open popup window to define the cropping rectangle")
+    as_tooltips.add(cropping_btn, "Open popup window to define the cropping rectangle")
 
     postprocessing_row += 1
 
@@ -4419,7 +4420,7 @@ def build_ui():
         onvalue=True, offvalue=False, command=perform_denoise_selection,
         font=("Arial", FontSize))
     perform_denoise_checkbox.grid(row=postprocessing_row, column=0, sticky=W)
-    setup_tooltip(perform_denoise_checkbox, "Apply denoise algorithm (using OpenCV's 'fastNlMeansDenoisingColored') to the generated frames")
+    as_tooltips.add(perform_denoise_checkbox, "Apply denoise algorithm (using OpenCV's 'fastNlMeansDenoisingColored') to the generated frames")
 
     # Check box to perform sharpness
     perform_sharpness = tk.BooleanVar(value=False)
@@ -4428,7 +4429,7 @@ def build_ui():
         onvalue=True, offvalue=False, command=perform_sharpness_selection,
         font=("Arial", FontSize))
     perform_sharpness_checkbox.grid(row=postprocessing_row, column=1, sticky=W)
-    setup_tooltip(perform_sharpness_checkbox, "Apply sharpen algorithm (using OpenCV's 'filter2D') to the generated frames")
+    as_tooltips.add(perform_sharpness_checkbox, "Apply sharpen algorithm (using OpenCV's 'filter2D') to the generated frames")
 
     # Check box to do gamma correction
     perform_gamma_correction = tk.BooleanVar(value=False)
@@ -4437,14 +4438,14 @@ def build_ui():
         onvalue=True, offvalue=False, font=("Arial", FontSize))
     perform_gamma_correction_checkbox.grid(row=postprocessing_row, column=2, sticky=W)
     perform_gamma_correction_checkbox.config(state=NORMAL)
-    setup_tooltip(perform_gamma_correction_checkbox, "Apply gamma correction to the generated frames")
+    as_tooltips.add(perform_gamma_correction_checkbox, "Apply gamma correction to the generated frames")
 
     # Spinbox for gamma correction
     gamma_correction_str = tk.StringVar(value="2.2")
     gamma_correction_spinbox = tk.Spinbox(postprocessing_frame, width=3,
         textvariable=gamma_correction_str, from_=-4, to=4, format="%.1f", increment=0.1, font=("Arial", FontSize))
     gamma_correction_spinbox.grid(row=postprocessing_row, column=2, sticky=E)
-    setup_tooltip(gamma_correction_spinbox, "Gamma correction value (default is 2.2)")
+    as_tooltips.add(gamma_correction_spinbox, "Gamma correction value (default is 2.2)")
 
     postprocessing_row += 1
 
@@ -4459,15 +4460,15 @@ def build_ui():
     perform_fill_none_rb = Radiobutton(postprocessing_frame, text='No frame fill',
                                     variable=frame_fill_type, value='none', font=("Arial", FontSize))
     perform_fill_none_rb.grid(row=postprocessing_row, column=0, sticky=W)
-    setup_tooltip(perform_fill_none_rb, "Badly aligned frames will be left with the missing part of the image black after stabilization")
+    as_tooltips.add(perform_fill_none_rb, "Badly aligned frames will be left with the missing part of the image black after stabilization")
     perform_fill_fake_rb = Radiobutton(postprocessing_frame, text='Fake fill',
                                     variable=frame_fill_type, value='fake', font=("Arial", FontSize))
     perform_fill_fake_rb.grid(row=postprocessing_row, column=1, sticky=W)
-    setup_tooltip(perform_fill_fake_rb, "Badly aligned frames will have the missing part of the image completed with a fragment of the next/previous frame after stabilization")
+    as_tooltips.add(perform_fill_fake_rb, "Badly aligned frames will have the missing part of the image completed with a fragment of the next/previous frame after stabilization")
     perform_fill_dumb_rb = Radiobutton(postprocessing_frame, text='Dumb fill',
                                     variable=frame_fill_type, value='dumb', font=("Arial", FontSize))
     perform_fill_dumb_rb.grid(row=postprocessing_row, column=2, sticky=W)
-    setup_tooltip(perform_fill_dumb_rb, "Badly aligned frames will have the missing part of the image filled with the adjacent pixel row after stabilization")
+    as_tooltips.add(perform_fill_dumb_rb, "Badly aligned frames will have the missing part of the image filled with the adjacent pixel row after stabilization")
     frame_fill_type.set('fake')
 
     postprocessing_row += 1
@@ -4480,7 +4481,7 @@ def build_ui():
                                                          onvalue=True, offvalue=False,
                                                          width=40, font=("Arial", FontSize))
     stabilization_bounds_alert_checkbox.grid(row=postprocessing_row, column=0, columnspan=3, sticky=W)
-    setup_tooltip(stabilization_bounds_alert_checkbox, "Beep each time a badly aligned frame (requiring fill-in) is detected")
+    as_tooltips.add(stabilization_bounds_alert_checkbox, "Beep each time a badly aligned frame (requiring fill-in) is detected")
 
     postprocessing_row += 1
 
@@ -4502,7 +4503,7 @@ def build_ui():
     generate_video_checkbox.grid(row=video_row, column=0, sticky=W)
     generate_video_checkbox.config(state=NORMAL if ffmpeg_installed
                                    else DISABLED)
-    setup_tooltip(generate_video_checkbox, "Generate an MP4 video, once all frames have been processed")
+    as_tooltips.add(generate_video_checkbox, "Generate an MP4 video, once all frames have been processed")
 
     # Check box to skip frame regeneration
     skip_frame_regeneration = tk.BooleanVar(value=False)
@@ -4514,7 +4515,7 @@ def build_ui():
                                     columnspan=2, sticky=W)
     skip_frame_regeneration_cb.config(state=NORMAL if ffmpeg_installed
                                       else DISABLED)
-    setup_tooltip(skip_frame_regeneration_cb, "If frames have ben already generated in a previous run, and you want to only generate the vieo, check this one")
+    as_tooltips.add(skip_frame_regeneration_cb, "If frames have ben already generated in a previous run, and you want to only generate the vieo, check this one")
 
     video_row += 1
 
@@ -4524,14 +4525,14 @@ def build_ui():
     video_target_dir.grid(row=video_row, column=0, columnspan=2,
                              sticky=W)
     video_target_dir.bind('<<Paste>>', lambda event, entry=video_target_dir: on_paste_all_entries(event, entry))
-    setup_tooltip(video_target_dir, "Directory where the generated video will be stored")
+    as_tooltips.add(video_target_dir, "Directory where the generated video will be stored")
 
     video_target_folder_btn = Button(video_frame, text='Target', width=6,
                                height=1, command=set_video_target_folder,
                                activebackground='green',
                                activeforeground='white', wraplength=80, font=("Arial", FontSize))
     video_target_folder_btn.grid(row=video_row, column=2, columnspan=2, sticky=W)
-    setup_tooltip(video_target_folder_btn, "Selects directory where the generated video will be stored")
+    as_tooltips.add(video_target_folder_btn, "Selects directory where the generated video will be stored")
     video_row += 1
 
     # Video filename
@@ -4542,7 +4543,7 @@ def build_ui():
     video_filename_name.grid(row=video_row, column=1, columnspan=2,
                              sticky=W)
     video_filename_name.bind('<<Paste>>', lambda event, entry=video_filename_name: on_paste_all_entries(event, entry))
-    setup_tooltip(video_filename_name, "Filename of video to be created")
+    as_tooltips.add(video_filename_name, "Filename of video to be created")
 
     video_row += 1
 
@@ -4554,7 +4555,7 @@ def build_ui():
     video_title_name.grid(row=video_row, column=1, columnspan=2,
                              sticky=W)
     video_title_name.bind('<<Paste>>', lambda event, entry=video_title_name: on_paste_all_entries(event, entry))
-    setup_tooltip(video_title_name, "Video title. If entered, a simple title sequence will be generated at the start of the video, using a sequence randomly selected from the same video, running at half speed")
+    as_tooltips.add(video_title_name, "Video title. If entered, a simple title sequence will be generated at the start of the video, using a sequence randomly selected from the same video, running at half speed")
 
     video_row += 1
 
@@ -4592,7 +4593,7 @@ def build_ui():
     video_fps_dropdown.config(takefocus=1, font=("Arial", FontSize))
     video_fps_dropdown.pack(side=LEFT, anchor=E)
     video_fps_dropdown.config(state=DISABLED)
-    setup_tooltip(video_fps_dropdown, "Number of frames per second (FPS) of the video to be generated. Usually Super8 goes at 18 FPS, and Regular 8 at 16 FPS, although some cameras allowed to use other speeds (faster for smoother movement, slower for extended play time)")
+    as_tooltips.add(video_fps_dropdown, "Number of frames per second (FPS) of the video to be generated. Usually Super8 goes at 18 FPS, and Regular 8 at 16 FPS, although some cameras allowed to use other speeds (faster for smoother movement, slower for extended play time)")
 
     # Create FFmpeg preset options
     ffmpeg_preset_frame = Frame(video_frame)
@@ -4604,19 +4605,19 @@ def build_ui():
                                     variable=ffmpeg_preset, value='veryslow', font=("Arial", FontSize))
     ffmpeg_preset_rb1.pack(side=TOP, anchor=W)
     ffmpeg_preset_rb1.config(state=DISABLED)
-    setup_tooltip(ffmpeg_preset_rb1, "Best quality, but very slow encoding. Maps to the same ffmpeg option")
+    as_tooltips.add(ffmpeg_preset_rb1, "Best quality, but very slow encoding. Maps to the same ffmpeg option")
 
     ffmpeg_preset_rb2 = Radiobutton(ffmpeg_preset_frame, text="Medium",
                                     variable=ffmpeg_preset, value='medium', font=("Arial", FontSize))
     ffmpeg_preset_rb2.pack(side=TOP, anchor=W)
     ffmpeg_preset_rb2.config(state=DISABLED)
-    setup_tooltip(ffmpeg_preset_rb2, "Compromise between quality and encoding speed. Maps to the same ffmpeg option")
+    as_tooltips.add(ffmpeg_preset_rb2, "Compromise between quality and encoding speed. Maps to the same ffmpeg option")
     ffmpeg_preset_rb3 = Radiobutton(ffmpeg_preset_frame,
                                     text="Fast (low quality)",
                                     variable=ffmpeg_preset, value='veryfast', font=("Arial", FontSize))
     ffmpeg_preset_rb3.pack(side=TOP, anchor=W)
     ffmpeg_preset_rb3.config(state=DISABLED)
-    setup_tooltip(ffmpeg_preset_rb3, "Faster encoding speed, lower quality (but not so much IMHO). Maps to the same ffmpeg option")
+    as_tooltips.add(ffmpeg_preset_rb3, "Faster encoding speed, lower quality (but not so much IMHO). Maps to the same ffmpeg option")
     ffmpeg_preset.set('medium')
     video_row += 1
 
@@ -4639,7 +4640,7 @@ def build_ui():
     resolution_dropdown.config(takefocus=1, font=("Arial", FontSize))
     resolution_dropdown.pack(side=LEFT, anchor=E)
     resolution_dropdown.config(state=DISABLED)
-    setup_tooltip(resolution_dropdown, "Resolution to be used when generating the video")
+    as_tooltips.add(resolution_dropdown, "Resolution to be used when generating the video")
 
     video_row += 1
 
@@ -4652,7 +4653,7 @@ def build_ui():
     custom_ffmpeg_path.insert('end', FfmpegBinName)
     custom_ffmpeg_path.bind("<FocusOut>", custom_ffmpeg_path_focus_out)
     custom_ffmpeg_path.bind('<<Paste>>', lambda event, entry=custom_ffmpeg_path: on_paste_all_entries(event, entry))
-    setup_tooltip(custom_ffmpeg_path, "Path where the ffmpeg executable is installed in your system")
+    as_tooltips.add(custom_ffmpeg_path, "Path where the ffmpeg executable is installed in your system")
 
     video_row += 1
 
@@ -4680,7 +4681,7 @@ def build_ui():
         #stabilization_threshold_spinbox.grid(row=extra_row, column=2, sticky=W)
         stabilization_threshold_spinbox.forget()
         stabilization_threshold_spinbox.bind("<FocusOut>", stabilization_threshold_spinbox_focus_out)
-        setup_tooltip(stabilization_threshold_spinbox, "Threshold value to isolate the sprocket hole from the rest of the image while definint the custom template")
+        as_tooltips.add(stabilization_threshold_spinbox, "Threshold value to isolate the sprocket hole from the rest of the image while definint the custom template")
 
         extra_row += 1
 
@@ -4694,7 +4695,7 @@ def build_ui():
                                                      command=debug_template_popup,
                                                      width=33 if BigSize else 41, font=("Arial", FontSize))
             display_template_popup_checkbox.grid(row=extra_row, column=0, columnspan=2, sticky=W)
-            setup_tooltip(display_template_popup_checkbox, "Display popup window with dynamic debug information.Useful for developers only")
+            as_tooltips.add(display_template_popup_checkbox, "Display popup window with dynamic debug information.Useful for developers only")
 
 
     # Define job list area ***************************************************
@@ -4737,28 +4738,28 @@ def build_ui():
                     command=job_list_add_current, activebackground='green',
                     activeforeground='white', wraplength=100, font=("Arial", FontSize))
     add_job_btn.pack(side=TOP, padx=2, pady=2)
-    setup_tooltip(add_job_btn, "Add to job list a new job using the current settings defined on the right area of the AfterScan window")
+    as_tooltips.add(add_job_btn, "Add to job list a new job using the current settings defined on the right area of the AfterScan window")
 
     # Delete job button
     delete_job_btn = Button(job_list_btn_frame, text="Delete job", width=12, height=1,
                     command=job_list_delete_selected, activebackground='green',
                     activeforeground='white', wraplength=100, font=("Arial", FontSize))
     delete_job_btn.pack(side=TOP, padx=2, pady=2)
-    setup_tooltip(delete_job_btn, "Delete currently selected job from list")
+    as_tooltips.add(delete_job_btn, "Delete currently selected job from list")
 
     # Rerun job button
     rerun_job_btn = Button(job_list_btn_frame, text="Rerun job", width=12, height=1,
                     command=job_list_rerun_selected, activebackground='green',
                     activeforeground='white', wraplength=100, font=("Arial", FontSize))
     rerun_job_btn.pack(side=TOP, padx=2, pady=2)
-    setup_tooltip(rerun_job_btn, "Toggle 'run' state of currently selected job in list")
+    as_tooltips.add(rerun_job_btn, "Toggle 'run' state of currently selected job in list")
 
     # Start processing job button
     start_batch_btn = Button(job_list_btn_frame, text="Start batch", width=12, height=1,
                     command=start_processing_job_list, activebackground='green',
                     activeforeground='white', wraplength=100, font=("Arial", FontSize))
     start_batch_btn.pack(side=TOP, padx=2, pady=2)
-    setup_tooltip(start_batch_btn, "Start processing jobs in list")
+    as_tooltips.add(start_batch_btn, "Start processing jobs in list")
 
     # Suspend on end checkbox
     # suspend_on_joblist_end = tk.BooleanVar(value=False)
@@ -4774,15 +4775,15 @@ def build_ui():
     suspend_on_batch_completion_rb = Radiobutton(job_list_btn_frame, text="Job completion",
                                   variable=suspend_on_completion, value='job_completion', font=("Arial", FontSize))
     suspend_on_batch_completion_rb.pack(side=TOP, anchor=W, padx=2, pady=2)
-    setup_tooltip(suspend_on_batch_completion_rb, "Suspend computer when all jobs in list have been processed")
+    as_tooltips.add(suspend_on_batch_completion_rb, "Suspend computer when all jobs in list have been processed")
     suspend_on_job_completion_rb = Radiobutton(job_list_btn_frame, text="Batch completion",
                                   variable=suspend_on_completion, value='batch_completion', font=("Arial", FontSize))
     suspend_on_job_completion_rb.pack(side=TOP, anchor=W, padx=2, pady=2)
-    setup_tooltip(suspend_on_batch_completion_rb, "Suspend computer when current job being processed is complete")
+    as_tooltips.add(suspend_on_batch_completion_rb, "Suspend computer when current job being processed is complete")
     no_suspend_rb = Radiobutton(job_list_btn_frame, text="No suspend",
                                   variable=suspend_on_completion, value='no_suspend', font=("Arial", FontSize))
     no_suspend_rb.pack(side=TOP, anchor=W, padx=2, pady=2)
-    setup_tooltip(suspend_on_batch_completion_rb, "Do not suspend when done")
+    as_tooltips.add(suspend_on_batch_completion_rb, "Do not suspend when done")
 
     suspend_on_completion.set("no_suspend")
 
@@ -4900,7 +4901,7 @@ def main(argv):
     afterscan_init()
 
     if go_disable_tooptips:
-        disable_tooltips()
+        as_tooltips.disable()
 
     decode_general_config()
 
