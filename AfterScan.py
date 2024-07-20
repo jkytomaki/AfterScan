@@ -16,13 +16,13 @@ More info in README.md file
 """
 
 __author__ = 'Juan Remirez de Esparza'
-__copyright__ = "Copyright 2022, Juan Remirez de Esparza"
+__copyright__ = "Copyright 2024, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
-__version__ = "1.11.3"
+__version__ = "1.11.4"
 __data_version__ = "1.0"
-__date__ = "2024-02-25"
-__version_highlight__ = "Migrate to Class Tooltips"
+__date__ = "2024-07-20"
+__version_highlight__ = "Fix bugs related to aux folder"
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
 __status__ = "Development"
@@ -93,16 +93,16 @@ project_config_filename = ""
 project_config_from_file = True
 project_name = "No Project"
 job_list_filename = os.path.join(script_dir, "AfterScan_job_list.json")
-aux_dir = os.path.join(script_dir, "aux")
-if not os.path.exists(aux_dir):
-    os.mkdir(aux_dir)
+temp_dir = os.path.join(script_dir, "temp")
+if not os.path.exists(temp_dir):
+    os.mkdir(temp_dir)
 template_list = None
 hole_template_filename_r8 = os.path.join(script_dir, "Pattern.R8.jpg")
 hole_template_filename_s8 = os.path.join(script_dir, "Pattern.S8.jpg")
 hole_template_filename_custom = os.path.join(script_dir, "Pattern.custom.jpg")
 hole_template_filename_corner = os.path.join(script_dir, "Pattern_Corner_TR.jpg")
-hole_template_filename_bw = os.path.join(aux_dir, "Pattern_BW.jpg")
-hole_template_filename_wb = os.path.join(aux_dir, "Pattern_WB.jpg")
+hole_template_filename_bw = os.path.join(script_dir, "Pattern_BW.jpg")
+hole_template_filename_wb = os.path.join(script_dir, "Pattern_WB.jpg")
 hole_template_filename = hole_template_filename_s8
 files_to_delete = []
 
@@ -740,6 +740,7 @@ def decode_project_config():
     global extended_stabilization
     global Force43, Force169
     global perform_denoise, perform_sharpness, perform_gamma_correction, gamma_correction_str
+    global temp_dir
 
     if 'SourceDir' in project_config:
         SourceDir = project_config["SourceDir"]
@@ -827,7 +828,7 @@ def decode_project_config():
         else:
             expected_hole_template_pos_custom = (0, 0)
         template_filename = f"Pattern.custom.{template_name}.jpg"
-        full_path_template_filename = os.path.join(aux_dir, template_filename)
+        full_path_template_filename = os.path.join(temp_dir, template_filename)
         project_custom_template_filename = project_config["CustomTemplateFilename"]
         if project_custom_template_filename != full_path_template_filename:
             tk.messagebox.showwarning(
@@ -1030,7 +1031,7 @@ def job_list_add_current():
         job_list[entry_name] = {'project': project_config.copy(), 'done': False, 'attempted': False}
         # If a custom pattern is used, copy it with the name of the job, and change it in the joblist/project item
         if template_list.get_active_type() == 'custom' and os.path.isfile(template_list.get_active_filename()):
-            CustomTemplateDir = os.path.dirname(template_list.get_active_filename())    # should be aux_dir, but better be safe
+            CustomTemplateDir = os.path.dirname(template_list.get_active_filename())    # should be temp_dir, but better be safe
             # Maybe we should check here if a video filename has been defined
             TargetTemplateFile = os.path.join(CustomTemplateDir, os.path.splitext(job_list[entry_name]['project']['VideoFilename'])[0]+'.jpg' )
             if template_list.get_active_filename() != TargetTemplateFile:
@@ -1518,8 +1519,8 @@ def widget_status_update(widget_state=0, button_action=0):
         perform_fill_fake_rb.config(state=widget_state if not is_demo else NORMAL)
         perform_fill_dumb_rb.config(state=widget_state if not is_demo else NORMAL)
         extended_stabilization_checkbox.config(state=widget_state if perform_stabilization.get() else DISABLED)
+        custom_stabilization_btn.config(state=widget_state)
         if ExpertMode:
-            custom_stabilization_btn.config(state=widget_state)
             stabilization_threshold_spinbox.config(state=widget_state)
         if is_demo:
             perform_cropping_checkbox.config(state=NORMAL)
@@ -1570,8 +1571,7 @@ def widget_status_update(widget_state=0, button_action=0):
         perform_sharpness_checkbox.config(state=DISABLED)
         perform_gamma_correction_checkbox.config(state=DISABLED)
         gamma_correction_spinbox.config(state=DISABLED)
-    if ExpertMode:
-        custom_stabilization_btn.config(relief=SUNKEN if template_list.get_active_type() == 'custom' else RAISED)
+    custom_stabilization_btn.config(relief=SUNKEN if template_list.get_active_type() == 'custom' else RAISED)
 
 
 def update_frame_from(event):
@@ -2409,92 +2409,94 @@ def select_custom_template():
     global template_list, film_type
     global RectangleWindowTitle
     global area_select_image_factor
+    global temp_dir
 
-    if not ExpertMode:
-        return
-
-    # First, define custom template name and filename in case it needs to be deleted
-    # Template Name = Last folder in the path, plus Frame From,  Frame to it not encoding all
-    if encode_all_frames.get():
-        template_name = f"{os.path.split(SourceDir)[-1]}-all"
+    if 'CustomTemplateDefined' in project_config and project_config["CustomTemplateDefined"]:     # if custom template set, disable it
+        set_film_type()
+        project_config["CustomTemplateDefined"] = False
     else:
-        template_name = f"{os.path.split(SourceDir)[-1]}-{frame_from_str.get()}-{frame_to_str.get()}"
-    # Set filename
-    template_filename = f"Pattern.custom.{template_name}.jpg"
-    full_path_template_filename = os.path.join(aux_dir, template_filename)
-
-    if template_list.get_active_type() == 'custom':
-        if os.path.isfile(template_list.get_active_filename()):
-            os.remove(template_list.get_active_filename())
-        if not set_film_type():
-            return
-    else:
-        if len(SourceDirFileList) <= 0:
-            tk.messagebox.showwarning(
-                "No frame set loaded",
-                "A set of frames is required before a custom template might be defined."
-                "Please select a source folder before proceeding.")
-            return
-        # Disable all buttons in main window
-        widget_status_update(DISABLED, 0)
-        win.update()
-
-        RectangleWindowTitle = CustomTemplateTitle
-
-        if select_rectangle_area(is_cropping=False) and CurrentFrame < len(SourceDirFileList):
-            # Extract template from image
-            file = SourceDirFileList[CurrentFrame]
-            file3 = os.path.join(SourceDir, FrameHdrInputFilenamePattern % (CurrentFrame + 1, 2, file_type))
-            if os.path.isfile(file3):  # If hdr frames exist, add them
-                file = file3
-            img = cv2.imread(file, cv2.IMREAD_UNCHANGED)
-            img = crop_image(img, RectangleTopLeft, RectangleBottomRight)
-            img_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-            # img_bw = cv2.threshold(img_gray, float(StabilizationThreshold), 255, cv2.THRESH_TRUNC | cv2.THRESH_TRIANGLE)[1]
-            img_bw = cv2.threshold(img_gray, float(StabilizationThreshold), 255, cv2.THRESH_BINARY)[1]
-            # img_edges = cv2.Canny(image=img_bw, threshold1=100, threshold2=20)  # Canny Edge Detection
-            img_final = img_bw
-
-            # Write template to disk
-            project_config["CustomTemplateFilename"] = full_path_template_filename
-            cv2.imwrite(full_path_template_filename, img_final)
-
-            # Add template to list
-            template_list.add(template_name, full_path_template_filename, 'custom', RectangleTopLeft)   # size and template automatically refreshed upon addition
-            logging.debug(f"Template top left-size: {template_list.get_active_position()} - {template_list.get_active_size()}")
-            widget_status_update(NORMAL, 0)
-            custom_stabilization_btn.config(relief=SUNKEN)
-
-            project_config['CustomTemplateExpectedPos'] = template_list.get_active_position()
-            project_config['CustomTemplateName'] = template_list.get_active_name()
-
-            # Display saved template for information
-            CustomTemplateWindowTitle = "Captured custom template. Press any key to continue."
-            win_x = int(img_final.shape[1] * area_select_image_factor)
-            win_y = int(img_final.shape[0] * area_select_image_factor)
-            cv2.namedWindow(CustomTemplateWindowTitle, flags=cv2.WINDOW_GUI_NORMAL)
-            cv2.imshow(CustomTemplateWindowTitle, img_final)
-
-            # Cannot force window to be wider than required since in Windows image is expanded as well
-            cv2.resizeWindow(CustomTemplateWindowTitle, round(win_x / 2), round(win_y / 2))
-            cv2.moveWindow(CustomTemplateWindowTitle, win.winfo_x() + 100, win.winfo_y() + 30)
-            window_visible = True
-            while cv2.waitKeyEx(100) == -1:
-                window_visible = cv2.getWindowProperty(CustomTemplateWindowTitle, cv2.WND_PROP_VISIBLE)
-                if window_visible <= 0:
-                    break
-            if window_visible > 0:
-                cv2.destroyAllWindows()
+        # First, define custom template name and filename in case it needs to be deleted
+        # Template Name = Last folder in the path, plus Frame From,  Frame to it not encoding all
+        if encode_all_frames.get():
+            template_name = f"{os.path.split(SourceDir)[-1]}-all"
         else:
-            if os.path.isfile(full_path_template_filename):  # Delete Template if it exist
-                os.remove(full_path_template_filename)
-                if not set_film_type():
-                    return
-            custom_stabilization_btn.config(relief=RAISED)
-            widget_status_update(DISABLED, 0)
+            template_name = f"{os.path.split(SourceDir)[-1]}-{frame_from_str.get()}-{frame_to_str.get()}"
+        # Set filename
+        template_filename = f"Pattern.custom.{template_name}.jpg"
+        full_path_template_filename = os.path.join(temp_dir, template_filename)
 
-    project_config["CustomTemplateDefined"] = True if template_list.get_active_type() == 'custom' else False
-    debug_template_refresh_template()
+        if template_list.get_active_type() == 'custom':
+            if os.path.isfile(template_list.get_active_filename()):
+                os.remove(template_list.get_active_filename())
+            if not set_film_type():
+                return
+        else:
+            if len(SourceDirFileList) <= 0:
+                tk.messagebox.showwarning(
+                    "No frame set loaded",
+                    "A set of frames is required before a custom template might be defined."
+                    "Please select a source folder before proceeding.")
+                return
+            # Disable all buttons in main window
+            widget_status_update(DISABLED, 0)
+            win.update()
+
+            RectangleWindowTitle = CustomTemplateTitle
+
+            if select_rectangle_area(is_cropping=False) and CurrentFrame < len(SourceDirFileList):
+                # Extract template from image
+                file = SourceDirFileList[CurrentFrame]
+                file3 = os.path.join(SourceDir, FrameHdrInputFilenamePattern % (CurrentFrame + 1, 2, file_type))
+                if os.path.isfile(file3):  # If hdr frames exist, add them
+                    file = file3
+                img = cv2.imread(file, cv2.IMREAD_UNCHANGED)
+                img = crop_image(img, RectangleTopLeft, RectangleBottomRight)
+                img_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                # img_bw = cv2.threshold(img_gray, float(StabilizationThreshold), 255, cv2.THRESH_TRUNC | cv2.THRESH_TRIANGLE)[1]
+                img_bw = cv2.threshold(img_gray, float(StabilizationThreshold), 255, cv2.THRESH_BINARY)[1]
+                # img_edges = cv2.Canny(image=img_bw, threshold1=100, threshold2=20)  # Canny Edge Detection
+                img_final = img_bw
+
+                # Write template to disk
+                project_config["CustomTemplateFilename"] = full_path_template_filename
+                cv2.imwrite(full_path_template_filename, img_final)
+
+                # Add template to list
+                template_list.add(template_name, full_path_template_filename, 'custom', RectangleTopLeft)   # size and template automatically refreshed upon addition
+                logging.debug(f"Template top left-size: {template_list.get_active_position()} - {template_list.get_active_size()}")
+                widget_status_update(NORMAL, 0)
+                custom_stabilization_btn.config(relief=SUNKEN)
+
+                project_config['CustomTemplateExpectedPos'] = template_list.get_active_position()
+                project_config['CustomTemplateName'] = template_list.get_active_name()
+
+                # Display saved template for information
+                CustomTemplateWindowTitle = "Captured custom template. Press any key to continue."
+                win_x = int(img_final.shape[1] * area_select_image_factor)
+                win_y = int(img_final.shape[0] * area_select_image_factor)
+                cv2.namedWindow(CustomTemplateWindowTitle, flags=cv2.WINDOW_GUI_NORMAL)
+                cv2.imshow(CustomTemplateWindowTitle, img_final)
+
+                # Cannot force window to be wider than required since in Windows image is expanded as well
+                cv2.resizeWindow(CustomTemplateWindowTitle, round(win_x / 2), round(win_y / 2))
+                cv2.moveWindow(CustomTemplateWindowTitle, win.winfo_x() + 100, win.winfo_y() + 30)
+                window_visible = True
+                while cv2.waitKeyEx(100) == -1:
+                    window_visible = cv2.getWindowProperty(CustomTemplateWindowTitle, cv2.WND_PROP_VISIBLE)
+                    if window_visible <= 0:
+                        break
+                if window_visible > 0:
+                    cv2.destroyAllWindows()
+            else:
+                if os.path.isfile(full_path_template_filename):  # Delete Template if it exist
+                    os.remove(full_path_template_filename)
+                    if not set_film_type():
+                        return
+                custom_stabilization_btn.config(relief=RAISED)
+                widget_status_update(DISABLED, 0)
+
+        project_config["CustomTemplateDefined"] = True if template_list.get_active_type() == 'custom' else False
+        debug_template_refresh_template()
 
     # Enable all buttons in main window
     widget_status_update(NORMAL, 0)
@@ -3289,7 +3291,7 @@ def start_convert():
                 if name == "":  # Assign default if no filename
                     name = "AfterScan-"
                 CsvFilename = datetime.now().strftime("%Y_%m_%d-%H-%M-%S_") + name + '.csv'
-                CsvPathName = aux_dir
+                CsvPathName = temp_dir
                 if CsvPathName == "":
                     CsvPathName = os.getcwd()
                 CsvPathName = os.path.join(CsvPathName, CsvFilename)
@@ -4011,7 +4013,7 @@ def init_display():
 def init_logging():
     global LogLevel
     # Initialize logging
-    log_path = aux_dir
+    log_path = temp_dir
     if log_path == "":
         log_path = os.getcwd()
     log_file_fullpath = log_path + "/AfterScan." + time.strftime("%Y%m%d") + ".log"
