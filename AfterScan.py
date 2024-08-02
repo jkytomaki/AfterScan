@@ -19,10 +19,10 @@ __author__ = 'Juan Remirez de Esparza'
 __copyright__ = "Copyright 2024, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
-__version__ = "1.11.5"
+__version__ = "1.11.6"
 __data_version__ = "1.0"
-__date__ = "2024-07-22"
-__version_highlight__ = "Fix bugs related to aux folder"
+__date__ = "2024-08-02"
+__version_highlight__ = "Fix issues with low contrast films"
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
 __status__ = "Development"
@@ -471,7 +471,7 @@ def set_project_defaults():
     global perform_stabilization, skip_frame_regeneration, ffmpeg_preset
     global video_filename_str, video_title_str
     global frame_from_str, frame_to_str
-    global frame_fill_type, extended_stabilization
+    global frame_fill_type, extended_stabilization, low_contrast_custom_template
     global perform_denoise, perform_sharpness
 
     project_config["PerformCropping"] = False
@@ -496,6 +496,8 @@ def set_project_defaults():
     frame_to_str.set(project_config["FrameTo"])
     project_config["PerformStabilization"] = False
     perform_stabilization.set(project_config["PerformStabilization"])
+    project_config["LowContrastCustomTemplate"] = False
+    low_contrast_custom_template.set(project_config["LowContrastCustomTemplate"])
     project_config["ExtendedStabilization"] = False
     extended_stabilization.set(project_config["ExtendedStabilization"])
     project_config["skip_frame_regeneration"] = False
@@ -664,6 +666,7 @@ def save_project_config():
     project_config["GammaCorrectionValue"] = float(gamma_correction_str.get())
     project_config["FrameFillType"] = frame_fill_type.get()
     project_config["ExtendedStabilization"] = extended_stabilization.get()
+    project_config["LowContrastCustomTemplate"] = low_contrast_custom_template.get()
     project_config["VideoTitle"] = video_title_str.get()
     project_config["VideoFilename"] = video_filename_str.get()
     project_config["FrameFrom"] = frame_from_str.get()
@@ -731,7 +734,7 @@ def decode_project_config():
     global generate_video, video_filename_name
     global CropTopLeft, CropBottomRight, perform_cropping
     global StabilizeAreaDefined, film_type
-    global StabilizationThreshold
+    global StabilizationThreshold, low_contrast_custom_template
     global RotationAngle
     global frame_from_str, frame_to_str
     global project_name
@@ -811,6 +814,9 @@ def decode_project_config():
             stabilization_threshold_str.set(StabilizationThreshold)
     else:
         StabilizationThreshold = 220
+
+    if 'LowContrastCustomTemplate' in project_config:
+        low_contrast_custom_template.set(project_config["LowContrastCustomTemplate"])
 
     if 'ExtendedStabilization' in project_config:
         extended_stabilization.set(project_config["ExtendedStabilization"])
@@ -1650,6 +1656,13 @@ def perform_stabilization_selection():
     widget_status_update(NORMAL)
 
 
+def low_contrast_custom_template_selection():
+    global low_contrast_custom_template
+
+    project_config["LowContrastCustomTemplate"] = low_contrast_custom_template.get()
+    widget_status_update(NORMAL)
+
+
 def extended_stabilization_selection():
     global extended_stabilization, hole_search_area_adjustment_pending
     project_config["ExtendedStabilization"] = extended_stabilization.get()
@@ -2410,6 +2423,8 @@ def select_custom_template():
     global RectangleWindowTitle
     global area_select_image_factor
     global temp_dir
+    global low_contrast_custom_template, StabilizationThreshold
+
 
     # First, define custom template name and filename in case it needs to be deleted
     # Template Name = Last folder in the path, plus Frame From,  Frame to it not encoding all
@@ -2448,10 +2463,15 @@ def select_custom_template():
             img = cv2.imread(file, cv2.IMREAD_UNCHANGED)
             img = crop_image(img, RectangleTopLeft, RectangleBottomRight)
             img_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-            # img_bw = cv2.threshold(img_gray, float(StabilizationThreshold), 255, cv2.THRESH_TRUNC | cv2.THRESH_TRIANGLE)[1]
-            img_bw = cv2.threshold(img_gray, float(StabilizationThreshold), 255, cv2.THRESH_BINARY)[1]
-            # img_edges = cv2.Canny(image=img_bw, threshold1=100, threshold2=20)  # Canny Edge Detection
-            img_final = img_bw
+
+            # Apply Otsu's thresholding if requested (for low contrast frames)
+            if low_contrast_custom_template.get():
+                img_final = cv2.threshold(img_gray, 100, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
+            else:
+                # img_bw = cv2.threshold(img_gray, float(StabilizationThreshold), 255, cv2.THRESH_TRUNC | cv2.THRESH_TRIANGLE)[1]
+                img_bw = cv2.threshold(img_gray, float(StabilizationThreshold), 255, cv2.THRESH_BINARY)[1]
+                # img_edges = cv2.Canny(image=img_bw, threshold1=100, threshold2=20)  # Canny Edge Detection
+                img_final = img_bw
 
             # Write template to disk
             project_config["CustomTemplateFilename"] = full_path_template_filename
@@ -2552,8 +2572,11 @@ def match_template(frame_idx, template, img):
     # Apply best threshold on full left stripe
     img_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     #img_final = cv2.threshold(img_gray, best_thres, 255, cv2.THRESH_BINARY)[1]  #THRESH_TRUNC, THRESH_BINARY
-    # Apply Otsu's thresholding
-    best_thres, img_final = cv2.threshold(img_gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    if low_contrast_custom_template.get():
+        # Apply Otsu's thresholding
+        best_thres, img_final = cv2.threshold(img_gray, 220, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    else:
+        best_thres, img_final = cv2.threshold(img_gray, 220, 255, cv2.THRESH_BINARY)
 
     #img_edges = cv2.Canny(image=img_bw, threshold1=100, threshold2=1)  # Canny Edge Detection
     aux = cv2.matchTemplate(img_final, template, cv2.TM_CCOEFF_NORMED)
@@ -4147,6 +4170,7 @@ def build_ui():
     global display_template_popup
     global BigSize, FontSize
     global template_list
+    global low_contrast_custom_template
 
     # Create a frame to add a border to the preview
     left_area_frame = Frame(win)
@@ -4342,6 +4366,30 @@ def build_ui():
     rotation_angle_label.config(state=NORMAL)
     postprocessing_row += 1
 
+    ### Stabilization controls
+    # Custom film perforation template
+    custom_stabilization_btn = Button(postprocessing_frame,
+                                      text='Define custom template',
+                                      width=18, height=1,
+                                      command=select_custom_template,
+                                      activebackground='green',
+                                      activeforeground='white', font=("Arial", FontSize))
+    custom_stabilization_btn.config(relief=SUNKEN if template_list.get_active_type() == 'Custom' else RAISED)
+    custom_stabilization_btn.grid(row=postprocessing_row, column=0, columnspan=2, padx=5, pady=5, sticky=W)
+    as_tooltips.add(custom_stabilization_btn,
+                  "If you prefer to use a customized template for your project, instead of the automatic one selected by AfterScan, lick on this button to define it")
+
+    low_contrast_custom_template = tk.BooleanVar(value=False)
+    low_contrast_custom_template_checkbox = tk.Checkbutton(
+        postprocessing_frame, text='Low contrast helper',
+        variable=low_contrast_custom_template, onvalue=True, offvalue=False, width=16,
+        command=low_contrast_custom_template_selection, font=("Arial", FontSize))
+    low_contrast_custom_template_checkbox.grid(row=postprocessing_row, column=1,
+                                        columnspan=2, sticky=E)
+    as_tooltips.add(low_contrast_custom_template_checkbox, "Activate when defining a custom template using a low contrast frame")
+
+    postprocessing_row += 1
+
     # Check box to do stabilization or not
     perform_stabilization = tk.BooleanVar(value=False)
     perform_stabilization_checkbox = tk.Checkbutton(
@@ -4366,48 +4414,40 @@ def build_ui():
     #extended_stabilization_checkbox.forget()
     as_tooltips.add(extended_stabilization_checkbox, "Extend the area where AfterScan looks for sprocket holes. In some cases this might help")
 
-    # Custom film perforation template
-    custom_stabilization_btn = Button(postprocessing_frame,
-                                      text='Custom hole template',
-                                      width=16, height=1,
-                                      command=select_custom_template,
-                                      activebackground='green',
-                                      activeforeground='white', font=("Arial", FontSize))
-    custom_stabilization_btn.config(relief=SUNKEN if template_list.get_active_type() == 'Custom' else RAISED)
-    custom_stabilization_btn.grid(row=postprocessing_row, column=1, columnspan=2, padx=5, pady=5, sticky=E)
-    as_tooltips.add(custom_stabilization_btn,
-                  "If you prefer to use a customized template for your project, instead of the automatic one selected by AfterScan, lick on this button to define it")
-
     postprocessing_row += 1
 
+    ### Cropping controls
     # Check box to do cropping or not
+    cropping_btn = Button(postprocessing_frame, text='Define crop area',
+                          width=12, height=1, command=select_cropping_area,
+                          activebackground='green', activeforeground='white',
+                          wraplength=120, font=("Arial", FontSize))
+    cropping_btn.grid(row=postprocessing_row, column=0, sticky=E)
+    as_tooltips.add(cropping_btn, "Open popup window to define the cropping rectangle")
+
     perform_cropping = tk.BooleanVar(value=False)
     perform_cropping_checkbox = tk.Checkbutton(
         postprocessing_frame, text='Crop', variable=perform_cropping,
         onvalue=True, offvalue=False, command=perform_cropping_selection,
         width=4, font=("Arial", FontSize))
-    perform_cropping_checkbox.grid(row=postprocessing_row, column=0, sticky=W)
+    perform_cropping_checkbox.grid(row=postprocessing_row, column=1, sticky=W)
     as_tooltips.add(perform_cropping_checkbox, "Crop generated frames to the user-defined limits ('Define crop area' button)")
+
     force_4_3_crop = tk.BooleanVar(value=False)
     force_4_3_crop_checkbox = tk.Checkbutton(
         postprocessing_frame, text='4:3', variable=force_4_3_crop,
         onvalue=True, offvalue=False, command=force_4_3_selection,
         width=4, font=("Arial", FontSize))
-    force_4_3_crop_checkbox.grid(row=postprocessing_row, column=0, sticky=E)
+    force_4_3_crop_checkbox.grid(row=postprocessing_row, column=1, sticky=E)
     as_tooltips.add(force_4_3_crop_checkbox, "Enforce 4:3 aspect ratio when defining the cropping rectangle")
+
     force_16_9_crop = tk.BooleanVar(value=False)
     force_16_9_crop_checkbox = tk.Checkbutton(
         postprocessing_frame, text='16:9', variable=force_16_9_crop,
         onvalue=True, offvalue=False, command=force_16_9_selection,
         width=4, font=("Arial", FontSize))
-    force_16_9_crop_checkbox.grid(row=postprocessing_row, column=1, sticky=W)
+    force_16_9_crop_checkbox.grid(row=postprocessing_row, column=2, sticky=W)
     as_tooltips.add(force_16_9_crop_checkbox, "Enforce 16:9 aspect ratio when defining the cropping rectangle")
-    cropping_btn = Button(postprocessing_frame, text='Define crop area',
-                          width=12, height=1, command=select_cropping_area,
-                          activebackground='green', activeforeground='white',
-                          wraplength=120, font=("Arial", FontSize))
-    cropping_btn.grid(row=postprocessing_row, column=2, sticky=E)
-    as_tooltips.add(cropping_btn, "Open popup window to define the cropping rectangle")
 
     postprocessing_row += 1
 
