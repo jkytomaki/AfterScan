@@ -19,10 +19,10 @@ __author__ = 'Juan Remirez de Esparza'
 __copyright__ = "Copyright 2024, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
-__version__ = "1.11.6"
+__version__ = "1.11.7"
 __data_version__ = "1.0"
-__date__ = "2024-08-02"
-__version_highlight__ = "Fix issues with low contrast films"
+__date__ = "2024-08-05"
+__version_highlight__ = "Disable low contrast checkbox while running"
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
 __status__ = "Development"
@@ -1486,7 +1486,7 @@ def widget_status_update(widget_state=0, button_action=0):
     global perform_cropping_checkbox, perform_denoise_checkbox, perform_sharpness_checkbox
     global perform_gamma_correction_checkbox, gamma_correction_spinbox
     global force_4_3_crop_checkbox, force_16_9_crop_checkbox
-    global custom_stabilization_btn
+    global custom_stabilization_btn, low_contrast_custom_template_checkbox
     global generate_video_checkbox, skip_frame_regeneration_cb
     global video_target_dir, video_target_folder_btn
     global video_filename_label, video_title_label, video_title_name
@@ -1526,6 +1526,7 @@ def widget_status_update(widget_state=0, button_action=0):
         perform_fill_dumb_rb.config(state=widget_state if not is_demo else NORMAL)
         extended_stabilization_checkbox.config(state=widget_state if perform_stabilization.get() else DISABLED)
         custom_stabilization_btn.config(state=widget_state)
+        low_contrast_custom_template_checkbox.config(state=widget_state)
         if ExpertMode:
             stabilization_threshold_spinbox.config(state=widget_state)
         if is_demo:
@@ -4132,7 +4133,7 @@ def build_ui():
     global stabilization_threshold_match_label
     global perform_rotation, perform_rotation_checkbox, rotation_angle_label
     global rotation_angle_spinbox, rotation_angle_str
-    global custom_stabilization_btn, stabilization_threshold_label
+    global custom_stabilization_btn, stabilization_threshold_label, low_contrast_custom_template_checkbox
     global perform_cropping_checkbox, Crop_btn
     global perform_gamma_correction, gamma_correction_str
     global force_4_3_crop_checkbox, force_4_3_crop
