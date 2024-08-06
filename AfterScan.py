@@ -19,10 +19,10 @@ __author__ = 'Juan Remirez de Esparza'
 __copyright__ = "Copyright 2024, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
-__version__ = "1.11.7"
+__version__ = "1.11.8"
 __data_version__ = "1.0"
-__date__ = "2024-08-05"
-__version_highlight__ = "Disable low contrast checkbox while running"
+__date__ = "2024-08-06"
+__version_highlight__ = "Fix bug: Generating JPG files when taking PNG input"
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
 __status__ = "Development"
@@ -3038,7 +3038,7 @@ def get_source_dir_file_list():
     SourceDirHdrFileList = sorted(SourceDirHdrFileList_jpg + SourceDirHdrFileList_png)
     if len(SourceDirHdrFileList_png) != 0:
         file_type_out = 'png'   # If we have png files in the input, we default to png for the output
-    else:
+    elif len(SourceDirHdrFileList_jpg) != 0:
         file_type_out = 'jpg'
 
     SourceDirLegacyHdrFileList_jpg = list(glob(os.path.join(
@@ -3050,7 +3050,7 @@ def get_source_dir_file_list():
     SourceDirLegacyHdrFileList = sorted(SourceDirLegacyHdrFileList_jpg + SourceDirLegacyHdrFileList_png)
     if len(SourceDirLegacyHdrFileList_png) != 0:
         file_type_out = 'png'   # If we have png files in the input, we default to png for the output
-    else:
+    elif len(SourceDirLegacyHdrFileList_jpg) != 0:
         file_type_out = 'jpg'
 
     NumFiles = len(SourceDirFileList)
