@@ -19,10 +19,10 @@ __author__ = 'Juan Remirez de Esparza'
 __copyright__ = "Copyright 2024, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
-__version__ = "1.11.8"
+__version__ = "1.11.9"
 __data_version__ = "1.0"
-__date__ = "2024-08-06"
-__version_highlight__ = "Fix bug: Generating JPG files when taking PNG input"
+__date__ = "2024-11-25"
+__version_highlight__ = "Fix bug: Defining custom template with smaller resolution frames"
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
 __status__ = "Development"
@@ -170,7 +170,7 @@ TargetDirFileList = []
 film_type = 'S8'
 frame_fill_type = 'fake'
 # Dimensions of frames in collection currently loaded: x, y (as it is needed often)
-frame_width = 2048
+frame_width = 2028
 frame_height = 1520
 
 # Flow control vars
@@ -306,13 +306,15 @@ class Template:
         self.name = name
         self.filename = filename
         self.type = type
-        self.scale = int(frame_width/2028)
+        self.scale = frame_width/2028
+        print(f"Resize info: {self.scale}, {frame_width}")
         self.position = position
         self.scaled_position = (int(self.position[0] * self.scale),
                                 int(self.position[1] * self.scale))
         self.size = (0,0)
         if os.path.isfile(filename):
             self.template = cv2.imread(filename, cv2.IMREAD_GRAYSCALE)
+
             self.scaled_template = resize_image(self.template, self.scale)
             # Calculate the white on black proportion to help with detection
             self.white_pixel_count = cv2.countNonZero(self.scaled_template)
@@ -3181,6 +3183,7 @@ def set_hole_search_area(img):
     img_target = img_bw[:, :int(img_bw.shape[1]/4)]  # Search only in the left 25% of the image
     # Detect corner in image, to adjust search area width
     film_corner_template = template_list.get_template('aux','Corner')
+    print(f"matchTemplate params: {img_target.shape[0]}, {img_target.shape[1]}, {film_corner_template.shape[0]}, {film_corner_template.shape[1]}")
     result = cv2.matchTemplate(img_target, film_corner_template, cv2.TM_CCOEFF_NORMED)
     (minVal, maxVal, minLoc, maxLoc) = cv2.minMaxLoc(result)
     left_stripe_width = maxLoc[0] + template_list.get_active_size()[0]
