@@ -307,7 +307,6 @@ class Template:
         self.filename = filename
         self.type = type
         self.scale = frame_width/2028
-        print(f"Resize info: {self.scale}, {frame_width}")
         self.position = position
         self.scaled_position = (int(self.position[0] * self.scale),
                                 int(self.position[1] * self.scale))
@@ -3183,7 +3182,6 @@ def set_hole_search_area(img):
     img_target = img_bw[:, :int(img_bw.shape[1]/4)]  # Search only in the left 25% of the image
     # Detect corner in image, to adjust search area width
     film_corner_template = template_list.get_template('aux','Corner')
-    print(f"matchTemplate params: {img_target.shape[0]}, {img_target.shape[1]}, {film_corner_template.shape[0]}, {film_corner_template.shape[1]}")
     result = cv2.matchTemplate(img_target, film_corner_template, cv2.TM_CCOEFF_NORMED)
     (minVal, maxVal, minLoc, maxLoc) = cv2.minMaxLoc(result)
     left_stripe_width = maxLoc[0] + template_list.get_active_size()[0]
