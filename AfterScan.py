@@ -19,10 +19,10 @@ __author__ = 'Juan Remirez de Esparza'
 __copyright__ = "Copyright 2024, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
-__version__ = "1.11.9"
+__version__ = "1.11.10"
 __data_version__ = "1.0"
-__date__ = "2024-11-25"
-__version_highlight__ = "Fix bug: Defining custom template with smaller resolution frames"
+__date__ = "2024-11-26"
+__version_highlight__ = "Fix bug: When in error, match template returned 3 parameters instead of 4"
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
 __status__ = "Development"
@@ -2565,7 +2565,7 @@ def match_template(frame_idx, template, img):
     if (tw >= iw or th >= ih):
         logging.error("Template (%ix%i) bigger than search area (%ix%i)",
                       tw, th, iw, ih)
-        return (0, 0, 0)
+        return 0, (0, 0), 0, 0
 
     # convert img to grey, checking various thresholds
     # in order to calculate the white on black proportion correctly, we saved the number of white pixels in the
@@ -2827,7 +2827,7 @@ def stabilize_image(frame_idx, img, img_ref, img_ref_alt = None, id = -1):
             move_x = 0
             move_y = 0
     else:   # If match is not good, keep the frame where it is, will probably look better
-        logging.warning(f"Template match not good ({match_level}, ignoring it.")
+        logging.warning(f"Template match not good ({match_level}""), ignoring it.")
         move_x = 0
         move_y = 0
     log_line = f"T{id} - " if id != -1 else ""
