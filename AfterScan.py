@@ -19,10 +19,10 @@ __author__ = 'Juan Remirez de Esparza'
 __copyright__ = "Copyright 2024, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
-__version__ = "1.11.10"
+__version__ = "1.11.11"
 __data_version__ = "1.0"
-__date__ = "2024-11-26"
-__version_highlight__ = "Fix bug: When in error, match template returned 3 parameters instead of 4"
+__date__ = "2025-02-02"
+__version_highlight__ = "Fix bug: Window size in Mac OS too small"
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
 __status__ = "Development"
@@ -4083,20 +4083,14 @@ def afterscan_init():
         app_height = PreviewHeight + 330
 
     win.title('AfterScan ' + __version__)  # setting title of the window
-    win.geometry('1080x700')  # setting the size of the window
-    win.geometry('+50+50')  # setting the position of the window
     if 'WindowPos' in general_config:
          win.geometry(f"+{general_config['WindowPos'].split('+', 1)[1]}")
-    # Prevent window resize
-    win.minsize(app_width, app_height)
-    win.maxsize(app_width, app_height)
 
     win.update_idletasks()
 
     # Set default font size
     # Change the default Font that will affect in all the widgets
     win.option_add("*font", "TkDefaultFont 10")
-    win.resizable(False, False)
 
     # Init ToolTips
     as_tooltips = Tooltips(FontSize)
@@ -5012,6 +5006,8 @@ def main(argv):
         frame_slider.set(CurrentFrame)
 
     init_display()
+
+    win.resizable(False, False) # Lock window size once all widgets have been added (make sure all fits)
 
     # If BatchAutostart, enable suspend on completion and start batch
     if BatchAutostart:
