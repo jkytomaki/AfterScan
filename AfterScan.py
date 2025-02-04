@@ -19,10 +19,10 @@ __author__ = 'Juan Remirez de Esparza'
 __copyright__ = "Copyright 2024, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
-__version__ = "1.11.11"
+__version__ = "1.11.12"
 __data_version__ = "1.0"
-__date__ = "2025-02-02"
-__version_highlight__ = "Fix bug: Window size in Mac OS too small"
+__date__ = "2025-02-04"
+__version_highlight__ = "Fix custom template handling, standardize filenames"
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
 __status__ = "Development"
@@ -822,7 +822,7 @@ def decode_project_config():
     if 'ExtendedStabilization' in project_config:
         extended_stabilization.set(project_config["ExtendedStabilization"])
 
-    if 'CustomTemplateDefined' in project_config and project_config["CustomTemplateDefined"] and 'CustomTemplateFilename' in project_config:
+    if 'CustomTemplateDefined' in project_config and project_config["CustomTemplateDefined"]:
         if 'CustomTemplateName' in project_config:  # Load name if it exists, otherwise assign default
             template_name = project_config["CustomTemplateName"]
         else:
@@ -834,10 +834,12 @@ def decode_project_config():
             expected_hole_template_pos_custom = project_config["CustomTemplateExpectedPos"]
         else:
             expected_hole_template_pos_custom = (0, 0)
-        template_filename = f"Pattern.custom.{template_name}.jpg"
-        full_path_template_filename = os.path.join(temp_dir, template_filename)
-        project_custom_template_filename = project_config["CustomTemplateFilename"]
-        if project_custom_template_filename != full_path_template_filename:
+        if 'CustomTemplateFilename' in project_config:
+            full_path_template_filename = project_config["CustomTemplateFilename"]
+        else:
+            template_filename = f"Pattern.custom.{template_name}.jpg"
+            full_path_template_filename = os.path.join(temp_dir, template_filename)
+        if not os.path.exists(full_path_template_filename):
             tk.messagebox.showwarning(
                 "Template in project invalid",
                 f"The custom template saved for project {template_name} is invalid."
@@ -1585,7 +1587,8 @@ def widget_status_update(widget_state=0, button_action=0):
 def update_frame_from(event):
     global frame_from_str, frame_slider
     global CurrentFrame
-    if len(frame_from_str.get()) == 0:
+    
+    if len(frame_from_str.get()) == 0 or event.num == 2:
         frame_from_str.set(CurrentFrame)
     else:
         select_scale_frame(frame_from_str.get())
@@ -1595,7 +1598,7 @@ def update_frame_from(event):
 def update_frame_to(event):
     global frame_to_str, frame_slider
     global CurrentFrame
-    if len(frame_to_str.get()) == 0:
+    if len(frame_to_str.get()) == 0 or event.num == 2:
         frame_to_str.set(CurrentFrame)
     else:
         select_scale_frame(frame_to_str.get())
@@ -4318,6 +4321,7 @@ def build_ui():
     frame_from_entry.grid(row=postprocessing_row, column=1, sticky=W)
     frame_from_entry.config(state=NORMAL)
     frame_from_entry.bind("<Double - Button - 1>", update_frame_from)
+    frame_from_entry.bind("<Button - 2>", update_frame_from)
     frame_from_entry.bind('<<Paste>>', lambda event, entry=frame_from_entry: on_paste_all_entries(event, entry))
     as_tooltips.add(frame_from_entry, "First frame to be processed, if not encoding the entire set")
     frame_to_str = tk.StringVar(value=str(from_frame))
@@ -4327,6 +4331,7 @@ def build_ui():
     frame_to_entry.grid(row=postprocessing_row, column=1, sticky=E)
     frame_to_entry.config(state=NORMAL)
     frame_to_entry.bind("<Double - Button - 1>", update_frame_to)
+    frame_to_entry.bind("<Button - 2>", update_frame_to)
     frame_to_entry.bind('<<Paste>>', lambda event, entry=frame_to_entry: on_paste_all_entries(event, entry))
     as_tooltips.add(frame_to_entry, "Last frame to be processed, if not encoding the entire set")
 
