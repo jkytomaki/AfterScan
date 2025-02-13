@@ -19,10 +19,10 @@ __author__ = 'Juan Remirez de Esparza'
 __copyright__ = "Copyright 2024, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
-__version__ = "1.11.12"
+__version__ = "1.11.13"
 __data_version__ = "1.0"
 __date__ = "2025-02-04"
-__version_highlight__ = "Fix custom template handling, standardize filenames"
+__version_highlight__ = "New algorithm for stabilization (Based on FrameAlignmentCheck app)"
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
 __status__ = "Development"
@@ -287,6 +287,10 @@ CsvFile = 0
 CsvFramesOffPercent = 0
 match_level_average = 0
 match_level_average_counter = 0
+horizontal_offset_average = 0
+horizontal_offset_average_counter = 0
+
+use_simple_stabilization = False    # Stabilize using simpler (and slightier less precise) algorithm, no templates required
 
 # Token to be inserted in each queue on program closure, to allow threads to shut down cleanly
 END_TOKEN = "TERMINATE_PROCESS"
@@ -1583,6 +1587,12 @@ def widget_status_update(widget_state=0, button_action=0):
         gamma_correction_spinbox.config(state=DISABLED)
     custom_stabilization_btn.config(relief=SUNKEN if template_list.get_active_type() == 'custom' else RAISED)
 
+    if use_simple_stabilization:
+        custom_stabilization_btn.config(state = DISABLED)
+        low_contrast_custom_template_checkbox.config(state = DISABLED)
+        stabilization_threshold_match_label.config(state = DISABLED)
+        extended_stabilization_checkbox.config(state = DISABLED)
+
 
 def update_frame_from(event):
     global frame_from_str, frame_slider
@@ -2771,6 +2781,123 @@ def rotate_image(img):
     rotated = cv2.warpAffine(img, M, (w, h))
     return rotated
 
+
+# Factorize code to find the target positions, vertical and horizontal:
+# Vertical target: Vertical middle of the hole for S8, middle of the inter-hole space for R8
+# Horizontal target: Hole right edge (both for S8 and R8)
+def get_target_position(frame_idx, img, orientation='v', threshold=10, slice_width=10):
+    global horizontal_offset_average_counter, horizontal_offset_average
+    global draw_capture_canvas
+
+    done = False
+
+    # Get dimensions of the binary image
+    height, width, _ = img.shape
+
+    # Set horizontal rows to make several atempts if required
+    pos_list = []
+    if orientation == 'v':
+        pos_list.append(0)
+    else:
+        if film_type.get() == 'S8':
+            pos_list.append(height // 2 - int(height*0.07) - slice_width // 2)
+            pos_list.append(height // 2 - slice_width // 2)
+            pos_list.append(height // 2 + int(height*0.07) - slice_width // 2)
+        else:
+            # For R8, Get a slice on the top or bottom of the image
+            slice_height = 0 # use the top hole
+            #slice_height = height - int(height*0.15))    # use bottom hole
+            pos_list.append(slice_height)
+            pos_list.append(slice_height + int(height*0.05))
+            pos_list.append(slice_height + int(height*0.10))
+            sliced_image = img[slice_height:slice_height+slice_width, :int(width*0.15)]    # Don't need a full horizontal slice, holes must be in the leftmost 15%
+
+    # Calculate the middle of the vertical and horizontal coordinated
+    if film_type.get() == 'S8':
+        vertical_middle = height // 2
+    else:
+        vertical_middle = (height // 2) - int(height*0.05)
+
+    for pos in pos_list:
+        # First, determine the vertical displacement
+        if orientation == 'v':
+            # Get a vertical slice on the left of the image
+            if slice_width > width:
+                raise ValueError("Slice width exceeds image width")
+            sliced_image = img[:, pos:pos+slice_width]
+        else:
+            sliced_image = img[pos:pos+slice_width, :int(width*0.15)]    # Don't need a full horizontal slice, holes must be in the leftmost 15%
+
+        # Convert to pure black and white (binary image)
+        _, binary_img = cv2.threshold(sliced_image, 220, 255, cv2.THRESH_BINARY)
+
+        # Sum along the width to get a 1D array representing white pixels at each height
+        height_profile = np.sum(binary_img, axis=1 if orientation == 'v' else 0)
+        
+        # Find where the sum is non-zero (white) for S8 or horizontal search, or zero (black) for R8
+        if film_type.get() == 'S8' or orientation == 'h':
+            slice_values = np.where(height_profile > 0)[0]
+        else:
+            slice_values = np.where(height_profile == 0)[0]
+        
+        areas = []
+        start = None
+        min_gap_size = int(height*0.08 if orientation == 'v' else 0.05)  # Determine minimum hole size depending on the orientation
+        previous = None
+        for i in slice_values:
+            if start is None:
+                start = i
+            if previous is not None and i-previous > 1: # end of first ares, check size
+                if previous-start > min_gap_size:  # min_gap_size is minimum number of consecutive pixels to skip small gaps
+                    areas.append((start, previous - 1))
+                start = i
+            previous = i
+        if start is not None and slice_values[-1]-start > min_gap_size:  # Add the last area if it exists
+            areas.append((start, slice_values[-1]))
+        
+        result = 0
+        bigger = 0
+        area_count = 0
+        for start, end in areas:
+            area_count += 1
+            if area_count > 2:
+                break
+            if end-start > bigger:
+                bigger = end-start
+                result = (start + end) // 2 if orientation == 'v' else end
+
+        if orientation == 'v':
+            offset = vertical_middle-result   # Return offset of the center of the biggest area with respect to the frame enter
+            if abs(offset) > 300:
+                logging.warning(f"Frame {frame_idx}: Vertical offset too big {offset}.")
+            break
+        else:
+            offset = int(width*0.05) - result   # Return offset of the hole vertical edge with respect to the expected position
+            # Difference between actual horizontal offset and average one should be smaller than 30 pixels (not much horizontal movement expected)
+            if horizontal_offset_average_counter > 10 and abs(horizontal_offset_average-offset) > 30:
+                logging.warning(f"Frame {frame_idx}: Too much deviation of horizontal offset {offset}, respect to average {int(horizontal_offset_average)}.")
+                offset = horizontal_offset_average
+            else:
+                done = True
+            # Calculate rolling average of match level
+            horizontal_offset_average = (horizontal_offset_average * horizontal_offset_average_counter + offset) / (horizontal_offset_average_counter + 1)
+            horizontal_offset_average_counter += 1
+            if done:
+                break
+
+    return int(offset) # if orientation == 'v' else 0
+
+
+# Based on FrameAlignmentChecker 'is_frame_centered' algorithm
+# Templates to be dropped, vertical displacement to be calculated based on position 
+# of the center of the hole (S8) or the space between two holes (R8)
+def calculate_frame_displacement(frame_idx, img, threshold=10, slice_width=10):
+    vertical_offset = get_target_position(frame_idx, img, 'v')
+    horizontal_offset = get_target_position(frame_idx, img, 'h')
+
+    return vertical_offset, horizontal_offset
+
+
 def stabilize_image(frame_idx, img, img_ref, img_ref_alt = None, id = -1):
     global SourceDirFileList
     global first_absolute_frame, StartFrame
@@ -2790,52 +2917,58 @@ def stabilize_image(frame_idx, img, img_ref, img_ref_alt = None, id = -1):
     # Get image dimensions to perform image shift later
     width = img_ref.shape[1]
     height = img_ref.shape[0]
-    # Set hole template expected position
-    hole_template_pos = template_list.get_active_position()
-    film_hole_template = template_list.get_active_template()
 
-    # Search film hole pattern
-    best_match_level = 0
-    best_top_left = [0,0]
+    if not use_simple_stabilization:  # Standard stabilization using templates
+        # Set hole template expected position
+        hole_template_pos = template_list.get_active_position()
+        film_hole_template = template_list.get_active_template()
 
-    # Get sprocket hole area
-    left_stripe_image = get_image_left_stripe(img_ref)
-    #WorkStabilizationThreshold = np.percentile(left_stripe_image, 90)
-    img_ref_alt_used = False
-    while True:
-        thres, top_left, match_level, img_matched = match_template(frame_idx, film_hole_template, left_stripe_image)
-        match_level = max(0, match_level)   # in some cases, not sure why, match level is negative
-        if match_level >= 0.85:
-            break
-        else:
-            if match_level >= best_match_level:
-                best_match_level = match_level
-                best_top_left = top_left
-                best_img_matched = img_matched
-        if not img_ref_alt_used and img_ref_alt is not None:
-            left_stripe_image = get_image_left_stripe(img_ref_alt)
-            img_ref_alt_used = True
-        else:
-            match_level = best_match_level
-            top_left = best_top_left
-            img_matched = best_img_matched
-            break
-    debug_template_display_frame_raw(img_matched)
+        # Search film hole pattern
+        best_match_level = 0
+        best_top_left = [0,0]
 
-    if top_left[1] != -1 and match_level > 0.1:
-        move_x = hole_template_pos[0] - top_left[0]
-        move_y = hole_template_pos[1] - top_left[1]
-        if abs(move_x) > 150 or abs(move_y) > 350:  # if shift too big, ignore it, probably for the better
-            logging.warning(f"Shift too big ({move_x}, {move_y}), ignoring it.")
+        # Get sprocket hole area
+        left_stripe_image = get_image_left_stripe(img_ref)
+        #WorkStabilizationThreshold = np.percentile(left_stripe_image, 90)
+        img_ref_alt_used = False
+        while True:
+            thres, top_left, match_level, img_matched = match_template(frame_idx, film_hole_template, left_stripe_image)
+            match_level = max(0, match_level)   # in some cases, not sure why, match level is negative
+            if match_level >= 0.85:
+                break
+            else:
+                if match_level >= best_match_level:
+                    best_match_level = match_level
+                    best_top_left = top_left
+                    best_img_matched = img_matched
+            if not img_ref_alt_used and img_ref_alt is not None:
+                left_stripe_image = get_image_left_stripe(img_ref_alt)
+                img_ref_alt_used = True
+            else:
+                match_level = best_match_level
+                top_left = best_top_left
+                img_matched = best_img_matched
+                break
+        debug_template_display_frame_raw(img_matched)
+
+        if top_left[1] != -1 and match_level > 0.1:
+            move_x = hole_template_pos[0] - top_left[0]
+            move_y = hole_template_pos[1] - top_left[1]
+            if abs(move_x) > 150 or abs(move_y) > 350:  # if shift too big, ignore it, probably for the better
+                logging.warning(f"Frame {frame_idx:5d}: Shift too big ({move_x}, {move_y}), ignoring it.")
+                move_x = 0
+                move_y = 0
+        else:   # If match is not good, keep the frame where it is, will probably look better
+            logging.warning(f"Frame {frame_idx:5d}: Template match not good ({match_level}""), ignoring it.")
             move_x = 0
             move_y = 0
-    else:   # If match is not good, keep the frame where it is, will probably look better
-        logging.warning(f"Template match not good ({match_level}""), ignoring it.")
-        move_x = 0
-        move_y = 0
-    log_line = f"T{id} - " if id != -1 else ""
-    logging.debug(log_line+f"Frame {frame_idx:5d}: threshold: {thres:3d}, top left: ({top_left[0]:4d},{top_left[0]:4d}), move_x:{move_x:4d}, move_y:{move_y:4d}")
-    debug_template_display_info(frame_idx, thres, top_left, move_x, move_y)
+        log_line = f"T{id} - " if id != -1 else ""
+        logging.debug(log_line+f"Frame {frame_idx:5d}: threshold: {thres:3d}, top left: ({top_left[0]:4d},{top_left[0]:4d}), move_x:{move_x:4d}, move_y:{move_y:4d}")
+        debug_template_display_info(frame_idx, thres, top_left, move_x, move_y)
+    else:
+        move_y, move_x = calculate_frame_displacement(frame_idx, img_ref)
+        match_level = 1
+        
     # Try to figure out if there will be a part missing
     # at the bottom, or the top
     missing_rows = 0
@@ -3243,6 +3376,7 @@ def start_convert():
     global job_list, CurrentJobEntry
     global stabilization_bounds_alert_counter
     global CsvFilename, CsvPathName, CsvFile, match_level_average, match_level_average_counter
+    global horizontal_offset_average_counter
     global FPM_LastMinuteFrameTimes
 
     if ConvertLoopRunning:
@@ -3323,6 +3457,7 @@ def start_convert():
             clear_image()
             match_level_average = 0
             match_level_average_counter = 0
+            horizontal_offset_average_counter = 0
             # Multiprocessing: Start all threads before encoding
             start_threads()
             win.after(1, frame_generation_loop)
@@ -4872,6 +5007,7 @@ def main(argv):
     global BatchAutostart
     global num_threads
     global developer_debug
+    global use_simple_stabilization
 
     LoggingMode = "INFO"
     go_disable_tooptips = False
@@ -4893,7 +5029,7 @@ def main(argv):
     template_list.add("WB", hole_template_filename_wb, "aux", (0, 0))
     template_list.add("Corner", hole_template_filename_corner, "aux", (0, 0))
 
-    opts, args = getopt.getopt(argv, "hiel:dcst:12n")
+    opts, args = getopt.getopt(argv, "hiel:dcst:12na")
 
     for opt, arg in opts:
         if opt == '-l':
@@ -4908,14 +5044,17 @@ def main(argv):
             is_demo = True
         elif opt == '-s':
             BatchAutostart = True
-        if opt == '-t':
+        elif opt == '-t':
             num_threads = int(arg)
-        if opt == '-1':
+        elif opt == '-1':
             ForceSmallSize = True
-        if opt == '-2':
+        elif opt == '-2':
             ForceBigSize = True
-        if opt == '-n':
+        elif opt == '-n':
             go_disable_tooptips = True
+        elif opt == '-a':
+            use_simple_stabilization = True
+            print("Old stabilization")
         elif opt == '-h':
             print("AfterScan")
             print("  -l <log mode>  Set log level:")
@@ -4927,6 +5066,7 @@ def main(argv):
             print("  -s             Initiate batch on startup (and suspend on batch completion)")
             print("  -t <num>       Number of threads")
             print("  -1             Initiate on 'small screen' mode (resolution lower than than Full HD)")
+            print("  -a             Use simple stabilization algorithm, not requiring templates (but slightly less precise)")
             exit()
 
     LogLevel = getattr(logging, LoggingMode.upper(), None)
