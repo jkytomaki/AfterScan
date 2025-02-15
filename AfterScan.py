@@ -19,10 +19,10 @@ __author__ = 'Juan Remirez de Esparza'
 __copyright__ = "Copyright 2024, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
-__version__ = "1.11.13"
+__version__ = "1.11.14"
 __data_version__ = "1.0"
-__date__ = "2025-02-04"
-__version_highlight__ = "New algorithm for stabilization (Based on FrameAlignmentCheck app)"
+__date__ = "2025-02-15"
+__version_highlight__ = "Integrate RollingAverage class in AfterScan"
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
 __status__ = "Development"
@@ -62,6 +62,7 @@ import threading
 import queue
 from matplotlib import font_manager
 from tooltip import Tooltips
+from rolling_average import RollingAverage
 
 # Frame vars
 first_absolute_frame = 0
@@ -285,10 +286,9 @@ CsvFilename = ""
 CsvPathName = ""
 CsvFile = 0
 CsvFramesOffPercent = 0
-match_level_average = 0
-match_level_average_counter = 0
-horizontal_offset_average = 0
-horizontal_offset_average_counter = 0
+match_level_average = None
+horizontal_offset_average = None
+
 
 use_simple_stabilization = False    # Stabilize using simpler (and slightier less precise) algorithm, no templates required
 
@@ -2786,7 +2786,6 @@ def rotate_image(img):
 # Vertical target: Vertical middle of the hole for S8, middle of the inter-hole space for R8
 # Horizontal target: Hole right edge (both for S8 and R8)
 def get_target_position(frame_idx, img, orientation='v', threshold=10, slice_width=10):
-    global horizontal_offset_average_counter, horizontal_offset_average
     global draw_capture_canvas
 
     done = False
@@ -2874,15 +2873,11 @@ def get_target_position(frame_idx, img, orientation='v', threshold=10, slice_wid
         else:
             offset = int(width*0.05) - result   # Return offset of the hole vertical edge with respect to the expected position
             # Difference between actual horizontal offset and average one should be smaller than 30 pixels (not much horizontal movement expected)
-            if horizontal_offset_average_counter > 10 and abs(horizontal_offset_average-offset) > 30:
-                logging.warning(f"Frame {frame_idx}: Too much deviation of horizontal offset {offset}, respect to average {int(horizontal_offset_average)}.")
-                offset = horizontal_offset_average
+            if horizontal_offset_average.get_average() is not None and abs(horizontal_offset_average.get_average()-offset) > 30:
+                logging.warning(f"Frame {frame_idx}: Too much deviation of horizontal offset {offset}, respect to average {int(horizontal_offset_average.get_average())}.")
+                offset = horizontal_offset_average.get_average()
             else:
-                done = True
-            # Calculate rolling average of match level
-            horizontal_offset_average = (horizontal_offset_average * horizontal_offset_average_counter + offset) / (horizontal_offset_average_counter + 1)
-            horizontal_offset_average_counter += 1
-            if done:
+                horizontal_offset_average.add_value(offset)
                 break
 
     return int(offset) # if orientation == 'v' else 0
@@ -2912,7 +2907,6 @@ def stabilize_image(frame_idx, img, img_ref, img_ref_alt = None, id = -1):
     global debug_template_match
     global perform_stabilization
     global template_list
-    global match_level_average, match_level_average_counter
 
     # Get image dimensions to perform image shift later
     width = img_ref.shape[1]
@@ -2992,8 +2986,7 @@ def stabilize_image(frame_idx, img, img_ref, img_ref_alt = None, id = -1):
                                                text=str(int(match_level * 100)))
     if ConvertLoopRunning:
         # Calculate rolling average of match level
-        match_level_average_counter += 1
-        match_level_average = (match_level_average * match_level_average_counter + match_level) / (match_level_average_counter + 1)
+        match_level_average.add_value(match_level)
         if missing_rows > 0 or match_level < 0.9:
             if missing_rows > 0:
                 stabilization_bounds_alert_counter += 1
@@ -3375,8 +3368,7 @@ def start_convert():
     global BatchJobRunning
     global job_list, CurrentJobEntry
     global stabilization_bounds_alert_counter
-    global CsvFilename, CsvPathName, CsvFile, match_level_average, match_level_average_counter
-    global horizontal_offset_average_counter
+    global CsvFilename, CsvPathName, CsvFile
     global FPM_LastMinuteFrameTimes
 
     if ConvertLoopRunning:
@@ -3455,9 +3447,8 @@ def start_convert():
                 CsvPathName = os.path.join(CsvPathName, CsvFilename)
                 CsvFile = open(CsvPathName, "w")
             clear_image()
-            match_level_average = 0
-            match_level_average_counter = 0
-            horizontal_offset_average_counter = 0
+            match_level_average.clear()
+            horizontal_offset_average.clear()
             # Multiprocessing: Start all threads before encoding
             start_threads()
             win.after(1, frame_generation_loop)
@@ -3746,10 +3737,10 @@ def frame_generation_loop():
     if CurrentFrame >= StartFrame + frames_to_encode and last_displayed_image+1 >= StartFrame + frames_to_encode:
         FPM_CalculatedValue = -1
         # write average match quality in the status line, and in the widget
-        status_str = f"Status: Frame generation OK - AvgQ: {int(match_level_average*100)}"
+        status_str = f"Status: Frame generation OK - AvgQ: {int(match_level_average.get_average()*100)}"
         app_status_label.config(text=status_str, fg='green')
-        stabilization_threshold_match_label.config(fg='white', bg=match_level_color(match_level_average),
-                                                   text=str(int(match_level_average * 100)))
+        stabilization_threshold_match_label.config(fg='white', bg=match_level_color(match_level_average.get_average()),
+                                                   text=str(int(match_level_average.get_average() * 100)))
         # Clear display queue (does not seem to work as expected, leave commented for now)
         # subprocess_event_queue.queue.clear()
         last_displayed_image = 0
@@ -3760,7 +3751,7 @@ def frame_generation_loop():
         if GenerateCsv:
             CsvFile.close()
             name, ext = os.path.splitext(CsvPathName)
-            name = f"{name} ({frames_to_encode} frames, {CsvFramesOffPercent:.1f}% KO, Avg match level {int(match_level_average*100)}).csv"
+            name = f"{name} ({frames_to_encode} frames, {CsvFramesOffPercent:.1f}% KO, Avg match level {int(match_level_average.get_average()*100)}).csv"
             os.rename(CsvPathName, name)
         # Stop threads
         terminate_threads(False)
@@ -4199,6 +4190,7 @@ def afterscan_init():
     global screen_height
     global BigSize, FontSize
     global MergeMertens, AlignMtb
+    global match_level_average, horizontal_offset_average
 
     win = Tk()  # Create main window, store it in 'win'
 
@@ -4232,6 +4224,10 @@ def afterscan_init():
 
     # Init ToolTips
     as_tooltips = Tooltips(FontSize)
+
+    # Init rolling Averages
+    match_level_average = RollingAverage(50)
+    horizontal_offset_average = RollingAverage(50)
 
     # Get Top window coordinates
     TopWinX = win.winfo_x()
