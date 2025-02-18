@@ -202,7 +202,7 @@ StabilizationThreshold = 220.0
 stabilization_bounds_alert_counter = 0
 hole_search_area_adjustment_pending = False
 bad_frame_list = []     # List of tuples (4 elements each: Frame index, x offset, y offset, is frame saved)
-current_bad_frame_index = 0
+current_bad_frame_index = -1    # No list exist yet
 CropAreaDefined = False
 RectangleTopLeft = (0, 0)
 RectangleBottomRight = (0, 0)
@@ -1373,6 +1373,7 @@ def set_source_folder():
     global CurrentFrame, frame_slider, Go_btn, cropping_btn
     global first_absolute_frame
     global project_name
+    global current_bad_frame_index
 
     # Write project data before switching project
     save_project_config()
@@ -1425,6 +1426,7 @@ def set_source_folder():
     frame_slider.set(CurrentFrame)
 
     bad_frame_list.clear()  # empty bad folder list
+    current_bad_frame_index = -1
 
     init_display()
     widget_status_update(NORMAL)
@@ -1804,11 +1806,16 @@ def display_template_popup_closure():
 
 def save_corrected_frames():
     count = 0
+
+    win.config(cursor="watch")  # Change cursor to indicate processing
+
     for bad_frame in bad_frame_list:
         if (bad_frame[1] != 0 or bad_frame[2] != 0) and not bad_frame[3]:
             frame_encode(bad_frame[0], -1, True, bad_frame[1], bad_frame[2])
             bad_frame[3] = True
             count += 1
+
+    win.config(cursor="")  # Change cursor to indicate processing
 
     if count == 0:
         tk.messagebox.showinfo("No frames to save", "No modified framespending to be saved")
@@ -1818,6 +1825,9 @@ def save_corrected_frames():
 
 
 def find_closest_bad_frame_index(frame_idx):
+    if len(bad_frame_list) == 0:
+        return -1
+    
     # Initialize the left and right pointers
     left, right = 0, len(bad_frame_list) - 1
     
@@ -1848,6 +1858,8 @@ def find_closest_bad_frame_index(frame_idx):
 def display_previous_bad_frame():
     global CurrentFrame, current_bad_frame_index
     current_bad_frame_index = find_closest_bad_frame_index(CurrentFrame)
+    if current_bad_frame_index == -1:
+        return
     if current_bad_frame_index > 0:
         current_bad_frame_index -= 1
         CurrentFrame = bad_frame_list[current_bad_frame_index][0]
@@ -1865,6 +1877,8 @@ def display_previous_bad_frame():
 def display_next_bad_frame():
     global CurrentFrame, current_bad_frame_index
     current_bad_frame_index = find_closest_bad_frame_index(CurrentFrame)
+    if current_bad_frame_index == -1:
+        return
     if current_bad_frame_index < len(bad_frame_list)-1:
         current_bad_frame_index += 1
         CurrentFrame = bad_frame_list[current_bad_frame_index][0]
@@ -1881,6 +1895,8 @@ def display_next_bad_frame():
 
 def shift_bad_frame_up(event = None):
     global current_bad_frame_index
+    if current_bad_frame_index == -1:
+        return
     bad_frame_list[current_bad_frame_index][2] -= 5 if event == None else 1
     frame_encode(CurrentFrame, -1, False, bad_frame_list[current_bad_frame_index][1], bad_frame_list[current_bad_frame_index][2])
     bad_frame_list[current_bad_frame_index][3] = False # Just modified, reset saved flag
@@ -1889,6 +1905,8 @@ def shift_bad_frame_up(event = None):
 
 def shift_bad_frame_down(event = None):
     global current_bad_frame_index
+    if current_bad_frame_index == -1:
+        return
     bad_frame_list[current_bad_frame_index][2] += 5 if event == None else 1
     frame_encode(CurrentFrame, -1, False, bad_frame_list[current_bad_frame_index][1], bad_frame_list[current_bad_frame_index][2])
     bad_frame_list[current_bad_frame_index][3] = False # Just modified, reset saved flag
@@ -1896,6 +1914,8 @@ def shift_bad_frame_down(event = None):
 
 def shift_bad_frame_left(event = None):
     global current_bad_frame_index
+    if current_bad_frame_index == -1:
+        return
     bad_frame_list[current_bad_frame_index][1] -= 5 if event == None else 1
     frame_encode(CurrentFrame, -1, False, bad_frame_list[current_bad_frame_index][1], bad_frame_list[current_bad_frame_index][2])
     bad_frame_list[current_bad_frame_index][3] = False # Just modified, reset saved flag
@@ -1903,6 +1923,8 @@ def shift_bad_frame_left(event = None):
 
 def shift_bad_frame_right(event = None):
     global current_bad_frame_index
+    if current_bad_frame_index == -1:
+        return
     bad_frame_list[current_bad_frame_index][1] += 5 if event == None else 1
     frame_encode(CurrentFrame, -1, False, bad_frame_list[current_bad_frame_index][1], bad_frame_list[current_bad_frame_index][2])
     bad_frame_list[current_bad_frame_index][3] = False # Just modified, reset saved flag
@@ -1915,6 +1937,16 @@ def count_corrected_bad_frames():
             count += 1
     return count
 
+
+def reset_bad_frame_to_original_position():
+    frame_idx = bad_frame_list[current_bad_frame_index][0]
+    file = SourceDirFileList[frame_idx]
+    img = cv2.imread(file, cv2.IMREAD_UNCHANGED)    
+    move_x, move_y , _, _ = calculate_frame_displacement_with_templates(frame_idx, img)
+    bad_frame_list[current_bad_frame_index][1] = -move_x
+    bad_frame_list[current_bad_frame_index][2] = -move_y
+    frame_encode(frame_idx, -1, False, bad_frame_list[current_bad_frame_index][1], bad_frame_list[current_bad_frame_index][2])
+    bad_frame_list[current_bad_frame_index][3] = False # Just modified, reset saved flag
 
 def debug_template_popup():
     global win
@@ -1994,30 +2026,35 @@ def debug_template_popup():
     film_type_label = Label(right_frame, textvariable=film_type_text, font=("Arial", FontSize))
     film_type_label.pack(pady=5, padx=10, anchor="center")
     film_type_text.set(f"Film type: {film_type.get()}")
+    as_tooltips.add(film_type_label, "Type of film currentyl loaded")
 
     # Add a label with the cropping dimensions
     crop_text = tk.StringVar()
     crop_label = Label(right_frame, textvariable=crop_text, font=("Arial", FontSize))
     crop_label.pack(pady=5, padx=10, anchor="center")
     crop_text.set(f"Crop: {CropTopLeft}, {CropBottomRight}")
+    as_tooltips.add(crop_label, "Current cropping coordinates")
 
     # Add a label with the template type
     template_type_text = tk.StringVar()
     template_type_label = Label(right_frame, textvariable=template_type_text, font=("Arial", FontSize))
     template_type_label.pack(pady=5, padx=10, anchor="center")
     template_type_text.set(f"Template type: {template_list.get_active_type()}")
+    as_tooltips.add(template_type_label, "Current template type being used to stabilize frames")
 
     # Add a label with the stabilization info
     hole_pos_text = tk.StringVar()
     hole_pos_label = Label(right_frame, textvariable=hole_pos_text, font=("Arial", FontSize))
     hole_pos_label.pack(pady=5, padx=10, anchor="center")
     hole_pos_text.set(f"Expected template pos: {hole_template_pos}")
+    as_tooltips.add(hole_pos_label, "Position where the template is expected")
 
     #Label with template size
     template_size_text = tk.StringVar()
     template_size_label = Label(right_frame, textvariable=template_size_text, font=("Arial", FontSize))
     template_size_label.pack(pady=5, padx=10, anchor="center")
     template_size_text.set(f"Template Size: {template_list.get_active_size()}")
+    as_tooltips.add(template_size_label, "Size of current template")
 
     '''
     #Label with template white on black proportion
@@ -2032,30 +2069,35 @@ def debug_template_popup():
     template_threshold_label = Label(right_frame, textvariable=template_threshold_text, font=("Arial", FontSize))
     template_threshold_label.pack(pady=5, padx=10, anchor="center")
     template_threshold_text.set("Threshold: 0")
+    as_tooltips.add(template_threshold_label, "Threshold used to match template")
 
     #Label with search area
     search_area_text = tk.StringVar()
     search_area_label = Label(right_frame, textvariable=search_area_text, font=("Arial", FontSize))
     search_area_label.pack(pady=5, padx=10, anchor="center")
     search_area_text.set(f"Search Area: {HoleSearchTopLeft}, {HoleSearchBottomRight})")
+    as_tooltips.add(search_area_label, "Area where template will be searched")
 
     #Label with current Frame details
     current_frame_text = tk.StringVar()
     current_frame_label = Label(right_frame, textvariable=current_frame_text, width=45, font=("Arial", FontSize))
     current_frame_label.pack(pady=5, padx=10, anchor="center")
     current_frame_text.set("Current:")
+    as_tooltips.add(current_frame_label, "Current frame details")
 
     #Label with bad Frame count
     bad_frame_text = tk.StringVar()
     bad_frame_label = Label(right_frame, textvariable=bad_frame_text, width=45, font=("Arial", FontSize))
     bad_frame_label.pack(pady=5, padx=10, anchor="center")
     bad_frame_text.set("Bad frame count:")
+    as_tooltips.add(bad_frame_label, "Number of frames that failed to be stabilized")
 
     #Label with bad Frames modified
     corrected_bad_frame_text = tk.StringVar()
     corrected_bad_frame_label = Label(right_frame, textvariable=corrected_bad_frame_text, width=45, font=("Arial", FontSize))
     corrected_bad_frame_label.pack(pady=5, padx=10, anchor="center")
     corrected_bad_frame_text.set("Corrected bad frames:")
+    as_tooltips.add(corrected_bad_frame_label, "Number of frames that failed to be stabilized, that have been manually adjusted")
 
     # Frame for manual alignment buttons 
     manual_align_frame = Frame(right_frame) #, width=50, height=50)
@@ -2066,29 +2108,42 @@ def debug_template_popup():
     bad_frames_on_left_label = Label(manual_align_frame, textvariable=bad_frames_on_left_value, font=("Arial", FontSize+6))
     bad_frames_on_left_label.grid(pady=2, padx=10, row=0, column=0, rowspan = 2)
     bad_frames_on_left_value.set(0)
+    as_tooltips.add(bad_frames_on_left_label, "Number of badly-stabilized frames before the one currently selected")
 
     previous_frame_button = Button(manual_align_frame, text="◀◀", command=display_previous_bad_frame, font=("Arial", FontSize), width=3)
     previous_frame_button.grid(pady=2, padx=2, row=0, column=1)
+    as_tooltips.add(previous_frame_button, "Select previous badly-stabilized frame")
     frame_up_button = Button(manual_align_frame, text="▲", command=shift_bad_frame_up, font=("Arial", FontSize), width=3)
     frame_up_button.grid(pady=2, padx=2, row=0, column=2)
+    as_tooltips.add(frame_up_button, "Move current frame 5 pixels up (use cursor keys to move 1 pixel)")
     next_frame_button = Button(manual_align_frame, text="▶▶", command=display_next_bad_frame, font=("Arial", FontSize), width=3)
     next_frame_button.grid(pady=2, padx=2, row=0, column=3)
+    as_tooltips.add(next_frame_button, "Select next badly-stabilized frame")
     frame_left_button = Button(manual_align_frame, text="◀", command=shift_bad_frame_left, font=("Arial", FontSize), width=3)
     frame_left_button.grid(pady=2, padx=2, row=1, column=1)
+    as_tooltips.add(frame_left_button, "Move current frame 5 pixels to the left (use cursor keys to move 1 pixel)")
     frame_down_button = Button(manual_align_frame, text="▼", command=shift_bad_frame_down, font=("Arial", FontSize), width=3)
     frame_down_button.grid(pady=2, padx=2, row=1, column=2)
+    as_tooltips.add(frame_down_button, "Move current frame 5 pixels down (use cursor keys to move 1 pixel)")
     frame_right_button = Button(manual_align_frame, text="▶", command=shift_bad_frame_right, font=("Arial", FontSize), width=3)
     frame_right_button.grid(pady=2, padx=2, row=1, column=3)
+    as_tooltips.add(frame_right_button, "Move current frame 5 pixels to the right (use cursor keys to move 1 pixel)")
     template_popup_window.bind("<Up>", shift_bad_frame_up)
     template_popup_window.bind("<Down>", shift_bad_frame_down)
     template_popup_window.bind("<Left>", shift_bad_frame_left)
     template_popup_window.bind("<Right>", shift_bad_frame_right)
 
+    # Button to reset frame to original position (no stabilization)
+    reset_frame_button = Button(manual_align_frame, text="Reset", command=reset_bad_frame_to_original_position, font=("Arial", FontSize+2))
+    reset_frame_button.grid(pady=2, padx=2, row=0, column=4, rowspan = 2, sticky="nsew")
+    as_tooltips.add(reset_frame_button, "Return current frame to original position (before automatic stabilization)")
+
     #Label with bad frames to the left
     bad_frames_on_right_value = tk.IntVar()
     bad_frames_on_right_label = Label(manual_align_frame, textvariable=bad_frames_on_right_value, font=("Arial", FontSize+6))
-    bad_frames_on_right_label.grid(pady=2, padx=10, row=0, column=4, rowspan = 2)
+    bad_frames_on_right_label.grid(pady=2, padx=10, row=0, column=5, rowspan = 2)
     bad_frames_on_right_value.set(0)
+    as_tooltips.add(bad_frames_on_right_label, "Number of badly-stabilized frames after the one currently selected")
 
     # Frame for save/exit buttons
     save_exit_frame = Frame(right_frame)
@@ -2096,9 +2151,11 @@ def debug_template_popup():
 
     save_button = Button(save_exit_frame, text="Save", command=save_corrected_frames, font=("Arial", FontSize))
     save_button.pack(pady=10, padx=10, side=LEFT, anchor="center")
+    as_tooltips.add(save_button, "Save frames adjusted by user to target folder. Beware!!! Make sure you select 'Skip FrameRegeneration' when generating the video, otherwise the manual adjustement will be lost.")
 
     close_button = Button(save_exit_frame, text="Close", command=display_template_popup_closure, font=("Arial", FontSize))
     close_button.pack(pady=10, padx=10, side=RIGHT, anchor="center")
+    close_button.add(save_button, "Close this window")
 
     # Run a loop for the popup window
     template_popup_window.wait_window()
@@ -3060,33 +3117,15 @@ def get_target_position(frame_idx, img, orientation='v', threshold=10, slice_wid
 # Based on FrameAlignmentChecker 'is_frame_centered' algorithm
 # Templates to be dropped, vertical displacement to be calculated based on position 
 # of the center of the hole (S8) or the space between two holes (R8)
-def calculate_frame_displacement(frame_idx, img, threshold=10, slice_width=10):
+def calculate_frame_displacement_simple(frame_idx, img, threshold=10, slice_width=10):
     vertical_offset = get_target_position(frame_idx, img, 'v')
     horizontal_offset = get_target_position(frame_idx, img, 'h')
 
-    return vertical_offset, horizontal_offset
+    return horizontal_offset, vertical_offset
 
-
-def stabilize_image(frame_idx, img, img_ref, offset_x = 0, offset_y = 0, img_ref_alt = None, id = -1):
-    global SourceDirFileList
-    global first_absolute_frame, StartFrame
-    global HoleSearchTopLeft, HoleSearchBottomRight
-    global CropTopLeft, CropBottomRight, win
-    global stabilization_bounds_alert, stabilization_bounds_alert_counter
-    global stabilization_bounds_alert_checkbox
-    global project_name
-    global frame_fill_type, extended_stabilization
-    global CsvFramesOffPercent
-    global stabilization_threshold_match_label
-    global debug_template_match
-    global perform_stabilization
-    global template_list
-
-    # Get image dimensions to perform image shift later
-    width = img_ref.shape[1]
-    height = img_ref.shape[0]
-
-    if not use_simple_stabilization:  # Standard stabilization using templates
+# Original algorithm based on templates
+# Extracted code to calculate displacement to use with the manual option
+def calculate_frame_displacement_with_templates(frame_idx, img_ref, img_ref_alt = None, id = -1):
         # Set hole template expected position
         hole_template_pos = template_list.get_active_position()
         film_hole_template = template_list.get_active_template()
@@ -3133,9 +3172,35 @@ def stabilize_image(frame_idx, img, img_ref, offset_x = 0, offset_y = 0, img_ref
         log_line = f"T{id} - " if id != -1 else ""
         logging.debug(log_line+f"Frame {frame_idx:5d}: threshold: {thres:3d}, top left: ({top_left[0]:4d},{top_left[0]:4d}), move_x:{move_x:4d}, move_y:{move_y:4d}")
         debug_template_display_info(frame_idx, thres, top_left, move_x, move_y)
-    else:
-        move_y, move_x = calculate_frame_displacement(frame_idx, img_ref)
+
+        return move_x, move_y, top_left, match_level
+
+
+def stabilize_image(frame_idx, img, img_ref, offset_x = 0, offset_y = 0, img_ref_alt = None, id = -1):
+    global SourceDirFileList
+    global first_absolute_frame, StartFrame
+    global HoleSearchTopLeft, HoleSearchBottomRight
+    global CropTopLeft, CropBottomRight, win
+    global stabilization_bounds_alert, stabilization_bounds_alert_counter
+    global stabilization_bounds_alert_checkbox
+    global project_name
+    global frame_fill_type, extended_stabilization
+    global CsvFramesOffPercent
+    global stabilization_threshold_match_label
+    global debug_template_match
+    global perform_stabilization
+    global template_list
+    global current_bad_frame_index
+
+    # Get image dimensions to perform image shift later
+    width = img_ref.shape[1]
+    height = img_ref.shape[0]
+
+    if use_simple_stabilization:  # Standard stabilization using templates
+        move_x, move_y = calculate_frame_displacement_simple(frame_idx, img_ref)
         match_level = 1
+    else:
+        move_x, move_y, top_left, match_level = calculate_frame_displacement_with_templates(frame_idx, img_ref, img_ref_alt, id)
         
     # Try to figure out if there will be a part missing
     # at the bottom, or the top
@@ -3164,6 +3229,7 @@ def stabilize_image(frame_idx, img, img_ref, offset_x = 0, offset_y = 0, img_ref
         if missing_rows > 0 or match_level < 0.9:
             if match_level < 0.7:   # Only add really bad matches
                 bad_frame_list.append([frame_idx, 0, 0, False])
+                current_bad_frame_index = frame_idx
             if missing_rows > 0:
                 stabilization_bounds_alert_counter += 1
                 if stabilization_bounds_alert.get():
@@ -3551,6 +3617,7 @@ def start_convert():
     global stabilization_bounds_alert_counter
     global CsvFilename, CsvPathName, CsvFile
     global FPM_LastMinuteFrameTimes
+    global current_bad_frame_index
 
     if ConvertLoopRunning:
         ConvertLoopExitRequested = True
@@ -3564,6 +3631,7 @@ def start_convert():
         stabilization_bounds_alert_counter = 0
         # Clear list of bad frames
         bad_frame_list.clear()
+        current_bad_frame_index = -1
         # Empty FPM register list
         FPM_LastMinuteFrameTimes.clear()
         # Centralize 'frames_to_encode' update here
