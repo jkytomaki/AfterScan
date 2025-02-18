@@ -19,10 +19,10 @@ __author__ = 'Juan Remirez de Esparza'
 __copyright__ = "Copyright 2024, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
-__version__ = "1.11.15"
+__version__ = "1.12.00"
 __data_version__ = "1.0"
-__date__ = "2025-02-15"
-__version_highlight__ = "Integrate new version 1.0.3 version of RollingAverage in AfterScan"
+__date__ = "2025-02-18"
+__version_highlight__ = "Option to manually correct badly stabilized frames"
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
 __status__ = "Development"
@@ -201,6 +201,8 @@ StabilizeAreaDefined = False
 StabilizationThreshold = 220.0
 stabilization_bounds_alert_counter = 0
 hole_search_area_adjustment_pending = False
+bad_frame_list = []     # List of tuples (4 elements each: Frame index, x offset, y offset, is frame saved)
+current_bad_frame_index = 0
 CropAreaDefined = False
 RectangleTopLeft = (0, 0)
 RectangleBottomRight = (0, 0)
@@ -1421,6 +1423,9 @@ def set_source_folder():
     frame_slider.config(state=NORMAL)
     Go_btn.config(state=NORMAL)
     frame_slider.set(CurrentFrame)
+
+    bad_frame_list.clear()  # empty bad folder list
+
     init_display()
     widget_status_update(NORMAL)
 
@@ -1787,13 +1792,128 @@ def set_resolution(selected):
 def display_template_popup_closure():
     global debug_template_match
 
-    debug_template_match = False
+    bad_corrected = count_corrected_bad_frames()
+    total_bad = len(bad_frame_list)
 
-    display_template_popup.set(False)
+    if bad_corrected == 0 or tk.messagebox.askyesno("Corrected frames exist", f"There are {bad_corrected} corrected frames.\r\nAre you sure you want to exit without saving?"):
+        debug_template_match = False
+        display_template_popup.set(False)
+        general_config["TemplatePopupWindowPos"] = template_popup_window.geometry()
+        template_popup_window.destroy()
 
-    general_config["TemplatePopupWindowPos"] = template_popup_window.geometry()
 
-    template_popup_window.destroy()
+def save_corrected_frames():
+    count = 0
+    for bad_frame in bad_frame_list:
+        if (bad_frame[1] != 0 or bad_frame[2] != 0) and not bad_frame[3]:
+            frame_encode(bad_frame[0], -1, True, bad_frame[1], bad_frame[2])
+            bad_frame[3] = True
+            count += 1
+
+    if count == 0:
+        tk.messagebox.showinfo("No frames to save", "No modified framespending to be saved")
+    else:
+        tk.messagebox.showinfo("Save complete", f"{count} modified frames have been saved")
+    
+
+
+def find_closest_bad_frame_index(frame_idx):
+    # Initialize the left and right pointers
+    left, right = 0, len(bad_frame_list) - 1
+    
+    # If the frame_idx is less than or equal to the smallest element or greater than or equal to the largest element
+    if frame_idx <= bad_frame_list[left][0]:
+        return left
+    if frame_idx >= bad_frame_list[right][0]:
+        return right
+
+    # Binary search-like approach
+    while left <= right:
+        mid = (left + right) // 2
+        if bad_frame_list[mid][0] == frame_idx:
+            return mid
+        elif bad_frame_list[mid][0] < frame_idx:
+            left = mid + 1
+        else:
+            right = mid - 1
+
+    # After the while loop, left will be where we insert frame_idx to keep the list sorted
+    # Check if the frame_idx is closer to the element at 'left' or 'right'
+    if abs(bad_frame_list[left][0] - frame_idx) < abs(bad_frame_list[right][0] - frame_idx):
+        return left
+    else:
+        return right
+
+
+def display_previous_bad_frame():
+    global CurrentFrame, current_bad_frame_index
+    current_bad_frame_index = find_closest_bad_frame_index(CurrentFrame)
+    if current_bad_frame_index > 0:
+        current_bad_frame_index -= 1
+        CurrentFrame = bad_frame_list[current_bad_frame_index][0]
+        project_config["CurrentFrame"] = CurrentFrame
+        frame_slider.config(label='Global:'+
+                            str(CurrentFrame+first_absolute_frame))
+        frame_selected.set(CurrentFrame)
+        frame_slider.set(CurrentFrame)
+        scale_display_update(bad_frame_list[current_bad_frame_index][1], bad_frame_list[current_bad_frame_index][2])
+        corrected_bad_frame_text.set(f"Corrected bad frames: {count_corrected_bad_frames()}")
+        bad_frames_on_left_value.set(current_bad_frame_index)
+        bad_frames_on_right_value.set(len(bad_frame_list)-current_bad_frame_index-1)
+
+
+def display_next_bad_frame():
+    global CurrentFrame, current_bad_frame_index
+    current_bad_frame_index = find_closest_bad_frame_index(CurrentFrame)
+    if current_bad_frame_index < len(bad_frame_list)-1:
+        current_bad_frame_index += 1
+        CurrentFrame = bad_frame_list[current_bad_frame_index][0]
+        project_config["CurrentFrame"] = CurrentFrame
+        frame_slider.config(label='Global:'+
+                            str(CurrentFrame+first_absolute_frame))
+        frame_selected.set(CurrentFrame)
+        frame_slider.set(CurrentFrame)
+        scale_display_update(bad_frame_list[current_bad_frame_index][1], bad_frame_list[current_bad_frame_index][2])
+        corrected_bad_frame_text.set(f"Corrected bad frames: {count_corrected_bad_frames()}")
+        bad_frames_on_left_value.set(current_bad_frame_index)
+        bad_frames_on_right_value.set(len(bad_frame_list)-current_bad_frame_index-1)
+
+
+def shift_bad_frame_up(event = None):
+    global current_bad_frame_index
+    bad_frame_list[current_bad_frame_index][2] -= 5 if event == None else 1
+    frame_encode(CurrentFrame, -1, False, bad_frame_list[current_bad_frame_index][1], bad_frame_list[current_bad_frame_index][2])
+    bad_frame_list[current_bad_frame_index][3] = False # Just modified, reset saved flag
+
+
+
+def shift_bad_frame_down(event = None):
+    global current_bad_frame_index
+    bad_frame_list[current_bad_frame_index][2] += 5 if event == None else 1
+    frame_encode(CurrentFrame, -1, False, bad_frame_list[current_bad_frame_index][1], bad_frame_list[current_bad_frame_index][2])
+    bad_frame_list[current_bad_frame_index][3] = False # Just modified, reset saved flag
+
+
+def shift_bad_frame_left(event = None):
+    global current_bad_frame_index
+    bad_frame_list[current_bad_frame_index][1] -= 5 if event == None else 1
+    frame_encode(CurrentFrame, -1, False, bad_frame_list[current_bad_frame_index][1], bad_frame_list[current_bad_frame_index][2])
+    bad_frame_list[current_bad_frame_index][3] = False # Just modified, reset saved flag
+
+
+def shift_bad_frame_right(event = None):
+    global current_bad_frame_index
+    bad_frame_list[current_bad_frame_index][1] += 5 if event == None else 1
+    frame_encode(CurrentFrame, -1, False, bad_frame_list[current_bad_frame_index][1], bad_frame_list[current_bad_frame_index][2])
+    bad_frame_list[current_bad_frame_index][3] = False # Just modified, reset saved flag
+
+
+def count_corrected_bad_frames():
+    count = 0
+    for bad_frame in bad_frame_list:
+        if (bad_frame[1] != 0 or bad_frame[2] != 0) and not bad_frame[3]:   # If offset modified, but not saved
+            count += 1
+    return count
 
 
 def debug_template_popup():
@@ -1807,6 +1927,7 @@ def debug_template_popup():
     global search_area_text, template_type_text, hole_pos_text, template_size_text, template_wb_proportion_text, template_threshold_text
     global left_stripe_canvas, left_stripe_stabilized_canvas, template_canvas
     global SourceDirFileList, CurrentFrame
+    global bad_frame_text, corrected_bad_frame_text, bad_frames_on_left_value, bad_frames_on_right_value
 
     if not developer_debug:
         return
@@ -1918,13 +2039,66 @@ def debug_template_popup():
     search_area_label.pack(pady=5, padx=10, anchor="center")
     search_area_text.set(f"Search Area: {HoleSearchTopLeft}, {HoleSearchBottomRight})")
 
+    #Label with current Frame details
     current_frame_text = tk.StringVar()
     current_frame_label = Label(right_frame, textvariable=current_frame_text, width=45, font=("Arial", FontSize))
     current_frame_label.pack(pady=5, padx=10, anchor="center")
     current_frame_text.set("Current:")
 
-    close_button = Button(right_frame, text="Close", command=display_template_popup_closure, font=("Arial", FontSize))
-    close_button.pack(pady=10, padx=10, anchor="center")
+    #Label with bad Frame count
+    bad_frame_text = tk.StringVar()
+    bad_frame_label = Label(right_frame, textvariable=bad_frame_text, width=45, font=("Arial", FontSize))
+    bad_frame_label.pack(pady=5, padx=10, anchor="center")
+    bad_frame_text.set("Bad frame count:")
+
+    #Label with bad Frames modified
+    corrected_bad_frame_text = tk.StringVar()
+    corrected_bad_frame_label = Label(right_frame, textvariable=corrected_bad_frame_text, width=45, font=("Arial", FontSize))
+    corrected_bad_frame_label.pack(pady=5, padx=10, anchor="center")
+    corrected_bad_frame_text.set("Corrected bad frames:")
+
+    # Frame for manual alignment buttons 
+    manual_align_frame = Frame(right_frame) #, width=50, height=50)
+    manual_align_frame.pack(anchor="center", pady=5, padx=10)   # expand=True, fill="both", 
+
+    #Label with bad frames to the left
+    bad_frames_on_left_value = tk.IntVar()
+    bad_frames_on_left_label = Label(manual_align_frame, textvariable=bad_frames_on_left_value, font=("Arial", FontSize+6))
+    bad_frames_on_left_label.grid(pady=2, padx=10, row=0, column=0, rowspan = 2)
+    bad_frames_on_left_value.set(0)
+
+    previous_frame_button = Button(manual_align_frame, text="◀◀", command=display_previous_bad_frame, font=("Arial", FontSize), width=3)
+    previous_frame_button.grid(pady=2, padx=2, row=0, column=1)
+    frame_up_button = Button(manual_align_frame, text="▲", command=shift_bad_frame_up, font=("Arial", FontSize), width=3)
+    frame_up_button.grid(pady=2, padx=2, row=0, column=2)
+    next_frame_button = Button(manual_align_frame, text="▶▶", command=display_next_bad_frame, font=("Arial", FontSize), width=3)
+    next_frame_button.grid(pady=2, padx=2, row=0, column=3)
+    frame_left_button = Button(manual_align_frame, text="◀", command=shift_bad_frame_left, font=("Arial", FontSize), width=3)
+    frame_left_button.grid(pady=2, padx=2, row=1, column=1)
+    frame_down_button = Button(manual_align_frame, text="▼", command=shift_bad_frame_down, font=("Arial", FontSize), width=3)
+    frame_down_button.grid(pady=2, padx=2, row=1, column=2)
+    frame_right_button = Button(manual_align_frame, text="▶", command=shift_bad_frame_right, font=("Arial", FontSize), width=3)
+    frame_right_button.grid(pady=2, padx=2, row=1, column=3)
+    template_popup_window.bind("<Up>", shift_bad_frame_up)
+    template_popup_window.bind("<Down>", shift_bad_frame_down)
+    template_popup_window.bind("<Left>", shift_bad_frame_left)
+    template_popup_window.bind("<Right>", shift_bad_frame_right)
+
+    #Label with bad frames to the left
+    bad_frames_on_right_value = tk.IntVar()
+    bad_frames_on_right_label = Label(manual_align_frame, textvariable=bad_frames_on_right_value, font=("Arial", FontSize+6))
+    bad_frames_on_right_label.grid(pady=2, padx=10, row=0, column=4, rowspan = 2)
+    bad_frames_on_right_value.set(0)
+
+    # Frame for save/exit buttons
+    save_exit_frame = Frame(right_frame)
+    save_exit_frame.pack(anchor="center", pady=5, padx=10)
+
+    save_button = Button(save_exit_frame, text="Save", command=save_corrected_frames, font=("Arial", FontSize))
+    save_button.pack(pady=10, padx=10, side=LEFT, anchor="center")
+
+    close_button = Button(save_exit_frame, text="Close", command=display_template_popup_closure, font=("Arial", FontSize))
+    close_button.pack(pady=10, padx=10, side=RIGHT, anchor="center")
 
     # Run a loop for the popup window
     template_popup_window.wait_window()
@@ -1934,11 +2108,11 @@ def debug_template_popup():
 
 
 def debug_template_display_info(frame_idx, threshold, top_left, move_x, move_y):
-    global current_frame_text, template_threshold_text
-
     if debug_template_match:
         current_frame_text.set(f"Current Frm:{frame_idx}, Tmp.Pos.:{top_left}, ΔX:{move_x}, ΔY:{move_y}")
         template_threshold_text.set(f"Threshold: {threshold}")
+        bad_frame_text.set(f"Bad frame count: {len(bad_frame_list)}")
+
 
 
 def debug_template_display_frame_raw(img):
@@ -1998,7 +2172,7 @@ def debug_template_display_frame(canvas, img):
             logging.error(f"Exception {e} when updating canvas")
 
 
-def scale_display_update():
+def scale_display_update(offset_x = 0, offset_y = 0):
     global win
     global frame_scale_refresh_done, frame_scale_refresh_pending
     global CurrentFrame
@@ -2029,7 +2203,7 @@ def scale_display_update():
             if perform_rotation.get():
                 img = rotate_image(img)
             if perform_stabilization.get() or debug_template_match:
-                img = stabilize_image(CurrentFrame, img, img)
+                img = stabilize_image(CurrentFrame, img, img, offset_x, offset_y)
         if perform_cropping.get():
             img = crop_image(img, CropTopLeft, CropBottomRight)
         else:
@@ -2893,7 +3067,7 @@ def calculate_frame_displacement(frame_idx, img, threshold=10, slice_width=10):
     return vertical_offset, horizontal_offset
 
 
-def stabilize_image(frame_idx, img, img_ref, img_ref_alt = None, id = -1):
+def stabilize_image(frame_idx, img, img_ref, offset_x = 0, offset_y = 0, img_ref_alt = None, id = -1):
     global SourceDirFileList
     global first_absolute_frame, StartFrame
     global HoleSearchTopLeft, HoleSearchBottomRight
@@ -2988,6 +3162,8 @@ def stabilize_image(frame_idx, img, img_ref, img_ref_alt = None, id = -1):
         # Calculate rolling average of match level
         match_level_average.add_value(match_level)
         if missing_rows > 0 or match_level < 0.9:
+            if match_level < 0.7:   # Only add really bad matches
+                bad_frame_list.append([frame_idx, 0, 0, False])
             if missing_rows > 0:
                 stabilization_bounds_alert_counter += 1
                 if stabilization_bounds_alert.get():
@@ -3001,6 +3177,8 @@ def stabilize_image(frame_idx, img, img_ref, img_ref_alt = None, id = -1):
     # Create the translation matrix using move_x and move_y (NumPy array): This is the actual stabilization
     # We double-check the check box since this function might be called just to debug template detection
     if perform_stabilization.get():
+        move_x += offset_x
+        move_y += offset_y
         # Check if frame fill is enabled, and required: Extract missing fragment
         if frame_fill_type.get() == 'fake' and ConvertLoopRunning and missing_rows > 0:
             # Perform temporary horizontal stabilization only first, to extract missing fragment
@@ -3042,11 +3220,14 @@ def stabilize_image(frame_idx, img, img_ref, img_ref_alt = None, id = -1):
                                                           borderType=cv2.BORDER_REPLICATE)
     else:
         translated_image = img
-    # Drew stabilization rectangles only for image in popup debug window to allow having it activated while encoding
+    # Draw stabilization rectangles only for image in popup debug window to allow having it activated while encoding
     if debug_template_match and top_left[1] != -1 :
         if not perform_stabilization.get():
             move_x = 0
             move_y = 0
+        else:   # Do not move rectangle when manually stabilizing frames
+            move_x -= offset_x
+            move_y -= offset_y
         left_stripe_img = get_image_left_stripe(translated_image)
         cv2.rectangle(left_stripe_img, (top_left[0] + move_x, top_left[1] + move_y),
                       (top_left[0] + template_list.get_active_size()[0] + move_x, top_left[1] + template_list.get_active_size()[1] + move_y), match_level_color_bgr(match_level), 2)
@@ -3381,6 +3562,8 @@ def start_convert():
         save_job_list()
         # Reset frames out of bounds counter
         stabilization_bounds_alert_counter = 0
+        # Clear list of bad frames
+        bad_frame_list.clear()
         # Empty FPM register list
         FPM_LastMinuteFrameTimes.clear()
         # Centralize 'frames_to_encode' update here
@@ -3517,7 +3700,7 @@ def generation_exit(success = True):
         time.sleep(2)
 
 
-def frame_encode(frame_idx, id):
+def frame_encode(frame_idx, id, do_save = True, offset_x = 0, offset_y = 0):
     global SourceDir, TargetDir
     global HdrFilesOnly , first_absolute_frame, frames_to_encode
     global FrameInputFilenamePattern, HdrSetInputFilenamePattern, FrameHdrInputFilenamePattern, FrameOutputFilenamePattern
@@ -3590,7 +3773,7 @@ def frame_encode(frame_idx, id):
         if perform_rotation.get():
             img = rotate_image(img)
         if perform_stabilization.get() or debug_template_match:
-            img = stabilize_image(frame_idx, img, img_ref, img_ref_aux, id)
+            img = stabilize_image(frame_idx, img, img_ref, offset_x, offset_y, img_ref_aux, id)
         if perform_cropping.get():
             img = crop_image(img, CropTopLeft, CropBottomRight)
         else:
@@ -3609,8 +3792,9 @@ def frame_encode(frame_idx, id):
 
         # Before we used to display every other frame, but just discovered that it makes no difference to performance
         # Instead of displaying image, we add it to a queue to be processed in main loop
-        queue_item = tuple(("processed_image", frame_idx, img, len(images_to_merge) != 0))
-        subprocess_event_queue.put(queue_item)
+        if ConvertLoopRunning:
+            queue_item = tuple(("processed_image", frame_idx, img, len(images_to_merge) != 0))
+            subprocess_event_queue.put(queue_item)
 
         if img.shape[1] % 2 == 1 or img.shape[0] % 2 == 1:
             logging.error("Target size, one odd dimension")
@@ -3618,7 +3802,7 @@ def frame_encode(frame_idx, id):
             app_status_label.config(text=status_str, fg='red')
             frame_idx = StartFrame + frames_to_encode - 1
 
-        if os.path.isdir(TargetDir):
+        if do_save and os.path.isdir(TargetDir):
             target_file = os.path.join(TargetDir, FrameOutputFilenamePattern % (first_absolute_frame + frame_idx, file_type_out))
             cv2.imwrite(target_file, img)
     if dev_debug_enabled:
@@ -3755,6 +3939,8 @@ def frame_generation_loop():
             os.rename(CsvPathName, name)
         # Stop threads
         terminate_threads(False)
+        # Sort bad frame list
+        bad_frame_list.sort(key=lambda x: x[0])
         # Generate video if requested or terminate
         if generate_video.get():
             ffmpeg_success = False
@@ -3779,6 +3965,8 @@ def frame_generation_loop():
             os.unlink(CsvPathName)  # Processing was stopped half-way, delete csv file as results are not representative
         # Stop workers
         terminate_threads(True)
+        # Sort bad frame list
+        bad_frame_list.sort(key=lambda x: x[0])
         logging.debug(f"frames_to_encode_queue.qsize = {frame_encoding_queue.qsize()}")
         logging.debug(f"subprocess_event_queue.qsize = {subprocess_event_queue.qsize()}")
         logging.debug("Exiting threads terminate")
