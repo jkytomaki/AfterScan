@@ -19,7 +19,7 @@ __author__ = 'Juan Remirez de Esparza'
 __copyright__ = "Copyright 2024, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
-__version__ = "1.12.03"
+__version__ = "1.12.04"
 __data_version__ = "1.0"
 __date__ = "2025-02-19"
 __version_highlight__ = "Option to manually correct badly stabilized frames"
@@ -101,9 +101,9 @@ logs_dir = os.path.join(script_dir, "Logs")
 if not os.path.exists(logs_dir):
     os.mkdir(logs_dir)
 copy_templates_from_temp = False
-templates_dir = os.path.join(script_dir, "Templates")
-if not os.path.exists(templates_dir):
-    os.mkdir(templates_dir)
+resources_dir = os.path.join(script_dir, "Resources")
+if not os.path.exists(resources_dir):
+    os.mkdir(resources_dir)
     copy_templates_from_temp = True
 template_list = None
 hole_template_filename_r8 = os.path.join(script_dir, "Pattern.R8.jpg")
@@ -128,7 +128,7 @@ default_project_config = {
     "CurrentFrame": 0,
     "EncodeAllFrames": True,
     "FramesToEncode": "All",
-    "StabilizationThreshold": "220",
+    "StabilizationThreshold": 220.0,
     "PerformStabilization": False,
     "skip_frame_regeneration": False,
     "VideoFilename": "",
@@ -207,9 +207,10 @@ RectangleWindowTitle = ""
 RotationAngle = 0.0
 StabilizeAreaDefined = False
 StabilizationThreshold = 220.0
+StabilizationThreshold_saved = StabilizationThreshold
 stabilization_bounds_alert_counter = 0
 hole_search_area_adjustment_pending = False
-bad_frame_list = []     # List of tuples (4 elements each: Frame index, x offset, y offset, is frame saved)
+bad_frame_list = []     # List of tuples (5 elements each: Frame index, x offset, y offset, stabilization threshold, is frame saved)
 current_bad_frame_index = -1    # No list exist yet
 CropAreaDefined = False
 RectangleTopLeft = (0, 0)
@@ -703,6 +704,9 @@ def save_project_config():
     update_project_settings()
     save_project_settings()
 
+    if len(bad_frame_list) > 0:
+        save_bad_frame_list()
+
 def load_project_config():
     global SourceDir
     global project_config, project_config_from_file
@@ -730,6 +734,8 @@ def load_project_config():
 
     for item in project_config:
         logging.debug("%s=%s", item, str(project_config[item]))
+
+    load_bad_frame_list()
 
     # Allow to determine source of current project, to avoid
     # saving it in case of batch processing
@@ -821,13 +827,13 @@ def decode_project_config():
         rotation_angle_str.set(RotationAngle)
     if ExpertMode:
         if 'StabilizationThreshold' in project_config:
-            StabilizationThreshold = project_config["StabilizationThreshold"]
+            StabilizationThreshold = float(project_config["StabilizationThreshold"])
             stabilization_threshold_str.set(StabilizationThreshold)
         else:
-            StabilizationThreshold = 220
+            StabilizationThreshold = 220.0
             stabilization_threshold_str.set(StabilizationThreshold)
     else:
-        StabilizationThreshold = 220
+        StabilizationThreshold = 220.0
 
     if 'LowContrastCustomTemplate' in project_config:
         low_contrast_custom_template.set(project_config["LowContrastCustomTemplate"])
@@ -839,10 +845,7 @@ def decode_project_config():
         if 'CustomTemplateName' in project_config:  # Load name if it exists, otherwise assign default
             template_name = project_config["CustomTemplateName"]
         else:
-            if 'FrameFrom' in project_config and 'FrameTo' in project_config:
-                template_name = f"{os.path.split(SourceDir)[-1]}-{project_config['FrameFrom']}-{project_config['FrameTo']}"
-            else:
-                template_name = f"{os.path.split(SourceDir)[-1]}-all"
+            template_name = f"{os.path.split(SourceDir)[-1]}"
         if 'CustomTemplateExpectedPos' in project_config:
             expected_hole_template_pos_custom = project_config["CustomTemplateExpectedPos"]
         else:
@@ -851,7 +854,7 @@ def decode_project_config():
             full_path_template_filename = project_config["CustomTemplateFilename"]
         else:
             template_filename = f"Pattern.custom.{template_name}.jpg"
-            full_path_template_filename = os.path.join(templates_dir, template_filename)
+            full_path_template_filename = os.path.join(resources_dir, template_filename)
         if not os.path.exists(full_path_template_filename):
             tk.messagebox.showwarning(
                 "Template in project invalid",
@@ -1053,7 +1056,7 @@ def job_list_add_current():
         job_list[entry_name] = {'project': project_config.copy(), 'done': False, 'attempted': False}
         # If a custom pattern is used, copy it with the name of the job, and change it in the joblist/project item
         if template_list.get_active_type() == 'custom' and os.path.isfile(template_list.get_active_filename()):
-            CustomTemplateDir = os.path.dirname(template_list.get_active_filename())    # should be templates_dir, but better be safe
+            CustomTemplateDir = os.path.dirname(template_list.get_active_filename())    # should be resources_dir, but better be safe
             # Maybe we should check here if a video filename has been defined
             TargetTemplateFile = os.path.join(CustomTemplateDir, os.path.splitext(job_list[entry_name]['project']['VideoFilename'])[0]+'.jpg' )
             if template_list.get_active_filename() != TargetTemplateFile:
@@ -1161,6 +1164,29 @@ def load_job_list():
     else:   # No job list file. Set empty config to force defaults
         job_list = {}
 
+
+def save_bad_frame_list():
+    bad_frame_list_name = f"{os.path.split(SourceDir)[-1]}"
+    # Set filename
+    bad_frame_list_filename = f"bad_frame_list.{bad_frame_list_name}.json"
+    full_path_bad_frame_list_filename = os.path.join(resources_dir, bad_frame_list_filename)
+
+    # Serialize (save) the list to a file
+    with open(full_path_bad_frame_list_filename, "w") as file:
+        json.dump(bad_frame_list, file)
+
+
+def load_bad_frame_list():
+    global bad_frame_list
+    bad_frame_list_name = f"{os.path.split(SourceDir)[-1]}"
+    # Set filename
+    bad_frame_list_filename = f"bad_frame_list.{bad_frame_list_name}.json"
+    full_path_bad_frame_list_filename = os.path.join(resources_dir, bad_frame_list_filename)
+
+    # To read (deserialize) the list back
+    if os.path.isfile(full_path_bad_frame_list_filename):  # If hdr frames exist, add them
+        with open(full_path_bad_frame_list_filename, "r") as file:
+            bad_frame_list = json.load(file)
 
 
 def start_processing_job_list():
@@ -1799,23 +1825,23 @@ def set_resolution(selected):
 
 
 def display_template_popup_closure():
-    global debug_template_match
+    global debug_template_match, StabilizationThreshold
 
-    bad_corrected = count_corrected_bad_frames()
-
-    if bad_corrected == 0 or tk.messagebox.askyesno("Corrected frames exist", f"There are {bad_corrected} corrected frames.\r\nAre you sure you want to exit without saving?"):
-        debug_template_match = False
-        display_template_popup.set(False)
-        general_config["TemplatePopupWindowPos"] = template_popup_window.geometry()
-        template_popup_window.destroy()
+    StabilizationThreshold = StabilizationThreshold_saved   # Restored original value
+    debug_template_match = False
+    display_template_popup.set(False)
+    general_config["TemplatePopupWindowPos"] = template_popup_window.geometry()
+    template_popup_window.destroy()
 
 
 def save_corrected_frames_loop(count_processed):
+    global StabilizationThreshold
     count_this_slice = 0
     for bad_frame in bad_frame_list:
-        if (bad_frame[1] != 0 or bad_frame[2] != 0) and not bad_frame[3]:
+        if (bad_frame[1] != 0 or bad_frame[2] != 0 or bad_frame[3] != StabilizationThreshold_saved) and not bad_frame[4]:
+            StabilizationThreshold = bad_frame[3]
             frame_encode(bad_frame[0], -1, True, bad_frame[1], bad_frame[2])
-            bad_frame[3] = True # Saved flag
+            bad_frame[4] = True # Saved flag
             count_this_slice += 1
             count_processed += 1
             break
@@ -1833,7 +1859,7 @@ def save_corrected_frames():
     count = 0
 
     for bad_frame in bad_frame_list:
-        if (bad_frame[1] != 0 or bad_frame[2] != 0) and not bad_frame[3]:
+        if (bad_frame[1] != 0 or bad_frame[2] != 0) and not bad_frame[4]:
             count += 1
 
     if count == 0:
@@ -1843,10 +1869,7 @@ def save_corrected_frames():
         template_popup_window.config(cursor="watch")  # Set cursor to hourglass
         win.update()
         template_popup_window.update()
-        win.after(100, save_corrected_frames_loop, 0)  # Start processing in chunks
-
-
-    
+        win.after(100, save_corrected_frames_loop, 0)  # Start processing in chunks 
 
 
 def find_closest_bad_frame_index(frame_idx):
@@ -1898,28 +1921,43 @@ def debug_template_popup_refresh():
     frame_selected.set(CurrentFrame)
     frame_slider.set(CurrentFrame)
     scale_display_update(x, y)
-    corrected_bad_frame_text.set(f"Corrected bad frames: {count_corrected_bad_frames()}")
-    bad_frames_on_left_value.set(current_bad_frame_index)
-    bad_frames_on_right_value.set(len(bad_frame_list)-current_bad_frame_index-1)
+    if debug_template_match:
+        corrected_bad_frame_text.set(f"Corrected bad frames: {count_corrected_bad_frames()}")
+        bad_frames_on_left_value.set(current_bad_frame_index)
+        bad_frames_on_right_value.set(len(bad_frame_list)-current_bad_frame_index-1)
 
 
 def display_previous_bad_frame():
-    global current_bad_frame_index
+    global current_bad_frame_index, StabilizationThreshold
 
     if current_bad_frame_index == -1:
         return
     if current_bad_frame_index > 0:
+        if StabilizationThreshold != StabilizationThreshold_saved:
+            bad_frame_list[current_bad_frame_index][3] = StabilizationThreshold # Save threshold before moving
+            bad_frame_list[current_bad_frame_index][4] = False  # Not saved yet
         current_bad_frame_index -= 1
+        # if not bad_frame_list[current_bad_frame_index][4]:  # If not saved yet, recover tunes threshold, otherwise keep previous (faster when processign consecutive frames)
+        if bad_frame_list[current_bad_frame_index][3] != StabilizationThreshold_saved:
+            StabilizationThreshold = bad_frame_list[current_bad_frame_index][3] # Recover saved threshold
+            threshold_value.set(StabilizationThreshold)
         debug_template_popup_refresh()
 
 
 def display_next_bad_frame():
-    global current_bad_frame_index
+    global current_bad_frame_index, StabilizationThreshold
 
     if current_bad_frame_index == -1:
         return
     if current_bad_frame_index < len(bad_frame_list)-1:
+        if StabilizationThreshold != StabilizationThreshold_saved:
+            bad_frame_list[current_bad_frame_index][3] = StabilizationThreshold # Save threshold before moving
+            bad_frame_list[current_bad_frame_index][4] = False  # Not saved yet
         current_bad_frame_index += 1
+        #if not bad_frame_list[current_bad_frame_index][4]:  # If not saved yet, recover tuned threshold, otherwise keep previous (faster when processign consecutive frames)
+        if bad_frame_list[current_bad_frame_index][3] != StabilizationThreshold_saved:
+            StabilizationThreshold = bad_frame_list[current_bad_frame_index][3] # Recover saved threshold
+            threshold_value.set(StabilizationThreshold)
         debug_template_popup_refresh()
 
 
@@ -1931,7 +1969,7 @@ def shift_bad_frame_up(event = None):
     
     bad_frame_list[current_bad_frame_index][2] -= 5 if event == None else 1
     frame_encode(CurrentFrame, -1, False, bad_frame_list[current_bad_frame_index][1], bad_frame_list[current_bad_frame_index][2])
-    bad_frame_list[current_bad_frame_index][3] = False # Just modified, reset saved flag
+    bad_frame_list[current_bad_frame_index][4] = False # Just modified, reset saved flag
 
 
 
@@ -1941,7 +1979,7 @@ def shift_bad_frame_down(event = None):
         return
     bad_frame_list[current_bad_frame_index][2] += 5 if event == None else 1
     frame_encode(CurrentFrame, -1, False, bad_frame_list[current_bad_frame_index][1], bad_frame_list[current_bad_frame_index][2])
-    bad_frame_list[current_bad_frame_index][3] = False # Just modified, reset saved flag
+    bad_frame_list[current_bad_frame_index][4] = False # Just modified, reset saved flag
 
 
 def shift_bad_frame_left(event = None):
@@ -1950,7 +1988,7 @@ def shift_bad_frame_left(event = None):
         return
     bad_frame_list[current_bad_frame_index][1] -= 5 if event == None else 1
     frame_encode(CurrentFrame, -1, False, bad_frame_list[current_bad_frame_index][1], bad_frame_list[current_bad_frame_index][2])
-    bad_frame_list[current_bad_frame_index][3] = False # Just modified, reset saved flag
+    bad_frame_list[current_bad_frame_index][4] = False # Just modified, reset saved flag
 
 
 def shift_bad_frame_right(event = None):
@@ -1959,15 +1997,47 @@ def shift_bad_frame_right(event = None):
         return
     bad_frame_list[current_bad_frame_index][1] += 5 if event == None else 1
     frame_encode(CurrentFrame, -1, False, bad_frame_list[current_bad_frame_index][1], bad_frame_list[current_bad_frame_index][2])
-    bad_frame_list[current_bad_frame_index][3] = False # Just modified, reset saved flag
+    bad_frame_list[current_bad_frame_index][4] = False # Just modified, reset saved flag
 
 
 def count_corrected_bad_frames():
     count = 0
     for bad_frame in bad_frame_list:
-        if (bad_frame[1] != 0 or bad_frame[2] != 0) and not bad_frame[3]:   # If offset modified, but not saved
+        if (bad_frame[1] != 0 or bad_frame[2] != 0) and not bad_frame[4]:   # If offset modified, but not saved
             count += 1
     return count
+
+
+def bad_frames_increase_threshold(value):
+    global StabilizationThreshold
+    StabilizationThreshold += float(value)
+    threshold_value.set(StabilizationThreshold)
+    debug_template_popup_refresh()
+    bad_frame_list[current_bad_frame_index][4] = False
+
+
+def bad_frames_increase_threshold_1():
+    bad_frames_increase_threshold(1)
+
+
+def bad_frames_increase_threshold_5():
+    bad_frames_increase_threshold(5)
+
+
+def bad_frames_decrease_threshold(value):
+    global StabilizationThreshold
+    StabilizationThreshold -= float(value)
+    threshold_value.set(StabilizationThreshold)
+    debug_template_popup_refresh()
+    bad_frame_list[current_bad_frame_index][4] = False
+
+
+def bad_frames_decrease_threshold_1():
+    bad_frames_decrease_threshold(1)
+
+
+def bad_frames_decrease_threshold_5():
+    bad_frames_decrease_threshold(5)
 
 
 def debug_template_popup_update_widgets(status):
@@ -1982,7 +2052,12 @@ def debug_template_popup_update_widgets(status):
         close_button.config(state=status)
         bad_frames_on_left_label.config(state=status)
         bad_frames_on_right_label.config(state=status)
-
+        decrease_threshold_button.config_5(state=status)
+        decrease_threshold_button.config_1(state=status)
+        threshold_label.config(state=status)
+        increase_threshold_button.config_1(state=status)
+        increase_threshold_button.config_5(state=status)
+        new_threshold_stabilize_button.config(state=status)
 
 def debug_template_popup():
     global win
@@ -2000,6 +2075,9 @@ def debug_template_popup():
     global next_frame_button, previous_frame_button, save_button, close_button
     global bad_frames_on_left_label, bad_frames_on_right_label
     global current_bad_frame_index
+    global StabilizationThreshold_saved, threshold_value
+    global decrease_threshold_button_1, threshold_label, increase_threshold_button_1, new_threshold_stabilize_button
+    global decrease_threshold_button_5, increase_threshold_button_5
 
     if not developer_debug:
         return
@@ -2010,6 +2088,8 @@ def debug_template_popup():
         return
 
     debug_template_match = True
+
+    StabilizationThreshold_saved = StabilizationThreshold   # To be restored on exit
 
     template_popup_window = Toplevel(win)
     template_popup_window.title("Manual stabilization popup")
@@ -2180,17 +2260,44 @@ def debug_template_popup():
     bad_frames_on_right_value.set(0)
     as_tooltips.add(bad_frames_on_right_label, "Number of badly-stabilized frames after the one currently selected")
 
+    # Frame for custom threshold buttons
+    custom_threshold_frame = Frame(right_frame)
+    custom_threshold_frame.pack(anchor="center", pady=5, padx=10)
+
+    decrease_threshold_button_5 = Button(custom_threshold_frame, text="◀◀", command=bad_frames_decrease_threshold_5, font=("Arial", FontSize))
+    decrease_threshold_button_5.pack(pady=10, padx=10, side=LEFT, anchor="center")
+    as_tooltips.add(decrease_threshold_button_5, "Decrease threshold value by 5.")
+
+    decrease_threshold_button_1 = Button(custom_threshold_frame, text="◀", command=bad_frames_decrease_threshold_1, font=("Arial", FontSize))
+    decrease_threshold_button_1.pack(pady=10, padx=10, side=LEFT, anchor="center")
+    as_tooltips.add(decrease_threshold_button_1, "Decrease threshold value by 1.")
+
+    #Label with threshold value
+    threshold_value = tk.IntVar()
+    threshold_label = Label(custom_threshold_frame, textvariable=threshold_value, font=("Arial", FontSize+6))
+    threshold_label.pack(pady=10, padx=10, side=LEFT, anchor="center")
+    threshold_value.set(StabilizationThreshold)
+    as_tooltips.add(threshold_label, "Current threshold")
+
+    increase_threshold_button_1 = Button(custom_threshold_frame, text="▶", command=bad_frames_increase_threshold_1, font=("Arial", FontSize))
+    increase_threshold_button_1.pack(pady=10, padx=10, side=LEFT, anchor="center")
+    as_tooltips.add(increase_threshold_button_1, "Increase threshold value by 1.")
+
+    increase_threshold_button_5 = Button(custom_threshold_frame, text="▶▶", command=bad_frames_increase_threshold_5, font=("Arial", FontSize))
+    increase_threshold_button_5.pack(pady=10, padx=10, side=LEFT, anchor="center")
+    as_tooltips.add(increase_threshold_button_1, "Increase threshold value by 5.")
+
     # Frame for save/exit buttons
     save_exit_frame = Frame(right_frame)
     save_exit_frame.pack(anchor="center", pady=5, padx=10)
 
-    save_button = Button(save_exit_frame, text="Save", command=save_corrected_frames, font=("Arial", FontSize))
+    save_button = Button(save_exit_frame, text="Generate", command=save_corrected_frames, font=("Arial", FontSize))
     save_button.pack(pady=10, padx=10, side=LEFT, anchor="center")
-    as_tooltips.add(save_button, "Save frames adjusted by user to target folder. Beware!!! Make sure you select 'Skip FrameRegeneration' when generating the video, otherwise the manual adjustement will be lost.")
+    as_tooltips.add(save_button, "Generate new frames, with user adjustments, to target folder. Beware!!! Make sure you select 'Skip FrameRegeneration' when generating the video, otherwise the manual adjustement will be lost.")
 
     close_button = Button(save_exit_frame, text="Close", command=display_template_popup_closure, font=("Arial", FontSize))
     close_button.pack(pady=10, padx=10, side=RIGHT, anchor="center")
-    as_tooltips.add(save_button, "Close this window")
+    as_tooltips.add(close_button, "Close this window")
 
     # Initialize bad frame index
     if current_bad_frame_index == -1:
@@ -2387,7 +2494,7 @@ def detect_film_type():
     for frame_to_check in FramesToCheck:
         img = cv2.imread(SourceDirFileList[frame_to_check], cv2.IMREAD_UNCHANGED)
         img_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        img_bw = cv2.threshold(img_gray, 220, 255, cv2.THRESH_BINARY)[1]
+        img_bw = cv2.threshold(img_gray, StabilizationThreshold, 255, cv2.THRESH_BINARY)[1]
         search_img = get_image_left_stripe(img_bw)
         result = cv2.matchTemplate(search_img, template_1, cv2.TM_CCOEFF_NORMED)
         (minVal, maxVal, minLoc, maxLoc) = cv2.minMaxLoc(result)
@@ -2722,13 +2829,10 @@ def select_custom_template():
 
     # First, define custom template name and filename in case it needs to be deleted
     # Template Name = Last folder in the path, plus Frame From,  Frame to it not encoding all
-    if encode_all_frames.get():
-        template_name = f"{os.path.split(SourceDir)[-1]}-all"
-    else:
-        template_name = f"{os.path.split(SourceDir)[-1]}-{frame_from_str.get()}-{frame_to_str.get()}"
+    template_name = f"{os.path.split(SourceDir)[-1]}"
     # Set filename
     template_filename = f"Pattern.custom.{template_name}.jpg"
-    full_path_template_filename = os.path.join(templates_dir, template_filename)
+    full_path_template_filename = os.path.join(resources_dir, template_filename)
 
     if template_list.get_active_type() == 'custom':
         if os.path.isfile(template_list.get_active_filename()):
@@ -2872,9 +2976,9 @@ def match_template(frame_idx, template, img):
     #img_final = cv2.threshold(img_gray, best_thres, 255, cv2.THRESH_BINARY)[1]  #THRESH_TRUNC, THRESH_BINARY
     if low_contrast_custom_template.get():
         # Apply Otsu's thresholding
-        best_thres, img_final = cv2.threshold(img_gray, 220, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        best_thres, img_final = cv2.threshold(img_gray, StabilizationThreshold, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     else:
-        best_thres, img_final = cv2.threshold(img_gray, 220, 255, cv2.THRESH_BINARY)
+        best_thres, img_final = cv2.threshold(img_gray, StabilizationThreshold, 255, cv2.THRESH_BINARY)
 
     #img_edges = cv2.Canny(image=img_bw, threshold1=100, threshold2=1)  # Canny Edge Detection
     aux = cv2.matchTemplate(img_final, template, cv2.TM_CCOEFF_NORMED)
@@ -3110,7 +3214,7 @@ def get_target_position(frame_idx, img, orientation='v', threshold=10, slice_wid
             sliced_image = img[pos:pos+slice_width, :int(width*0.15)]    # Don't need a full horizontal slice, holes must be in the leftmost 15%
 
         # Convert to pure black and white (binary image)
-        _, binary_img = cv2.threshold(sliced_image, 220, 255, cv2.THRESH_BINARY)
+        _, binary_img = cv2.threshold(sliced_image, StabilizationThreshold, 255, cv2.THRESH_BINARY)
 
         # Sum along the width to get a 1D array representing white pixels at each height
         height_profile = np.sum(binary_img, axis=1 if orientation == 'v' else 0)
@@ -3291,7 +3395,7 @@ def stabilize_image(frame_idx, img, img_ref, offset_x = 0, offset_y = 0, img_ref
         match_level_average.add_value(match_level)
         if missing_rows > 0 or match_level < 0.9:
             if match_level < 0.7:   # Only add really bad matches
-                bad_frame_list.append([frame_idx, 0, 0, False])
+                bad_frame_list.append([frame_idx, 0, 0, StabilizationThreshold, False])
             if missing_rows > 0:
                 stabilization_bounds_alert_counter += 1
                 if stabilization_bounds_alert.get():
@@ -3681,9 +3785,6 @@ def start_convert():
         save_job_list()
         # Reset frames out of bounds counter
         stabilization_bounds_alert_counter = 0
-        # Clear list of bad frames
-        bad_frame_list.clear()
-        current_bad_frame_index = -1
         # Empty FPM register list
         FPM_LastMinuteFrameTimes.clear()
         # Centralize 'frames_to_encode' update here
@@ -3737,6 +3838,9 @@ def start_convert():
         ConvertLoopRunning = True
 
         if not generate_video.get() or not skip_frame_regeneration.get():
+            # Clear list of bad frames
+            bad_frame_list.clear()
+            current_bad_frame_index = -1
             # Check if CSV option selected
             if GenerateCsv:
                 CsvFilename = video_filename_str.get()
@@ -3744,7 +3848,7 @@ def start_convert():
                 if name == "":  # Assign default if no filename
                     name = "AfterScan-"
                 CsvFilename = datetime.now().strftime("%Y_%m_%d-%H-%M-%S_") + name + '.csv'
-                CsvPathName = templates_dir
+                CsvPathName = resources_dir
                 if CsvPathName == "":
                     CsvPathName = os.getcwd()
                 CsvPathName = os.path.join(CsvPathName, CsvFilename)
@@ -5479,7 +5583,7 @@ def main(argv):
 
     # If Templates folder do not exist (introduced with AfterScan 1.12), copy over files from temp folder
     if copy_templates_from_temp:
-        copy_jpg_files(temp_dir, templates_dir)
+        copy_jpg_files(temp_dir, resources_dir)
 
     ui_init_done = True
 
