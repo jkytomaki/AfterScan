@@ -19,9 +19,9 @@ __author__ = 'Juan Remirez de Esparza'
 __copyright__ = "Copyright 2024, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
-__version__ = "1.12.00"
+__version__ = "1.12.01"
 __data_version__ = "1.0"
-__date__ = "2025-02-18"
+__date__ = "2025-02-19"
 __version_highlight__ = "Option to manually correct badly stabilized frames"
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
@@ -2155,7 +2155,7 @@ def debug_template_popup():
 
     close_button = Button(save_exit_frame, text="Close", command=display_template_popup_closure, font=("Arial", FontSize))
     close_button.pack(pady=10, padx=10, side=RIGHT, anchor="center")
-    close_button.add(save_button, "Close this window")
+    as_tooltips.add(save_button, "Close this window")
 
     # Run a loop for the popup window
     template_popup_window.wait_window()
@@ -2671,7 +2671,6 @@ def select_custom_template():
     global temp_dir
     global low_contrast_custom_template, StabilizationThreshold
 
-
     # First, define custom template name and filename in case it needs to be deleted
     # Template Name = Last folder in the path, plus Frame From,  Frame to it not encoding all
     if encode_all_frames.get():
@@ -2707,6 +2706,10 @@ def select_custom_template():
             if os.path.isfile(file3):  # If hdr frames exist, add them
                 file = file3
             img = cv2.imread(file, cv2.IMREAD_UNCHANGED)
+            ### test to stabilize custom template itself usign simple algorithm
+            move_x, move_y = calculate_frame_displacement_simple(CurrentFrame, img)
+            img = shift_image(img, img.shape[1], img.shape[0], move_x, move_y)
+
             img = crop_image(img, RectangleTopLeft, RectangleBottomRight)
             img_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
@@ -3019,8 +3022,6 @@ def rotate_image(img):
 def get_target_position(frame_idx, img, orientation='v', threshold=10, slice_width=10):
     global draw_capture_canvas
 
-    done = False
-
     # Get dimensions of the binary image
     height, width, _ = img.shape
 
@@ -3065,14 +3066,14 @@ def get_target_position(frame_idx, img, orientation='v', threshold=10, slice_wid
         height_profile = np.sum(binary_img, axis=1 if orientation == 'v' else 0)
         
         # Find where the sum is non-zero (white) for S8 or horizontal search, or zero (black) for R8
-        if film_type.get() == 'S8' or orientation == 'h':
-            slice_values = np.where(height_profile > 0)[0]
-        else:
+        if (film_type.get() == 'R8' and orientation == 'v'):
             slice_values = np.where(height_profile == 0)[0]
-        
+        else:
+            slice_values = np.where(height_profile > 0)[0]
+
         areas = []
         start = None
-        min_gap_size = int(height*0.08 if orientation == 'v' else 0.05)  # Determine minimum hole size depending on the orientation
+        min_gap_size = int((height*0.08) if orientation == 'v' else (width*0.05))  # Determine minimum hole size depending on the orientation
         previous = None
         for i in slice_values:
             if start is None:
@@ -3096,21 +3097,20 @@ def get_target_position(frame_idx, img, orientation='v', threshold=10, slice_wid
                 bigger = end-start
                 result = (start + end) // 2 if orientation == 'v' else end
 
-        if orientation == 'v':
-            offset = vertical_middle-result   # Return offset of the center of the biggest area with respect to the frame enter
-            if abs(offset) > 300:
-                logging.warning(f"Frame {frame_idx}: Vertical offset too big {offset}.")
-            break
+    if orientation == 'v':
+        offset = vertical_middle-result   # Return offset of the center of the biggest area with respect to the frame enter
+        if abs(offset) > 300:
+            logging.warning(f"Frame {frame_idx}: Vertical offset too big {offset}.")
+        ###break
+    else:
+        offset = int(width*0.08) - result   # Return offset of the hole vertical edge with respect to the expected position
+        # Difference between actual horizontal offset and average one should be smaller than 30 pixels (not much horizontal movement expected)
+        if horizontal_offset_average.get_average() is not None and abs(horizontal_offset_average.get_average()-offset) > 30:
+            logging.warning(f"Frame {frame_idx}: Too much deviation of horizontal offset {offset}, respect to average {int(horizontal_offset_average.get_average())}.")
+            offset = horizontal_offset_average.get_average()
         else:
-            offset = int(width*0.05) - result   # Return offset of the hole vertical edge with respect to the expected position
-            # Difference between actual horizontal offset and average one should be smaller than 30 pixels (not much horizontal movement expected)
-            if horizontal_offset_average.get_average() is not None and abs(horizontal_offset_average.get_average()-offset) > 30:
-                logging.warning(f"Frame {frame_idx}: Too much deviation of horizontal offset {offset}, respect to average {int(horizontal_offset_average.get_average())}.")
-                offset = horizontal_offset_average.get_average()
-            else:
-                horizontal_offset_average.add_value(offset)
-                break
-
+            horizontal_offset_average.add_value(offset)
+            ###break
     return int(offset) # if orientation == 'v' else 0
 
 
@@ -3174,6 +3174,15 @@ def calculate_frame_displacement_with_templates(frame_idx, img_ref, img_ref_alt 
         debug_template_display_info(frame_idx, thres, top_left, move_x, move_y)
 
         return move_x, move_y, top_left, match_level
+
+
+def shift_image(img, width, height, move_x, move_y):
+    translation_matrix = np.array([
+        [1, 0, move_x],
+        [0, 1, move_y]
+    ], dtype=np.float32)
+    # Apply the translation to the image
+    return cv2.warpAffine(src=img, M=translation_matrix, dsize=(width, height))
 
 
 def stabilize_image(frame_idx, img, img_ref, offset_x = 0, offset_y = 0, img_ref_alt = None, id = -1):
@@ -3248,25 +3257,13 @@ def stabilize_image(frame_idx, img, img_ref, offset_x = 0, offset_y = 0, img_ref
         # Check if frame fill is enabled, and required: Extract missing fragment
         if frame_fill_type.get() == 'fake' and ConvertLoopRunning and missing_rows > 0:
             # Perform temporary horizontal stabilization only first, to extract missing fragment
-            translation_matrix = np.array([
-                [1, 0, move_x],
-                [0, 1, 0]
-            ], dtype=np.float32)
-            # Apply the translation to the image
-            translated_image = cv2.warpAffine(src=img, M=translation_matrix,
-                                              dsize=(width, height))
+            translated_image = shift_image(img, width, height, move_x, 0)
             if missing_top < 0:
                 missing_fragment = translated_image[CropBottomRight[1]-missing_rows:CropBottomRight[1],0:width]
             elif missing_bottom < 0:
                 missing_fragment = translated_image[CropTopLeft[1]:CropTopLeft[1]+missing_rows, 0:width]
 
-        translation_matrix = np.array([
-            [1, 0, move_x],
-            [0, 1, move_y]
-        ], dtype=np.float32)
-        # Apply the translation to the image
-        translated_image = cv2.warpAffine(src=img, M=translation_matrix,
-                                          dsize=(width, height))
+        translated_image = shift_image(img, width, height, move_x, move_y)
         # Check if frame fill is enabled, and required: Add missing fragment
         # Check if there is a gap in the frame, if so, and one of the 'fill' functions is enabled, fill accordingly
         if missing_rows > 0 and ConvertLoopRunning:
@@ -3287,7 +3284,7 @@ def stabilize_image(frame_idx, img, img_ref, offset_x = 0, offset_y = 0, img_ref
     else:
         translated_image = img
     # Draw stabilization rectangles only for image in popup debug window to allow having it activated while encoding
-    if debug_template_match and top_left[1] != -1 :
+    if not use_simple_stabilization and debug_template_match and top_left[1] != -1 :
         if not perform_stabilization.get():
             move_x = 0
             move_y = 0
