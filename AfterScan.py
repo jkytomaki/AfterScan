@@ -19,7 +19,7 @@ __author__ = 'Juan Remirez de Esparza'
 __copyright__ = "Copyright 2024, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
-__version__ = "1.12.01"
+__version__ = "1.12.02"
 __data_version__ = "1.0"
 __date__ = "2025-02-19"
 __version_highlight__ = "Option to manually correct badly stabilized frames"
@@ -1938,16 +1938,6 @@ def count_corrected_bad_frames():
     return count
 
 
-def reset_bad_frame_to_original_position():
-    frame_idx = bad_frame_list[current_bad_frame_index][0]
-    file = SourceDirFileList[frame_idx]
-    img = cv2.imread(file, cv2.IMREAD_UNCHANGED)    
-    move_x, move_y , _, _ = calculate_frame_displacement_with_templates(frame_idx, img)
-    bad_frame_list[current_bad_frame_index][1] = -move_x
-    bad_frame_list[current_bad_frame_index][2] = -move_y
-    frame_encode(frame_idx, -1, False, bad_frame_list[current_bad_frame_index][1], bad_frame_list[current_bad_frame_index][2])
-    bad_frame_list[current_bad_frame_index][3] = False # Just modified, reset saved flag
-
 def debug_template_popup():
     global win
     global template_list
@@ -2133,15 +2123,10 @@ def debug_template_popup():
     template_popup_window.bind("<Left>", shift_bad_frame_left)
     template_popup_window.bind("<Right>", shift_bad_frame_right)
 
-    # Button to reset frame to original position (no stabilization)
-    reset_frame_button = Button(manual_align_frame, text="Reset", command=reset_bad_frame_to_original_position, font=("Arial", FontSize+2))
-    reset_frame_button.grid(pady=2, padx=2, row=0, column=4, rowspan = 2, sticky="nsew")
-    as_tooltips.add(reset_frame_button, "Return current frame to original position (before automatic stabilization)")
-
     #Label with bad frames to the left
     bad_frames_on_right_value = tk.IntVar()
     bad_frames_on_right_label = Label(manual_align_frame, textvariable=bad_frames_on_right_value, font=("Arial", FontSize+6))
-    bad_frames_on_right_label.grid(pady=2, padx=10, row=0, column=5, rowspan = 2)
+    bad_frames_on_right_label.grid(pady=2, padx=10, row=0, column=4, rowspan = 2)
     bad_frames_on_right_value.set(0)
     as_tooltips.add(bad_frames_on_right_label, "Number of badly-stabilized frames after the one currently selected")
 
@@ -2156,6 +2141,9 @@ def debug_template_popup():
     close_button = Button(save_exit_frame, text="Close", command=display_template_popup_closure, font=("Arial", FontSize))
     close_button.pack(pady=10, padx=10, side=RIGHT, anchor="center")
     as_tooltips.add(save_button, "Close this window")
+
+    # Refresh template to have the alignment helper lines displayed
+    debug_template_refresh_template()
 
     # Run a loop for the popup window
     template_popup_window.wait_window()
@@ -2200,11 +2188,15 @@ def debug_template_refresh_template():
         hole_template_pos = template_list.get_active_position()
         ratio = 0.33  # Reduce template to one third
         aux = resize_image(template_list.get_active_template(), ratio)
+        _, top, bottom = get_target_position(0, aux, 'v')  # get positions to draw template limits
         template_canvas.config(width=int(template_list.get_active_size()[0]*ratio))
         template_canvas.delete('all')
         DisplayableImage = ImageTk.PhotoImage(Image.fromarray(aux))
         template_canvas.create_image(0, int(hole_template_pos[1] * 0.33), anchor=NW, image=DisplayableImage)
         template_canvas.image = DisplayableImage
+        # Draw a line (start x1, y1, end x2, y2)
+        template_canvas.create_line(0, int(hole_template_pos[1] * 0.33) + top, aux.shape[1], int(hole_template_pos[1] * 0.33) + top, fill="green", width=1)
+        template_canvas.create_line(0, int(hole_template_pos[1] * 0.33) + bottom, aux.shape[1], int(hole_template_pos[1] * 0.33) + bottom, fill="green", width=1)
         hole_pos_text.set(f"Expected template pos: {hole_template_pos}")
         template_type_text.set(f"Template type: {template_list.get_active_type()}")
         template_size_text.set(f"Template Size: {template_list.get_active_size()}")
@@ -2504,11 +2496,7 @@ def select_rectangle_area(is_cropping=False):
     # work_image = np.zeros((512,512,3), np.uint8)
     base_image = np.copy(work_image)
     window_visible = 1
-    cv2.namedWindow(RectangleWindowTitle, cv2.WINDOW_GUI_NORMAL)
-    # Force the window to have focus (otherwise it won't take any keys)
-    # No valid method has been found so far to force the opencv to hav efocus. Apparently it is not simple
-    cv2.setWindowProperty(RectangleWindowTitle,cv2.WND_PROP_FULLSCREEN,cv2.WINDOW_FULLSCREEN)
-    cv2.setWindowProperty(RectangleWindowTitle,cv2.WND_PROP_FULLSCREEN,cv2.WINDOW_NORMAL)
+    cv2.namedWindow(RectangleWindowTitle, cv2.WINDOW_GUI_NORMAL | cv2.WINDOW_NORMAL)
 
     # Capture mouse events
     cv2.setMouseCallback(RectangleWindowTitle, draw_rectangle)
@@ -3023,7 +3011,8 @@ def get_target_position(frame_idx, img, orientation='v', threshold=10, slice_wid
     global draw_capture_canvas
 
     # Get dimensions of the binary image
-    height, width, _ = img.shape
+    height = img.shape[0]
+    width = img.shape[1]
 
     # Set horizontal rows to make several atempts if required
     pos_list = []
@@ -3097,29 +3086,34 @@ def get_target_position(frame_idx, img, orientation='v', threshold=10, slice_wid
                 bigger = end-start
                 result = (start + end) // 2 if orientation == 'v' else end
 
-    if orientation == 'v':
-        offset = vertical_middle-result   # Return offset of the center of the biggest area with respect to the frame enter
-        if abs(offset) > 300:
-            logging.warning(f"Frame {frame_idx}: Vertical offset too big {offset}.")
-        ###break
-    else:
-        offset = int(width*0.08) - result   # Return offset of the hole vertical edge with respect to the expected position
-        # Difference between actual horizontal offset and average one should be smaller than 30 pixels (not much horizontal movement expected)
-        if horizontal_offset_average.get_average() is not None and abs(horizontal_offset_average.get_average()-offset) > 30:
-            logging.warning(f"Frame {frame_idx}: Too much deviation of horizontal offset {offset}, respect to average {int(horizontal_offset_average.get_average())}.")
-            offset = horizontal_offset_average.get_average()
-        else:
-            horizontal_offset_average.add_value(offset)
+    if (area_count > 0):
+        if orientation == 'v':
+            offset = vertical_middle-result   # Return offset of the center of the biggest area with respect to the frame enter
+            if abs(offset) > 300:
+                logging.warning(f"Frame {frame_idx}: Vertical offset too big {offset}.")
             ###break
-    return int(offset) # if orientation == 'v' else 0
+        else:
+            offset = int(width*0.08) - result   # Return offset of the hole vertical edge with respect to the expected position
+            # Difference between actual horizontal offset and average one should be smaller than 30 pixels (not much horizontal movement expected)
+            if horizontal_offset_average.get_average() is not None and abs(horizontal_offset_average.get_average()-offset) > 30:
+                logging.warning(f"Frame {frame_idx}: Too much deviation of horizontal offset {offset}, respect to average {int(horizontal_offset_average.get_average())}.")
+                offset = horizontal_offset_average.get_average()
+            else:
+                horizontal_offset_average.add_value(offset)
+                ###break
+    else:
+        offset = 0
+        start = 0
+        end = 0
+    return int(offset), start, end
 
 
 # Based on FrameAlignmentChecker 'is_frame_centered' algorithm
 # Templates to be dropped, vertical displacement to be calculated based on position 
 # of the center of the hole (S8) or the space between two holes (R8)
 def calculate_frame_displacement_simple(frame_idx, img, threshold=10, slice_width=10):
-    vertical_offset = get_target_position(frame_idx, img, 'v')
-    horizontal_offset = get_target_position(frame_idx, img, 'h')
+    vertical_offset, _, _ = get_target_position(frame_idx, img, 'v')
+    horizontal_offset, _, _ = get_target_position(frame_idx, img, 'h')
 
     return horizontal_offset, vertical_offset
 
@@ -3249,6 +3243,8 @@ def stabilize_image(frame_idx, img, img_ref, offset_x = 0, offset_y = 0, img_ref
         CsvFramesOffPercent = stabilization_bounds_alert_counter * 100 / (frame_idx-StartFrame)
     stabilization_bounds_alert_checkbox.config(text='Alert when image out of bounds (%i, %.1f%%)' % (
             stabilization_bounds_alert_counter, CsvFramesOffPercent))
+    if match_level < 0.7:   # If match level is too bad, revert to simple algorithm
+        move_x, move_y = calculate_frame_displacement_simple(frame_idx, img)
     # Create the translation matrix using move_x and move_y (NumPy array): This is the actual stabilization
     # We double-check the check box since this function might be called just to debug template detection
     if perform_stabilization.get():
