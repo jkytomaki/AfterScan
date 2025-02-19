@@ -19,7 +19,7 @@ __author__ = 'Juan Remirez de Esparza'
 __copyright__ = "Copyright 2024, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
-__version__ = "1.12.02"
+__version__ = "1.12.03"
 __data_version__ = "1.0"
 __date__ = "2025-02-19"
 __version_highlight__ = "Option to manually correct badly stabilized frames"
@@ -97,6 +97,14 @@ job_list_filename = os.path.join(script_dir, "AfterScan_job_list.json")
 temp_dir = os.path.join(script_dir, "temp")
 if not os.path.exists(temp_dir):
     os.mkdir(temp_dir)
+logs_dir = os.path.join(script_dir, "Logs")
+if not os.path.exists(logs_dir):
+    os.mkdir(logs_dir)
+copy_templates_from_temp = False
+templates_dir = os.path.join(script_dir, "Templates")
+if not os.path.exists(templates_dir):
+    os.mkdir(templates_dir)
+    copy_templates_from_temp = True
 template_list = None
 hole_template_filename_r8 = os.path.join(script_dir, "Pattern.R8.jpg")
 hole_template_filename_s8 = os.path.join(script_dir, "Pattern.S8.jpg")
@@ -750,7 +758,6 @@ def decode_project_config():
     global extended_stabilization
     global Force43, Force169
     global perform_denoise, perform_sharpness, perform_gamma_correction, gamma_correction_str
-    global temp_dir
 
     if 'SourceDir' in project_config:
         SourceDir = project_config["SourceDir"]
@@ -844,7 +851,7 @@ def decode_project_config():
             full_path_template_filename = project_config["CustomTemplateFilename"]
         else:
             template_filename = f"Pattern.custom.{template_name}.jpg"
-            full_path_template_filename = os.path.join(temp_dir, template_filename)
+            full_path_template_filename = os.path.join(templates_dir, template_filename)
         if not os.path.exists(full_path_template_filename):
             tk.messagebox.showwarning(
                 "Template in project invalid",
@@ -1046,7 +1053,7 @@ def job_list_add_current():
         job_list[entry_name] = {'project': project_config.copy(), 'done': False, 'attempted': False}
         # If a custom pattern is used, copy it with the name of the job, and change it in the joblist/project item
         if template_list.get_active_type() == 'custom' and os.path.isfile(template_list.get_active_filename()):
-            CustomTemplateDir = os.path.dirname(template_list.get_active_filename())    # should be temp_dir, but better be safe
+            CustomTemplateDir = os.path.dirname(template_list.get_active_filename())    # should be templates_dir, but better be safe
             # Maybe we should check here if a video filename has been defined
             TargetTemplateFile = os.path.join(CustomTemplateDir, os.path.splitext(job_list[entry_name]['project']['VideoFilename'])[0]+'.jpg' )
             if template_list.get_active_filename() != TargetTemplateFile:
@@ -1795,7 +1802,6 @@ def display_template_popup_closure():
     global debug_template_match
 
     bad_corrected = count_corrected_bad_frames()
-    total_bad = len(bad_frame_list)
 
     if bad_corrected == 0 or tk.messagebox.askyesno("Corrected frames exist", f"There are {bad_corrected} corrected frames.\r\nAre you sure you want to exit without saving?"):
         debug_template_match = False
@@ -1804,23 +1810,42 @@ def display_template_popup_closure():
         template_popup_window.destroy()
 
 
-def save_corrected_frames():
-    count = 0
-
-    win.config(cursor="watch")  # Change cursor to indicate processing
-
+def save_corrected_frames_loop(count_processed):
+    count_this_slice = 0
     for bad_frame in bad_frame_list:
         if (bad_frame[1] != 0 or bad_frame[2] != 0) and not bad_frame[3]:
             frame_encode(bad_frame[0], -1, True, bad_frame[1], bad_frame[2])
-            bad_frame[3] = True
-            count += 1
+            bad_frame[3] = True # Saved flag
+            count_this_slice += 1
+            count_processed += 1
+            break
 
-    win.config(cursor="")  # Change cursor to indicate processing
+    if count_this_slice > 0:
+        win.after(1, save_corrected_frames_loop, count_processed)  # Next processing slice
+    else:
+        win.config(cursor="")  # Change cursor to indicate processing
+        template_popup_window.config(cursor="") 
+        if count_processed > 0:
+            tk.messagebox.showinfo("Save complete", f"{count_processed} modified frames have been saved")
+
+
+def save_corrected_frames():
+    count = 0
+
+    for bad_frame in bad_frame_list:
+        if (bad_frame[1] != 0 or bad_frame[2] != 0) and not bad_frame[3]:
+            count += 1
 
     if count == 0:
         tk.messagebox.showinfo("No frames to save", "No modified framespending to be saved")
     else:
-        tk.messagebox.showinfo("Save complete", f"{count} modified frames have been saved")
+        win.config(cursor="watch")  # Set cursor to hourglass
+        template_popup_window.config(cursor="watch")  # Set cursor to hourglass
+        win.update()
+        template_popup_window.update()
+        win.after(100, save_corrected_frames_loop, 0)  # Start processing in chunks
+
+
     
 
 
@@ -1855,48 +1880,55 @@ def find_closest_bad_frame_index(frame_idx):
         return right
 
 
-def display_previous_bad_frame():
+def debug_template_popup_refresh():
     global CurrentFrame, current_bad_frame_index
-    current_bad_frame_index = find_closest_bad_frame_index(CurrentFrame)
+
+    if current_bad_frame_index == -1:
+        current_bad_frame_index = 0
+    if len(bad_frame_list) > 0:
+        CurrentFrame = bad_frame_list[current_bad_frame_index][0]
+        x = bad_frame_list[current_bad_frame_index][1]
+        y = bad_frame_list[current_bad_frame_index][2]
+    else:
+        x = 0
+        y = 0
+    project_config["CurrentFrame"] = CurrentFrame
+    frame_slider.config(label='Global:'+
+                        str(CurrentFrame+first_absolute_frame))
+    frame_selected.set(CurrentFrame)
+    frame_slider.set(CurrentFrame)
+    scale_display_update(x, y)
+    corrected_bad_frame_text.set(f"Corrected bad frames: {count_corrected_bad_frames()}")
+    bad_frames_on_left_value.set(current_bad_frame_index)
+    bad_frames_on_right_value.set(len(bad_frame_list)-current_bad_frame_index-1)
+
+
+def display_previous_bad_frame():
+    global current_bad_frame_index
+
     if current_bad_frame_index == -1:
         return
     if current_bad_frame_index > 0:
         current_bad_frame_index -= 1
-        CurrentFrame = bad_frame_list[current_bad_frame_index][0]
-        project_config["CurrentFrame"] = CurrentFrame
-        frame_slider.config(label='Global:'+
-                            str(CurrentFrame+first_absolute_frame))
-        frame_selected.set(CurrentFrame)
-        frame_slider.set(CurrentFrame)
-        scale_display_update(bad_frame_list[current_bad_frame_index][1], bad_frame_list[current_bad_frame_index][2])
-        corrected_bad_frame_text.set(f"Corrected bad frames: {count_corrected_bad_frames()}")
-        bad_frames_on_left_value.set(current_bad_frame_index)
-        bad_frames_on_right_value.set(len(bad_frame_list)-current_bad_frame_index-1)
+        debug_template_popup_refresh()
 
 
 def display_next_bad_frame():
-    global CurrentFrame, current_bad_frame_index
-    current_bad_frame_index = find_closest_bad_frame_index(CurrentFrame)
+    global current_bad_frame_index
+
     if current_bad_frame_index == -1:
         return
     if current_bad_frame_index < len(bad_frame_list)-1:
         current_bad_frame_index += 1
-        CurrentFrame = bad_frame_list[current_bad_frame_index][0]
-        project_config["CurrentFrame"] = CurrentFrame
-        frame_slider.config(label='Global:'+
-                            str(CurrentFrame+first_absolute_frame))
-        frame_selected.set(CurrentFrame)
-        frame_slider.set(CurrentFrame)
-        scale_display_update(bad_frame_list[current_bad_frame_index][1], bad_frame_list[current_bad_frame_index][2])
-        corrected_bad_frame_text.set(f"Corrected bad frames: {count_corrected_bad_frames()}")
-        bad_frames_on_left_value.set(current_bad_frame_index)
-        bad_frames_on_right_value.set(len(bad_frame_list)-current_bad_frame_index-1)
+        debug_template_popup_refresh()
 
 
 def shift_bad_frame_up(event = None):
     global current_bad_frame_index
+
     if current_bad_frame_index == -1:
         return
+    
     bad_frame_list[current_bad_frame_index][2] -= 5 if event == None else 1
     frame_encode(CurrentFrame, -1, False, bad_frame_list[current_bad_frame_index][1], bad_frame_list[current_bad_frame_index][2])
     bad_frame_list[current_bad_frame_index][3] = False # Just modified, reset saved flag
@@ -1938,6 +1970,20 @@ def count_corrected_bad_frames():
     return count
 
 
+def debug_template_popup_update_widgets(status):
+    if debug_template_match:
+        frame_up_button.config(state=status)
+        frame_left_button.config(state=status)
+        frame_down_button.config(state=status)
+        frame_right_button.config(state=status)
+        next_frame_button.config(state=status)
+        previous_frame_button.config(state=status)
+        save_button.config(state=status)
+        close_button.config(state=status)
+        bad_frames_on_left_label.config(state=status)
+        bad_frames_on_right_label.config(state=status)
+
+
 def debug_template_popup():
     global win
     global template_list
@@ -1950,6 +1996,10 @@ def debug_template_popup():
     global left_stripe_canvas, left_stripe_stabilized_canvas, template_canvas
     global SourceDirFileList, CurrentFrame
     global bad_frame_text, corrected_bad_frame_text, bad_frames_on_left_value, bad_frames_on_right_value
+    global frame_up_button, frame_left_button, frame_down_button, frame_right_button
+    global next_frame_button, previous_frame_button, save_button, close_button
+    global bad_frames_on_left_label, bad_frames_on_right_label
+    global current_bad_frame_index
 
     if not developer_debug:
         return
@@ -1962,7 +2012,7 @@ def debug_template_popup():
     debug_template_match = True
 
     template_popup_window = Toplevel(win)
-    template_popup_window.title("Hole Template match debug info")
+    template_popup_window.title("Manual stabilization popup")
 
     template_popup_window.minsize(width=300, height=template_popup_window.winfo_height())
 
@@ -2142,8 +2192,20 @@ def debug_template_popup():
     close_button.pack(pady=10, padx=10, side=RIGHT, anchor="center")
     as_tooltips.add(save_button, "Close this window")
 
+    # Initialize bad frame index
+    if current_bad_frame_index == -1:
+        current_bad_frame_index = 0
+    else:
+        current_bad_frame_index = find_closest_bad_frame_index(CurrentFrame)
+
+    # Refresh popup window
+    debug_template_popup_refresh()
+
     # Refresh template to have the alignment helper lines displayed
     debug_template_refresh_template()
+
+    if ConvertLoopRunning:
+        debug_template_popup_update_widgets(DISABLED)
 
     # Run a loop for the popup window
     template_popup_window.wait_window()
@@ -2656,7 +2718,6 @@ def select_custom_template():
     global template_list, film_type
     global RectangleWindowTitle
     global area_select_image_factor
-    global temp_dir
     global low_contrast_custom_template, StabilizationThreshold
 
     # First, define custom template name and filename in case it needs to be deleted
@@ -2667,7 +2728,7 @@ def select_custom_template():
         template_name = f"{os.path.split(SourceDir)[-1]}-{frame_from_str.get()}-{frame_to_str.get()}"
     # Set filename
     template_filename = f"Pattern.custom.{template_name}.jpg"
-    full_path_template_filename = os.path.join(temp_dir, template_filename)
+    full_path_template_filename = os.path.join(templates_dir, template_filename)
 
     if template_list.get_active_type() == 'custom':
         if os.path.isfile(template_list.get_active_filename()):
@@ -3193,7 +3254,6 @@ def stabilize_image(frame_idx, img, img_ref, offset_x = 0, offset_y = 0, img_ref
     global debug_template_match
     global perform_stabilization
     global template_list
-    global current_bad_frame_index
 
     # Get image dimensions to perform image shift later
     width = img_ref.shape[1]
@@ -3232,7 +3292,6 @@ def stabilize_image(frame_idx, img, img_ref, offset_x = 0, offset_y = 0, img_ref
         if missing_rows > 0 or match_level < 0.9:
             if match_level < 0.7:   # Only add really bad matches
                 bad_frame_list.append([frame_idx, 0, 0, False])
-                current_bad_frame_index = frame_idx
             if missing_rows > 0:
                 stabilization_bounds_alert_counter += 1
                 if stabilization_bounds_alert.get():
@@ -3685,7 +3744,7 @@ def start_convert():
                 if name == "":  # Assign default if no filename
                     name = "AfterScan-"
                 CsvFilename = datetime.now().strftime("%Y_%m_%d-%H-%M-%S_") + name + '.csv'
-                CsvPathName = temp_dir
+                CsvPathName = templates_dir
                 if CsvPathName == "":
                     CsvPathName = os.getcwd()
                 CsvPathName = os.path.join(CsvPathName, CsvFilename)
@@ -3693,6 +3752,8 @@ def start_convert():
             clear_image()
             match_level_average.clear()
             horizontal_offset_average.clear()
+            # Disable manual stabilize popup widgets
+            debug_template_popup_update_widgets(DISABLED)
             # Multiprocessing: Start all threads before encoding
             start_threads()
             win.after(1, frame_generation_loop)
@@ -4010,6 +4071,10 @@ def frame_generation_loop():
         else:
             generation_exit()
         CurrentFrame -= 1  # Prevent being out of range
+        # Refresh popup window
+        debug_template_popup_refresh()
+        # Enable manual stabilize popup widgets
+        debug_template_popup_update_widgets(NORMAL)
         win.update()
         return
 
@@ -4036,6 +4101,10 @@ def frame_generation_loop():
         generation_exit(success = False)
         stabilization_threshold_match_label.config(fg='lightgray', bg='lightgray', text='')
         FPM_CalculatedValue = -1
+        # Refresh popup window
+        debug_template_popup_refresh()
+        # Enable manual stabilize popup widgets
+        debug_template_popup_update_widgets(NORMAL)
         win.update()
         return
 
@@ -4412,7 +4481,7 @@ def init_display():
 def init_logging():
     global LogLevel
     # Initialize logging
-    log_path = temp_dir
+    log_path = logs_dir
     if log_path == "":
         log_path = os.getcwd()
     log_file_fullpath = log_path + "/AfterScan." + time.strftime("%Y%m%d") + ".log"
@@ -5211,6 +5280,32 @@ def build_ui():
     postprocessing_bottom_frame.grid(row=video_row, column=0)
 
 
+# Function to copy files from temp to templates folder the first time version 1.12 version is run
+def copy_jpg_files(source_folder, destination_folder):
+    try:
+        # Create destination folder if it doesn't exist
+        if not os.path.exists(destination_folder):
+            os.makedirs(destination_folder)
+            logging.debug(f"copy_jpg_files. Created destination folder: {destination_folder}")
+
+        # Iterate through all files in the source folder
+        for filename in os.listdir(source_folder):
+            # Check if the file is a JPG file (case-insensitive)
+            if filename.lower().endswith('.jpg'):
+                source_path = os.path.join(source_folder, filename)
+                destination_path = os.path.join(destination_folder, filename)
+
+                # Check if it's a file (not a directory)
+                if os.path.isfile(source_path):
+                    shutil.copy2(source_path, destination_path)
+                    logging.debug(f"copy_jpg_files. Copied: {filename} to {destination_folder}")
+
+        logging.debug("copy_jpg_files. All JPG files copied successfully!")
+
+    except Exception as e:
+        logging.debug(f"copy_jpg_files. An error occurred: {e}")
+
+
 def exit_app():  # Exit Application
     global win
     global active_threads
@@ -5381,6 +5476,10 @@ def main(argv):
 
     get_source_dir_file_list()
     get_target_dir_file_list()
+
+    # If Templates folder do not exist (introduced with AfterScan 1.12), copy over files from temp folder
+    if copy_templates_from_temp:
+        copy_jpg_files(temp_dir, templates_dir)
 
     ui_init_done = True
 
