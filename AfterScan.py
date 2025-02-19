@@ -19,7 +19,7 @@ __author__ = 'Juan Remirez de Esparza'
 __copyright__ = "Copyright 2024, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
-__version__ = "1.12.05"
+__version__ = "1.12.06"
 __data_version__ = "1.0"
 __date__ = "2025-02-19"
 __version_highlight__ = "Option to manually correct badly stabilized frames"
@@ -1859,11 +1859,11 @@ def save_corrected_frames():
     count = 0
 
     for bad_frame in bad_frame_list:
-        if (bad_frame[1] != 0 or bad_frame[2] != 0) and not bad_frame[4]:
+        if (bad_frame[1] != 0 or bad_frame[2] != 0 or bad_frame[3] != StabilizationThreshold_saved) and not bad_frame[4]:
             count += 1
 
     if count == 0:
-        tk.messagebox.showinfo("No frames to save", "No modified framespending to be saved")
+        tk.messagebox.showinfo("No frames to save", "No modified frames pending to be saved")
     else:
         win.config(cursor="watch")  # Set cursor to hourglass
         template_popup_window.config(cursor="watch")  # Set cursor to hourglass
@@ -2219,32 +2219,45 @@ def debug_template_popup():
     as_tooltips.add(corrected_bad_frame_label, "Number of frames that failed to be stabilized, that have been manually adjusted")
 
     # Frame for manual alignment buttons 
-    manual_align_frame = Frame(right_frame) #, width=50, height=50)
-    manual_align_frame.pack(anchor="center", pady=5, padx=10)   # expand=True, fill="both", 
+    frame_selection_frame = LabelFrame(right_frame, text="Misaligned frame selection") #, width=50, height=50)
+    frame_selection_frame.pack(anchor="center", pady=5, padx=10)   # expand=True, fill="both", 
 
     #Label with bad frames to the left
     bad_frames_on_left_value = tk.IntVar()
-    bad_frames_on_left_label = Label(manual_align_frame, textvariable=bad_frames_on_left_value, font=("Arial", FontSize+6))
+    bad_frames_on_left_label = Label(frame_selection_frame, textvariable=bad_frames_on_left_value, font=("Arial", FontSize+6))
     bad_frames_on_left_label.grid(pady=2, padx=10, row=0, column=0, rowspan = 2)
     bad_frames_on_left_value.set(0)
     as_tooltips.add(bad_frames_on_left_label, "Number of badly-stabilized frames before the one currently selected")
 
-    previous_frame_button = Button(manual_align_frame, text="◀◀", command=display_previous_bad_frame, font=("Arial", FontSize), width=3)
+    previous_frame_button = Button(frame_selection_frame, text="◀◀", command=display_previous_bad_frame, font=("Arial", FontSize), width=3)
     previous_frame_button.grid(pady=2, padx=2, row=0, column=1)
     as_tooltips.add(previous_frame_button, "Select previous badly-stabilized frame")
-    frame_up_button = Button(manual_align_frame, text="▲", command=shift_bad_frame_up, font=("Arial", FontSize), width=3)
-    frame_up_button.grid(pady=2, padx=2, row=0, column=2)
-    as_tooltips.add(frame_up_button, "Move current frame 5 pixels up (use cursor keys to move 1 pixel)")
-    next_frame_button = Button(manual_align_frame, text="▶▶", command=display_next_bad_frame, font=("Arial", FontSize), width=3)
+
+    next_frame_button = Button(frame_selection_frame, text="▶▶", command=display_next_bad_frame, font=("Arial", FontSize), width=3)
     next_frame_button.grid(pady=2, padx=2, row=0, column=3)
     as_tooltips.add(next_frame_button, "Select next badly-stabilized frame")
-    frame_left_button = Button(manual_align_frame, text="◀", command=shift_bad_frame_left, font=("Arial", FontSize), width=3)
+
+    #Label with bad frames to the left
+    bad_frames_on_right_value = tk.IntVar()
+    bad_frames_on_right_label = Label(frame_selection_frame, textvariable=bad_frames_on_right_value, font=("Arial", FontSize+6))
+    bad_frames_on_right_label.grid(pady=2, padx=10, row=0, column=4, rowspan = 2)
+    bad_frames_on_right_value.set(0)
+    as_tooltips.add(bad_frames_on_right_label, "Number of badly-stabilized frames after the one currently selected")
+
+    # Frame for manual alignment buttons 
+    manual_position_frame = LabelFrame(right_frame, text="Manual adjustment controls") #, width=50, height=50)
+    manual_position_frame.pack(anchor="center", pady=5, padx=10)   # expand=True, fill="both", 
+
+    frame_up_button = Button(manual_position_frame, text="▲", command=shift_bad_frame_up, font=("Arial", FontSize), width=3)
+    frame_up_button.grid(pady=2, padx=2, row=0, column=2)
+    as_tooltips.add(frame_up_button, "Move current frame 5 pixels up (use cursor keys to move 1 pixel)")
+    frame_left_button = Button(manual_position_frame, text="◀", command=shift_bad_frame_left, font=("Arial", FontSize), width=3)
     frame_left_button.grid(pady=2, padx=2, row=1, column=1)
     as_tooltips.add(frame_left_button, "Move current frame 5 pixels to the left (use cursor keys to move 1 pixel)")
-    frame_down_button = Button(manual_align_frame, text="▼", command=shift_bad_frame_down, font=("Arial", FontSize), width=3)
+    frame_down_button = Button(manual_position_frame, text="▼", command=shift_bad_frame_down, font=("Arial", FontSize), width=3)
     frame_down_button.grid(pady=2, padx=2, row=1, column=2)
     as_tooltips.add(frame_down_button, "Move current frame 5 pixels down (use cursor keys to move 1 pixel)")
-    frame_right_button = Button(manual_align_frame, text="▶", command=shift_bad_frame_right, font=("Arial", FontSize), width=3)
+    frame_right_button = Button(manual_position_frame, text="▶", command=shift_bad_frame_right, font=("Arial", FontSize), width=3)
     frame_right_button.grid(pady=2, padx=2, row=1, column=3)
     as_tooltips.add(frame_right_button, "Move current frame 5 pixels to the right (use cursor keys to move 1 pixel)")
     template_popup_window.bind("<Up>", shift_bad_frame_up)
@@ -2252,37 +2265,30 @@ def debug_template_popup():
     template_popup_window.bind("<Left>", shift_bad_frame_left)
     template_popup_window.bind("<Right>", shift_bad_frame_right)
 
-    #Label with bad frames to the left
-    bad_frames_on_right_value = tk.IntVar()
-    bad_frames_on_right_label = Label(manual_align_frame, textvariable=bad_frames_on_right_value, font=("Arial", FontSize+6))
-    bad_frames_on_right_label.grid(pady=2, padx=10, row=0, column=4, rowspan = 2)
-    bad_frames_on_right_value.set(0)
-    as_tooltips.add(bad_frames_on_right_label, "Number of badly-stabilized frames after the one currently selected")
+    # Frame for manual alignment buttons 
+    manual_threshold_frame = LabelFrame(right_frame, text="Manual threshold controls") #, width=50, height=50)
+    manual_threshold_frame.pack(anchor="center", pady=5, padx=10)   # expand=True, fill="both", 
 
-    # Frame for custom threshold buttons
-    custom_threshold_frame = Frame(right_frame)
-    custom_threshold_frame.pack(anchor="center", pady=5, padx=10)
-
-    decrease_threshold_button_5 = Button(custom_threshold_frame, text="◀◀", command=bad_frames_decrease_threshold_5, font=("Arial", FontSize))
+    decrease_threshold_button_5 = Button(manual_threshold_frame, text="◀◀", command=bad_frames_decrease_threshold_5, font=("Arial", FontSize))
     decrease_threshold_button_5.pack(pady=10, padx=10, side=LEFT, anchor="center")
     as_tooltips.add(decrease_threshold_button_5, "Decrease threshold value by 5.")
 
-    decrease_threshold_button_1 = Button(custom_threshold_frame, text="◀", command=bad_frames_decrease_threshold_1, font=("Arial", FontSize))
+    decrease_threshold_button_1 = Button(manual_threshold_frame, text="◀", command=bad_frames_decrease_threshold_1, font=("Arial", FontSize))
     decrease_threshold_button_1.pack(pady=10, padx=10, side=LEFT, anchor="center")
     as_tooltips.add(decrease_threshold_button_1, "Decrease threshold value by 1.")
 
     #Label with threshold value
     threshold_value = tk.IntVar()
-    threshold_label = Label(custom_threshold_frame, textvariable=threshold_value, font=("Arial", FontSize+6))
+    threshold_label = Label(manual_threshold_frame, textvariable=threshold_value, font=("Arial", FontSize+6))
     threshold_label.pack(pady=10, padx=10, side=LEFT, anchor="center")
     threshold_value.set(StabilizationThreshold)
     as_tooltips.add(threshold_label, "Current threshold")
 
-    increase_threshold_button_1 = Button(custom_threshold_frame, text="▶", command=bad_frames_increase_threshold_1, font=("Arial", FontSize))
+    increase_threshold_button_1 = Button(manual_threshold_frame, text="▶", command=bad_frames_increase_threshold_1, font=("Arial", FontSize))
     increase_threshold_button_1.pack(pady=10, padx=10, side=LEFT, anchor="center")
     as_tooltips.add(increase_threshold_button_1, "Increase threshold value by 1.")
 
-    increase_threshold_button_5 = Button(custom_threshold_frame, text="▶▶", command=bad_frames_increase_threshold_5, font=("Arial", FontSize))
+    increase_threshold_button_5 = Button(manual_threshold_frame, text="▶▶", command=bad_frames_increase_threshold_5, font=("Arial", FontSize))
     increase_threshold_button_5.pack(pady=10, padx=10, side=LEFT, anchor="center")
     as_tooltips.add(increase_threshold_button_1, "Increase threshold value by 5.")
 
@@ -2920,8 +2926,6 @@ def select_custom_template():
     win.update()
 
 
-
-
 def set_film_type():
     global film_type, template_list
 
@@ -2936,6 +2940,17 @@ def set_film_type():
             "Default template could not be set",
             "Error while reverting back to standard template after disabling custom.")
         return False
+
+
+def black_percent(img):
+    # Count black pixels (value 0)
+    black_pixels = np.sum(img == 0)
+
+    # Get total number of pixels
+    total_pixels = img.size
+
+    # Calculate percentage of black pixels
+    return (black_pixels / total_pixels) * 100
 
 
 def match_level_color(t):
@@ -2966,25 +2981,55 @@ def match_template(frame_idx, template, img):
                       tw, th, iw, ih)
         return 0, (0, 0), 0, 0
 
-    # convert img to grey, checking various thresholds
-    # in order to calculate the white on black proportion correctly, we saved the number of white pixels in the
-    # template, but we divide it by the number of pixels in the search area, as it is wider
+    Done = False
+    local_threshold = StabilizationThreshold
     img_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)    # reduced left stripe to calculate white on black proportion
-    # Apply best threshold on full left stripe
-    img_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    #img_final = cv2.threshold(img_gray, best_thres, 255, cv2.THRESH_BINARY)[1]  #THRESH_TRUNC, THRESH_BINARY
-    if low_contrast_custom_template.get():
-        # Apply Otsu's thresholding
-        best_thres, img_final = cv2.threshold(img_gray, StabilizationThreshold, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    else:
-        best_thres, img_final = cv2.threshold(img_gray, StabilizationThreshold, 255, cv2.THRESH_BINARY)
+    limit_threshold = 0
+    step_threshold = 0
+    back_percent_checked = False
+    while not Done:
+        # convert img to grey, checking various thresholds
+        # in order to calculate the white on black proportion correctly, we saved the number of white pixels in the
+        # template, but we divide it by the number of pixels in the search area, as it is wider
+        if low_contrast_custom_template.get():
+            # Apply Otsu's thresholding
+            best_thres, img_final = cv2.threshold(img_gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            Done = True
+        else:
+            best_thres, img_final = cv2.threshold(img_gray, local_threshold, 255, cv2.THRESH_BINARY)
 
-    #img_edges = cv2.Canny(image=img_bw, threshold1=100, threshold2=1)  # Canny Edge Detection
-    aux = cv2.matchTemplate(img_final, template, cv2.TM_CCOEFF_NORMED)
-    (minVal, maxVal, minLoc, maxLoc) = cv2.minMaxLoc(aux)
-    top_left = maxLoc
+        #img_edges = cv2.Canny(image=img_bw, threshold1=100, threshold2=1)  # Canny Edge Detection
+        aux = cv2.matchTemplate(img_final, template, cv2.TM_CCOEFF_NORMED)
+        (minVal, maxVal, minLoc, maxLoc) = cv2.minMaxLoc(aux)
+        top_left = maxLoc
 
-    return int(best_thres), top_left, round(maxVal,2), img_final
+        if ConvertLoopRunning and not Done:
+            if round(maxVal,2) < 0.85: # Quality not good enough, try another threshold
+                """
+                if not back_percent_checked:
+                    back_percent_checked = True
+                    if black_percent(img_final) > 75:   # Probably totally black: Reduce threshold
+                        limit_threshold = 150
+                        step_threshold = -5
+                    else:
+                        limit_threshold = 255
+                        step_threshold = 1
+                """
+                if not back_percent_checked:
+                    back_percent_checked = True
+                    local_threshold = 254
+                    limit_threshold = 150
+                    step_threshold = -1
+                local_threshold += step_threshold
+                if (step_threshold > 0 and local_threshold >= limit_threshold) or (step_threshold < 0 and local_threshold <= limit_threshold):
+                    Done = True
+            else:
+                best_thres = local_threshold
+                Done = True
+        else:
+            Done = True
+
+    return int(best_thres), top_left, round(maxVal,2), img_final, best_thres
 
 
 """
@@ -3294,10 +3339,9 @@ def calculate_frame_displacement_with_templates(frame_idx, img_ref, img_ref_alt 
 
         # Get sprocket hole area
         left_stripe_image = get_image_left_stripe(img_ref)
-        #WorkStabilizationThreshold = np.percentile(left_stripe_image, 90)
         img_ref_alt_used = False
         while True:
-            thres, top_left, match_level, img_matched = match_template(frame_idx, film_hole_template, left_stripe_image)
+            thres, top_left, match_level, img_matched, frame_treshold = match_template(frame_idx, film_hole_template, left_stripe_image)
             match_level = max(0, match_level)   # in some cases, not sure why, match level is negative
             if match_level >= 0.85:
                 break
@@ -3331,7 +3375,7 @@ def calculate_frame_displacement_with_templates(frame_idx, img_ref, img_ref_alt 
         logging.debug(log_line+f"Frame {frame_idx:5d}: threshold: {thres:3d}, top left: ({top_left[0]:4d},{top_left[0]:4d}), move_x:{move_x:4d}, move_y:{move_y:4d}")
         debug_template_display_info(frame_idx, thres, top_left, move_x, move_y)
 
-        return move_x, move_y, top_left, match_level
+        return move_x, move_y, top_left, match_level, frame_treshold
 
 
 def shift_image(img, width, height, move_x, move_y):
@@ -3365,8 +3409,9 @@ def stabilize_image(frame_idx, img, img_ref, offset_x = 0, offset_y = 0, img_ref
     if use_simple_stabilization:  # Standard stabilization using templates
         move_x, move_y = calculate_frame_displacement_simple(frame_idx, img_ref)
         match_level = 1
+        frame_threshold = StabilizationThreshold
     else:
-        move_x, move_y, top_left, match_level = calculate_frame_displacement_with_templates(frame_idx, img_ref, img_ref_alt, id)
+        move_x, move_y, top_left, match_level, frame_threshold  = calculate_frame_displacement_with_templates(frame_idx, img_ref, img_ref_alt, id)
         
     # Try to figure out if there will be a part missing
     # at the bottom, or the top
@@ -3394,7 +3439,7 @@ def stabilize_image(frame_idx, img, img_ref, offset_x = 0, offset_y = 0, img_ref
         match_level_average.add_value(match_level)
         if missing_rows > 0 or match_level < 0.9:
             if match_level < 0.7:   # Only add really bad matches
-                bad_frame_list.append([frame_idx, 0, 0, StabilizationThreshold, False])
+                bad_frame_list.append([frame_idx, 0, 0, frame_threshold, False])
             if missing_rows > 0:
                 stabilization_bounds_alert_counter += 1
                 if stabilization_bounds_alert.get():
