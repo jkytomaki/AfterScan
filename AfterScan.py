@@ -19,7 +19,7 @@ __author__ = 'Juan Remirez de Esparza'
 __copyright__ = "Copyright 2024, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
-__version__ = "1.12.04"
+__version__ = "1.12.05"
 __data_version__ = "1.0"
 __date__ = "2025-02-19"
 __version_highlight__ = "Option to manually correct badly stabilized frames"
@@ -2052,12 +2052,11 @@ def debug_template_popup_update_widgets(status):
         close_button.config(state=status)
         bad_frames_on_left_label.config(state=status)
         bad_frames_on_right_label.config(state=status)
-        decrease_threshold_button.config_5(state=status)
-        decrease_threshold_button.config_1(state=status)
+        decrease_threshold_button_5.config(state=status)
+        decrease_threshold_button_1.config(state=status)
         threshold_label.config(state=status)
-        increase_threshold_button.config_1(state=status)
-        increase_threshold_button.config_5(state=status)
-        new_threshold_stabilize_button.config(state=status)
+        increase_threshold_button_1.config(state=status)
+        increase_threshold_button_5.config(state=status)
 
 def debug_template_popup():
     global win
@@ -2076,7 +2075,7 @@ def debug_template_popup():
     global bad_frames_on_left_label, bad_frames_on_right_label
     global current_bad_frame_index
     global StabilizationThreshold_saved, threshold_value
-    global decrease_threshold_button_1, threshold_label, increase_threshold_button_1, new_threshold_stabilize_button
+    global decrease_threshold_button_1, threshold_label, increase_threshold_button_1
     global decrease_threshold_button_5, increase_threshold_button_5
 
     if not developer_debug:
