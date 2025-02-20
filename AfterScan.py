@@ -19,9 +19,9 @@ __author__ = 'Juan Remirez de Esparza'
 __copyright__ = "Copyright 2024, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
-__version__ = "1.12.06"
+__version__ = "1.12.07"
 __data_version__ = "1.0"
-__date__ = "2025-02-19"
+__date__ = "2025-02-20"
 __version_highlight__ = "Option to manually correct badly stabilized frames"
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
@@ -2091,7 +2091,7 @@ def debug_template_popup():
     StabilizationThreshold_saved = StabilizationThreshold   # To be restored on exit
 
     template_popup_window = Toplevel(win)
-    template_popup_window.title("Manual stabilization popup")
+    template_popup_window.title("Manual stabilization helper")
 
     template_popup_window.minsize(width=300, height=template_popup_window.winfo_height())
 
@@ -2972,10 +2972,13 @@ def match_level_color_bgr(t):
 # img is directly the left stripe (search area)
 def match_template(frame_idx, template, img):
     global min_thres
+
     tw = template.shape[1]
     th = template.shape[0]
     iw = img.shape[1]
     ih = img.shape[0]
+
+    logging.debug(f"frame_idx {frame_idx} enters")
     if (tw >= iw or th >= ih):
         logging.error("Template (%ix%i) bigger than search area (%ix%i)",
                       tw, th, iw, ih)
@@ -2984,9 +2987,15 @@ def match_template(frame_idx, template, img):
     Done = False
     local_threshold = StabilizationThreshold
     img_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)    # reduced left stripe to calculate white on black proportion
+    # Init processing variables
     limit_threshold = 0
     step_threshold = 0
     back_percent_checked = False
+    best_match_level = 0
+    best_thres = 0
+    best_top_left = None
+    best_maxVal = None
+    best_img_final = None
     while not Done:
         # convert img to grey, checking various thresholds
         # in order to calculate the white on black proportion correctly, we saved the number of white pixels in the
@@ -2994,42 +3003,53 @@ def match_template(frame_idx, template, img):
         if low_contrast_custom_template.get():
             # Apply Otsu's thresholding
             best_thres, img_final = cv2.threshold(img_gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-            Done = True
+            local_threshold = best_thres    # So that it is taken as best for OTSU in the code below
+            Done = True # Only one try with OTSU, best threshold is whathever it returns
         else:
-            best_thres, img_final = cv2.threshold(img_gray, local_threshold, 255, cv2.THRESH_BINARY)
+            # Not interested in best threshold returned usign this algorithm
+            _, img_final = cv2.threshold(img_gray, local_threshold, 255, cv2.THRESH_BINARY)
 
         #img_edges = cv2.Canny(image=img_bw, threshold1=100, threshold2=1)  # Canny Edge Detection
         aux = cv2.matchTemplate(img_final, template, cv2.TM_CCOEFF_NORMED)
         (minVal, maxVal, minLoc, maxLoc) = cv2.minMaxLoc(aux)
         top_left = maxLoc
-
         if ConvertLoopRunning and not Done:
             if round(maxVal,2) < 0.85: # Quality not good enough, try another threshold
-                """
+                if round(maxVal,2) > best_match_level:
+                    best_match_level = round(maxVal,2)
+                    best_thres = local_threshold
+                    best_top_left = top_left
+                    best_maxVal = maxVal
+                    best_img_final = img_final
+
                 if not back_percent_checked:
                     back_percent_checked = True
-                    if black_percent(img_final) > 75:   # Probably totally black: Reduce threshold
-                        limit_threshold = 150
-                        step_threshold = -5
-                    else:
-                        limit_threshold = 255
-                        step_threshold = 1
-                """
-                if not back_percent_checked:
-                    back_percent_checked = True
-                    local_threshold = 254
+                    local_threshold = 259   # 254 + 5 to accound for deduction on first loop
                     limit_threshold = 150
-                    step_threshold = -1
+                    step_threshold = -5
                 local_threshold += step_threshold
                 if (step_threshold > 0 and local_threshold >= limit_threshold) or (step_threshold < 0 and local_threshold <= limit_threshold):
+                    logging.debug(f"frame_idx {frame_idx} - reach the threshold limit - best_thres: {best_thres}, best_top_left: {best_top_left}, best_maxVal: {best_maxVal}")
                     Done = True
+                elif abs(limit_threshold-local_threshold) <= 5:
+                    step_threshold = -1     # Fine tune when near the limit
             else:
+                logging.debug(f"frame_idx {frame_idx} - Good enough match found")
                 best_thres = local_threshold
+                best_top_left = top_left
+                best_maxVal = maxVal
+                best_img_final = img_final
                 Done = True
         else:
+            best_thres = local_threshold
+            best_top_left = top_left
+            best_maxVal = maxVal
+            best_img_final = img_final
             Done = True
 
-    return int(best_thres), top_left, round(maxVal,2), img_final, best_thres
+    logging.debug(f"frame_idx {frame_idx} exits")
+
+    return int(best_thres), best_top_left, round(best_maxVal,2), best_img_final
 
 
 """
@@ -3341,7 +3361,7 @@ def calculate_frame_displacement_with_templates(frame_idx, img_ref, img_ref_alt 
         left_stripe_image = get_image_left_stripe(img_ref)
         img_ref_alt_used = False
         while True:
-            thres, top_left, match_level, img_matched, frame_treshold = match_template(frame_idx, film_hole_template, left_stripe_image)
+            frame_treshold, top_left, match_level, img_matched = match_template(frame_idx, film_hole_template, left_stripe_image)
             match_level = max(0, match_level)   # in some cases, not sure why, match level is negative
             if match_level >= 0.85:
                 break
@@ -3372,8 +3392,8 @@ def calculate_frame_displacement_with_templates(frame_idx, img_ref, img_ref_alt 
             move_x = 0
             move_y = 0
         log_line = f"T{id} - " if id != -1 else ""
-        logging.debug(log_line+f"Frame {frame_idx:5d}: threshold: {thres:3d}, top left: ({top_left[0]:4d},{top_left[0]:4d}), move_x:{move_x:4d}, move_y:{move_y:4d}")
-        debug_template_display_info(frame_idx, thres, top_left, move_x, move_y)
+        logging.debug(log_line+f"Frame {frame_idx:5d}: threshold: {frame_treshold:3d}, top left: ({top_left[0]:4d},{top_left[0]:4d}), move_x:{move_x:4d}, move_y:{move_y:4d}")
+        debug_template_display_info(frame_idx, frame_treshold, top_left, move_x, move_y)
 
         return move_x, move_y, top_left, match_level, frame_treshold
 
