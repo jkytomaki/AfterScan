@@ -19,10 +19,10 @@ __author__ = 'Juan Remirez de Esparza'
 __copyright__ = "Copyright 2024, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
-__version__ = "1.12.07"
+__version__ = "1.12.08"
 __data_version__ = "1.0"
 __date__ = "2025-02-20"
-__version_highlight__ = "Option to manually correct badly stabilized frames"
+__version_highlight__ = "Improve stabilization algorithm, also add option to manually correct badly stabilized frames if required"
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
 __status__ = "Development"
@@ -794,10 +794,8 @@ def decode_project_config():
     if 'CurrentFrame' in project_config and not BatchJobRunning: # only if project loaded by user, otherwise it alters start encoding frame in batch mode
         CurrentFrame = project_config["CurrentFrame"]
         CurrentFrame = max(CurrentFrame, 0)
-        frame_slider.set(CurrentFrame)
     else:
         CurrentFrame = 0
-        frame_slider.set(CurrentFrame)
     if 'EncodeAllFrames' in project_config:
         encode_all_frames.set(project_config["EncodeAllFrames"])
     else:
@@ -1088,12 +1086,24 @@ def job_list_load_selected():
         entry_name = job_list_listbox.get(selected[0])  # we pick fist item as curselection returns a list
 
         if entry_name in job_list:
+            # Save misaligned frame list in case new job switches to a different source folder
+            save_bad_frame_list()
+            # Clear list of bad frames
+            bad_frame_list.clear()
+            current_bad_frame_index = -1
             # Copy job settings as current project settings
             project_config = job_list[entry_name]['project']
             decode_project_config()
             # Load matching file list from newly selected dir
             get_source_dir_file_list()  # first_absolute_frame is set here
             general_config["SourceDir"] = SourceDir
+
+            # Set CurrentFrame in the middle of the project frame range
+            CurrentFrame = int(project_config["FrameFrom"]) + (int(project_config["FrameTo"]) - int(project_config["FrameFrom"])) // 2
+
+            # Load misaligned frame list
+            load_bad_frame_list()
+            debug_template_popup_refresh()
 
             # Enable Start and Crop buttons, plus slider, once we have files to handle
             cropping_btn.config(state=NORMAL)
@@ -1457,9 +1467,6 @@ def set_source_folder():
     frame_slider.config(state=NORMAL)
     Go_btn.config(state=NORMAL)
     frame_slider.set(CurrentFrame)
-
-    bad_frame_list.clear()  # empty bad folder list
-    current_bad_frame_index = -1
 
     init_display()
     widget_status_update(NORMAL)
@@ -1872,44 +1879,85 @@ def save_corrected_frames():
         win.after(100, save_corrected_frames_loop, 0)  # Start processing in chunks 
 
 
-def find_closest_bad_frame_index(frame_idx):
-    if len(bad_frame_list) == 0:
-        return -1
-    
+def find_closest(sorted_list, target):
+    # Check if the list is empty
+    if not sorted_list:
+        return None
+
     # Initialize the left and right pointers
-    left, right = 0, len(bad_frame_list) - 1
+    left, right = 0, len(sorted_list) - 1
     
-    # If the frame_idx is less than or equal to the smallest element or greater than or equal to the largest element
-    if frame_idx <= bad_frame_list[left][0]:
-        return left
-    if frame_idx >= bad_frame_list[right][0]:
-        return right
+    # If the target is less than or equal to the smallest element or greater than or equal to the largest element
+    if target <= sorted_list[left]:
+        return sorted_list[left]
+    if target >= sorted_list[right]:
+        return sorted_list[right]
 
     # Binary search-like approach
     while left <= right:
         mid = (left + right) // 2
-        if bad_frame_list[mid][0] == frame_idx:
-            return mid
-        elif bad_frame_list[mid][0] < frame_idx:
+        if sorted_list[mid] == target:
+            return sorted_list[mid]
+        elif sorted_list[mid] < target:
             left = mid + 1
         else:
             right = mid - 1
 
-    # After the while loop, left will be where we insert frame_idx to keep the list sorted
-    # Check if the frame_idx is closer to the element at 'left' or 'right'
-    if abs(bad_frame_list[left][0] - frame_idx) < abs(bad_frame_list[right][0] - frame_idx):
-        return left
+    # After the while loop, left will be where we insert target to keep the list sorted
+    # Check if the target is closer to the element at 'left' or 'right'
+    if abs(sorted_list[left] - target) < abs(sorted_list[right] - target):
+        return sorted_list[left]
     else:
-        return right
+        return sorted_list[right]
+    
+
+def insert_or_replace_sorted(sorted_list, new_inner_list):
+    """
+    Insert a new inner list into a sorted list of lists, maintaining order based on the first element.
+    If the index already exists, replace the existing inner list with the new one.
+    
+    Args:
+        sorted_list (list): A sorted list of lists where each inner list starts with an integer index.
+        new_inner_list (list): The new inner list to insert or replace with.
+    
+    Returns:
+        None: Modifies sorted_list in place.
+    """
+    if not sorted_list:
+        sorted_list.append(new_inner_list)
+        return
+
+    target = new_inner_list[0]  # The index to match or insert
+    left, right = 0, len(sorted_list) - 1
+
+    # Binary search to find the position
+    while left <= right:
+        mid = (left + right) // 2
+        current_index = sorted_list[mid][0]
+
+        if current_index == target:
+            # Replace the existing inner list with the new one
+            sorted_list[mid] = new_inner_list
+            return
+        elif current_index < target:
+            left = mid + 1
+        else:
+            right = mid - 1
+
+    # If no match found, insert at the correct position
+    sorted_list.insert(left, new_inner_list)
 
 
 def debug_template_popup_refresh():
     global CurrentFrame, current_bad_frame_index
 
+    if not debug_template_match:    # Nothing to refresh
+        return  
+    
     if current_bad_frame_index == -1:
         current_bad_frame_index = 0
     if len(bad_frame_list) > 0:
-        CurrentFrame = bad_frame_list[current_bad_frame_index][0]
+        #CurrentFrame = bad_frame_list[current_bad_frame_index][0]
         x = bad_frame_list[current_bad_frame_index][1]
         y = bad_frame_list[current_bad_frame_index][2]
     else:
@@ -1922,12 +1970,15 @@ def debug_template_popup_refresh():
     frame_slider.set(CurrentFrame)
     scale_display_update(x, y)
     if debug_template_match:
-        corrected_bad_frame_text.set(f"Corrected bad frames: {count_corrected_bad_frames()}")
+        corrected_bad_frame_text.set(f"Corrected frame count: {count_corrected_bad_frames()}")
         bad_frames_on_left_value.set(current_bad_frame_index)
-        bad_frames_on_right_value.set(len(bad_frame_list)-current_bad_frame_index-1)
+        if len(bad_frame_list) > 0:
+            bad_frames_on_right_value.set(len(bad_frame_list)-current_bad_frame_index-1)
+        else:
+            bad_frames_on_right_value.set(0)
 
 
-def display_previous_bad_frame():
+def display_previous_bad_frame(count):
     global current_bad_frame_index, StabilizationThreshold
 
     if current_bad_frame_index == -1:
@@ -1936,7 +1987,9 @@ def display_previous_bad_frame():
         if StabilizationThreshold != StabilizationThreshold_saved:
             bad_frame_list[current_bad_frame_index][3] = StabilizationThreshold # Save threshold before moving
             bad_frame_list[current_bad_frame_index][4] = False  # Not saved yet
-        current_bad_frame_index -= 1
+        current_bad_frame_index -= count
+        if current_bad_frame_index < 0:
+            current_bad_frame_index = 0
         # if not bad_frame_list[current_bad_frame_index][4]:  # If not saved yet, recover tunes threshold, otherwise keep previous (faster when processign consecutive frames)
         if bad_frame_list[current_bad_frame_index][3] != StabilizationThreshold_saved:
             StabilizationThreshold = bad_frame_list[current_bad_frame_index][3] # Recover saved threshold
@@ -1944,7 +1997,15 @@ def display_previous_bad_frame():
         debug_template_popup_refresh()
 
 
-def display_next_bad_frame():
+def display_previous_bad_frame_1():
+    display_previous_bad_frame(1)
+
+
+def display_previous_bad_frame_10():
+    display_previous_bad_frame(10)
+
+
+def display_next_bad_frame(count):
     global current_bad_frame_index, StabilizationThreshold
 
     if current_bad_frame_index == -1:
@@ -1953,12 +2014,22 @@ def display_next_bad_frame():
         if StabilizationThreshold != StabilizationThreshold_saved:
             bad_frame_list[current_bad_frame_index][3] = StabilizationThreshold # Save threshold before moving
             bad_frame_list[current_bad_frame_index][4] = False  # Not saved yet
-        current_bad_frame_index += 1
+        current_bad_frame_index += count
+        if current_bad_frame_index >= len(bad_frame_list):
+            current_bad_frame_index = len(bad_frame_list) - 1
         #if not bad_frame_list[current_bad_frame_index][4]:  # If not saved yet, recover tuned threshold, otherwise keep previous (faster when processign consecutive frames)
         if bad_frame_list[current_bad_frame_index][3] != StabilizationThreshold_saved:
             StabilizationThreshold = bad_frame_list[current_bad_frame_index][3] # Recover saved threshold
             threshold_value.set(StabilizationThreshold)
         debug_template_popup_refresh()
+
+
+def display_next_bad_frame_1():
+    display_next_bad_frame(1)
+
+
+def display_next_bad_frame_10():
+    display_next_bad_frame(10)
 
 
 def shift_bad_frame_up(event = None):
@@ -2046,8 +2117,10 @@ def debug_template_popup_update_widgets(status):
         frame_left_button.config(state=status)
         frame_down_button.config(state=status)
         frame_right_button.config(state=status)
-        next_frame_button.config(state=status)
-        previous_frame_button.config(state=status)
+        next_frame_button_1.config(state=status)
+        next_frame_button_10.config(state=status)
+        previous_frame_button_1.config(state=status)
+        previous_frame_button_10.config(state=status)
         save_button.config(state=status)
         close_button.config(state=status)
         bad_frames_on_left_label.config(state=status)
@@ -2071,7 +2144,7 @@ def debug_template_popup():
     global SourceDirFileList, CurrentFrame
     global bad_frame_text, corrected_bad_frame_text, bad_frames_on_left_value, bad_frames_on_right_value
     global frame_up_button, frame_left_button, frame_down_button, frame_right_button
-    global next_frame_button, previous_frame_button, save_button, close_button
+    global next_frame_button_1, next_frame_button_10, previous_frame_button_1, previous_frame_button_10, save_button, close_button
     global bad_frames_on_left_label, bad_frames_on_right_label
     global current_bad_frame_index
     global StabilizationThreshold_saved, threshold_value
@@ -2091,7 +2164,7 @@ def debug_template_popup():
     StabilizationThreshold_saved = StabilizationThreshold   # To be restored on exit
 
     template_popup_window = Toplevel(win)
-    template_popup_window.title("Manual stabilization helper")
+    template_popup_window.title("Misaligned frames editor")
 
     template_popup_window.minsize(width=300, height=template_popup_window.winfo_height())
 
@@ -2208,14 +2281,14 @@ def debug_template_popup():
     bad_frame_text = tk.StringVar()
     bad_frame_label = Label(right_frame, textvariable=bad_frame_text, width=45, font=("Arial", FontSize))
     bad_frame_label.pack(pady=5, padx=10, anchor="center")
-    bad_frame_text.set("Bad frame count:")
+    bad_frame_text.set("Misaligned frame count:")
     as_tooltips.add(bad_frame_label, "Number of frames that failed to be stabilized")
 
     #Label with bad Frames modified
     corrected_bad_frame_text = tk.StringVar()
     corrected_bad_frame_label = Label(right_frame, textvariable=corrected_bad_frame_text, width=45, font=("Arial", FontSize))
     corrected_bad_frame_label.pack(pady=5, padx=10, anchor="center")
-    corrected_bad_frame_text.set("Corrected bad frames:")
+    corrected_bad_frame_text.set("Corrected frame count:")
     as_tooltips.add(corrected_bad_frame_label, "Number of frames that failed to be stabilized, that have been manually adjusted")
 
     # Frame for manual alignment buttons 
@@ -2229,23 +2302,31 @@ def debug_template_popup():
     bad_frames_on_left_value.set(0)
     as_tooltips.add(bad_frames_on_left_label, "Number of badly-stabilized frames before the one currently selected")
 
-    previous_frame_button = Button(frame_selection_frame, text="◀◀", command=display_previous_bad_frame, font=("Arial", FontSize), width=3)
-    previous_frame_button.grid(pady=2, padx=2, row=0, column=1)
-    as_tooltips.add(previous_frame_button, "Select previous badly-stabilized frame")
+    previous_frame_button_10 = Button(frame_selection_frame, text="◀◀", command=display_previous_bad_frame_10, font=("Arial", FontSize), width=3)
+    previous_frame_button_10.grid(pady=2, padx=2, row=0, column=1)
+    as_tooltips.add(previous_frame_button_10, "Select previous badly-stabilized frame")
 
-    next_frame_button = Button(frame_selection_frame, text="▶▶", command=display_next_bad_frame, font=("Arial", FontSize), width=3)
-    next_frame_button.grid(pady=2, padx=2, row=0, column=3)
-    as_tooltips.add(next_frame_button, "Select next badly-stabilized frame")
+    previous_frame_button_1 = Button(frame_selection_frame, text="◀", command=display_previous_bad_frame_1, font=("Arial", FontSize), width=3)
+    previous_frame_button_1.grid(pady=2, padx=2, row=0, column=2)
+    as_tooltips.add(previous_frame_button_1, "Select previous badly-stabilized frame")
+
+    next_frame_button_1 = Button(frame_selection_frame, text="▶", command=display_next_bad_frame_1, font=("Arial", FontSize), width=3)
+    next_frame_button_1.grid(pady=2, padx=2, row=0, column=3)
+    as_tooltips.add(next_frame_button_1, "Select next badly-stabilized frame")
+
+    next_frame_button_10 = Button(frame_selection_frame, text="▶▶", command=display_next_bad_frame_10, font=("Arial", FontSize), width=3)
+    next_frame_button_10.grid(pady=2, padx=2, row=0, column=4)
+    as_tooltips.add(next_frame_button_10, "Select next badly-stabilized frame")
 
     #Label with bad frames to the left
     bad_frames_on_right_value = tk.IntVar()
     bad_frames_on_right_label = Label(frame_selection_frame, textvariable=bad_frames_on_right_value, font=("Arial", FontSize+6))
-    bad_frames_on_right_label.grid(pady=2, padx=10, row=0, column=4, rowspan = 2)
+    bad_frames_on_right_label.grid(pady=2, padx=10, row=0, column=5, rowspan = 2)
     bad_frames_on_right_value.set(0)
     as_tooltips.add(bad_frames_on_right_label, "Number of badly-stabilized frames after the one currently selected")
 
     # Frame for manual alignment buttons 
-    manual_position_frame = LabelFrame(right_frame, text="Manual adjustment controls") #, width=50, height=50)
+    manual_position_frame = LabelFrame(right_frame, text="Manual frame shift controls") #, width=50, height=50)
     manual_position_frame.pack(anchor="center", pady=5, padx=10)   # expand=True, fill="both", 
 
     frame_up_button = Button(manual_position_frame, text="▲", command=shift_bad_frame_up, font=("Arial", FontSize), width=3)
@@ -2307,8 +2388,6 @@ def debug_template_popup():
     # Initialize bad frame index
     if current_bad_frame_index == -1:
         current_bad_frame_index = 0
-    else:
-        current_bad_frame_index = find_closest_bad_frame_index(CurrentFrame)
 
     # Refresh popup window
     debug_template_popup_refresh()
@@ -2330,7 +2409,7 @@ def debug_template_display_info(frame_idx, threshold, top_left, move_x, move_y):
     if debug_template_match:
         current_frame_text.set(f"Current Frm:{frame_idx}, Tmp.Pos.:{top_left}, ΔX:{move_x}, ΔY:{move_y}")
         template_threshold_text.set(f"Threshold: {threshold}")
-        bad_frame_text.set(f"Bad frame count: {len(bad_frame_list)}")
+        bad_frame_text.set(f"Misaligned frame count: {len(bad_frame_list)}")
 
 
 
@@ -2978,7 +3057,6 @@ def match_template(frame_idx, template, img):
     iw = img.shape[1]
     ih = img.shape[0]
 
-    logging.debug(f"frame_idx {frame_idx} enters")
     if (tw >= iw or th >= ih):
         logging.error("Template (%ix%i) bigger than search area (%ix%i)",
                       tw, th, iw, ih)
@@ -3015,7 +3093,7 @@ def match_template(frame_idx, template, img):
         top_left = maxLoc
         if ConvertLoopRunning and not Done:
             if round(maxVal,2) < 0.85: # Quality not good enough, try another threshold
-                if round(maxVal,2) > best_match_level:
+                if round(maxVal,2) >= best_match_level:
                     best_match_level = round(maxVal,2)
                     best_thres = local_threshold
                     best_top_left = top_left
@@ -3029,12 +3107,10 @@ def match_template(frame_idx, template, img):
                     step_threshold = -5
                 local_threshold += step_threshold
                 if (step_threshold > 0 and local_threshold >= limit_threshold) or (step_threshold < 0 and local_threshold <= limit_threshold):
-                    logging.debug(f"frame_idx {frame_idx} - reach the threshold limit - best_thres: {best_thres}, best_top_left: {best_top_left}, best_maxVal: {best_maxVal}")
                     Done = True
                 elif abs(limit_threshold-local_threshold) <= 5:
                     step_threshold = -1     # Fine tune when near the limit
             else:
-                logging.debug(f"frame_idx {frame_idx} - Good enough match found")
                 best_thres = local_threshold
                 best_top_left = top_left
                 best_maxVal = maxVal
@@ -3046,8 +3122,10 @@ def match_template(frame_idx, template, img):
             best_maxVal = maxVal
             best_img_final = img_final
             Done = True
-
-    logging.debug(f"frame_idx {frame_idx} exits")
+    if best_maxVal == None:
+        logging.error(f"Match level not determined: frame_idx {frame_idx}, best_thres: {best_thres}, best_top_left: {best_top_left}, "
+                        "best_maxVal: {best_maxVal}, step_threshold: {step_threshold}, local_threshold: {local_threshold}, limit_threshold: {limit_threshold}")
+        best_maxVal = 0.0
 
     return int(best_thres), best_top_left, round(best_maxVal,2), best_img_final
 
@@ -3459,7 +3537,8 @@ def stabilize_image(frame_idx, img, img_ref, offset_x = 0, offset_y = 0, img_ref
         match_level_average.add_value(match_level)
         if missing_rows > 0 or match_level < 0.9:
             if match_level < 0.7:   # Only add really bad matches
-                bad_frame_list.append([frame_idx, 0, 0, frame_threshold, False])
+                ### bad_frame_list.append([frame_idx, 0, 0, frame_threshold, False])
+                insert_or_replace_sorted(bad_frame_list, [frame_idx, 0, 0, frame_threshold, False])
             if missing_rows > 0:
                 stabilization_bounds_alert_counter += 1
                 if stabilization_bounds_alert.get():
@@ -3902,9 +3981,6 @@ def start_convert():
         ConvertLoopRunning = True
 
         if not generate_video.get() or not skip_frame_regeneration.get():
-            # Clear list of bad frames
-            bad_frame_list.clear()
-            current_bad_frame_index = -1
             # Check if CSV option selected
             if GenerateCsv:
                 CsvFilename = video_filename_str.get()
@@ -4457,6 +4533,7 @@ def call_ffmpeg():
          '-crf', '18',
          '-pix_fmt', 'yuv420p',
          '-map', '[v]',
+         '-frames:v', str(title_num_frames + frames_to_encode_trim),
          os.path.join(video_target_dir_str.get(),
                       TargetVideoFilename)])
 
@@ -5345,7 +5422,7 @@ def build_ui():
         if True or developer_debug:
             display_template_popup = tk.BooleanVar(value=False)
             display_template_popup_checkbox = tk.Checkbutton(extra_frame,
-                                                     text='Display template troubleshooting info',
+                                                     text='Misaligned frame correction tool',
                                                      variable=display_template_popup,
                                                      onvalue=True, offvalue=False,
                                                      command=debug_template_popup,
