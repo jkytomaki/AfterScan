@@ -19,10 +19,10 @@ __author__ = 'Juan Remirez de Esparza'
 __copyright__ = "Copyright 2024, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
-__version__ = "1.12.08"
+__version__ = "1.12.09"
 __data_version__ = "1.0"
-__date__ = "2025-02-20"
-__version_highlight__ = "Improve stabilization algorithm, also add option to manually correct badly stabilized frames if required"
+__date__ = "2025-02-21"
+__version_highlight__ = "Review job lists, so that entry name remains the same even if changing job settings"
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
 __status__ = "Development"
@@ -77,10 +77,10 @@ StartFrame = 0
 ReferenceFrame = 0
 frame_selected = 0
 global work_image, base_image, original_image
-# FPM calculation (taken from ALT-Scann8)
-FPM_LastMinuteFrameTimes = list()
-FPM_StartTime = time.ctime()
-FPM_CalculatedValue = -1
+# FPS calculation (taken from ALT-Scann8)
+FPS_LastMinuteFrameTimes = list()
+FPS_StartTime = time.ctime()
+FPS_CalculatedValue = -1
 
 
 # Configuration & support file vars
@@ -207,11 +207,12 @@ RectangleWindowTitle = ""
 RotationAngle = 0.0
 StabilizeAreaDefined = False
 StabilizationThreshold = 220.0
-StabilizationThreshold_saved = StabilizationThreshold
+StabilizationThreshold_default = StabilizationThreshold
 stabilization_bounds_alert_counter = 0
 hole_search_area_adjustment_pending = False
 bad_frame_list = []     # List of tuples (5 elements each: Frame index, x offset, y offset, stabilization threshold, is frame saved)
 current_bad_frame_index = -1    # No list exist yet
+high_sensitive_bad_frame_detection = False
 CropAreaDefined = False
 RectangleTopLeft = (0, 0)
 RectangleBottomRight = (0, 0)
@@ -279,7 +280,7 @@ resolution_dict = {
 # Miscellaneous vars
 win = None
 as_tooltips = None
-ExpertMode = False
+ExpertMode = True
 IsWindows = False
 IsLinux = False
 IsMac = False
@@ -969,6 +970,8 @@ Job list support functions
 ##########################
 """
 
+JOB_LIST_NAME_LENGTH = 25
+JOB_LIST_DESCRIPTION_LENGTH = 50
 
 def job_list_process_selection(evt):
     global job_list
@@ -988,8 +991,28 @@ def job_list_process_selection(evt):
     selected_indices = job_list_listbox.curselection()
     if selected_indices:
         selected = int(job_list_listbox.curselection()[0])
-        entry = job_list_listbox.get(selected)
+        entry = normalize_job_name(job_list_listbox.get(selected))
         rerun_job_btn.config(text='Rerun job' if job_list[entry]['done'] else rerun_job_btn.config(text='Mark as run'))
+
+
+def job_listbox_find_entry(search_string):
+    """
+    Find the index of the first Listbox entry that starts with the given string.
+    
+    Args:
+        listbox: Tkinter Listbox widget
+        search_string (str): String to match at the start of an entry
+    
+    Returns:
+        int: Index of the first matching entry, or -1 if no match
+    """
+    # Pad the search string with spaces to match the column width
+    padded_search = f"{search_string:<{JOB_LIST_NAME_LENGTH}}"
+    for i in range(job_list_listbox.size()):  # Iterate over all entries
+        entry_text = job_list_listbox.get(i)  # Get text at index i
+        if entry_text.startswith(padded_search):
+            return i
+    return -1  # No match found
 
 
 def job_list_add_current():
@@ -1006,37 +1029,39 @@ def job_list_add_current():
         return
     entry_name = video_filename_str.get()
     if entry_name == "":
-        entry_name = os.path.split(SourceDir)[1]
+        tk.messagebox.showerror("Cannot add new job", "Please fill 'Video filename' field, as it is used to identify the job.")
+        return
+
     if project_config["FilmType"] == 'R8':
-        entry_name = entry_name + ", R8, "
+        description = "R8, "
     else:
-        entry_name = entry_name + ", S8, "
-    entry_name = entry_name + "Frames "
+        description = "S8, "
+    description = description + "Frames "
     if encode_all_frames.get():
-        entry_name = entry_name + "0"
+        description = description + "0"
         frames_to_encode = len(SourceDirFileList)
     else:
-        entry_name = entry_name + frame_from_str.get()
+        description = description + frame_from_str.get()
         frames_to_encode = int(frame_to_str.get()) - int(frame_from_str.get()) + 1
-    entry_name = entry_name + "-"
+    description = description + "-"
     if encode_all_frames.get():
-        entry_name = entry_name + str(len(SourceDirFileList))
+        description = description + str(len(SourceDirFileList))
     else:
-        entry_name = entry_name + frame_to_str.get()
-    entry_name = entry_name + " ("
-    entry_name = entry_name + str(frames_to_encode)
-    entry_name = entry_name + " frames)"
+        description = description + frame_to_str.get()
+    description = description + " ("
+    description = description + str(frames_to_encode)
+    description = description + " frames)"
     if project_config["GenerateVideo"]:
         if ffmpeg_preset.get() == 'veryslow':
-            entry_name = entry_name + ", HQ video"
+            description = description + ", HQ video"
         elif ffmpeg_preset.get() == 'veryfast':
-            entry_name = entry_name + ", Low Q. video"
+            description = description + ", Low Q. video"
         else:
-            entry_name = entry_name + ", medium Q. video"
+            description = description + ", medium Q. video"
     else:
-        entry_name = entry_name + ", no video"
+        description = description + ", no video"
     if resolution_dropdown_selected.get():
-        entry_name = entry_name + ", " + resolution_dropdown_selected.get()
+        description = description + ", " + resolution_dropdown_selected.get()
 
     save_project = True
     listbox_index = 'end'
@@ -1045,13 +1070,13 @@ def job_list_add_current():
                 "Job already exists",
                 "A job named " + entry_name + " exists already in the job list. "
                 "Do you want to overwrite it?."):
-            listbox_index = job_list_listbox.get(0, "end").index(entry_name)
+            listbox_index = job_listbox_find_entry(entry_name)
             job_list_listbox.delete(listbox_index)
         else:
             save_project = False
     if save_project:
         save_project_config()  # Make sure all current settings are in project_config
-        job_list[entry_name] = {'project': project_config.copy(), 'done': False, 'attempted': False}
+        job_list[entry_name] = {'project': project_config.copy(), 'done': False, 'attempted': False, 'description': description}
         # If a custom pattern is used, copy it with the name of the job, and change it in the joblist/project item
         if template_list.get_active_type() == 'custom' and os.path.isfile(template_list.get_active_filename()):
             CustomTemplateDir = os.path.dirname(template_list.get_active_filename())    # should be resources_dir, but better be safe
@@ -1063,12 +1088,13 @@ def job_list_add_current():
         else:
             if 'CustomTemplateFilename' in project_config:
                 del project_config['CustomTemplateFilename']
-        job_list_listbox.insert(listbox_index, entry_name)
+        entry_formatted = f"{entry_name:<{JOB_LIST_NAME_LENGTH}} {description:<{JOB_LIST_DESCRIPTION_LENGTH}}"
+        job_list_listbox.insert(listbox_index, entry_formatted)
         job_list_listbox.itemconfig(listbox_index)
         job_list_listbox.select_set(listbox_index)
 
 
-# gets currently selected job list item adn loads it in the UI fields (to allow editing)
+# gets currently selected job list item and loads it in the UI fields (to allow editing)
 def job_list_load_selected():
     global job_list
     global CurrentFrame, StartFrame, frames_to_encode
@@ -1083,7 +1109,7 @@ def job_list_load_selected():
         return
     selected = job_list_listbox.curselection()
     if selected != ():
-        entry_name = job_list_listbox.get(selected[0])  # we pick fist item as curselection returns a list
+        entry_name = normalize_job_name(job_list_listbox.get(selected[0]))  # we pick fist item as curselection returns a list
 
         if entry_name in job_list:
             # Save misaligned frame list in case new job switches to a different source folder
@@ -1122,7 +1148,7 @@ def job_list_delete_selected():
         return
     selected = job_list_listbox.curselection()
     if selected != ():
-        job_list.pop(job_list_listbox.get(selected))
+        job_list.pop(normalize_job_name(job_list_listbox.get(selected)))
         job_list_listbox.delete(selected)
         if selected[0] < job_list_listbox.size():
             job_list_listbox.select_set(selected[0])
@@ -1141,7 +1167,7 @@ def job_list_rerun_selected():
     selected_indices = job_list_listbox.curselection()
     if selected_indices != ():
         selected = int(job_list_listbox.curselection()[0])
-        entry = job_list_listbox.get(selected)
+        entry = normalize_job_name(job_list_listbox.get(selected))
 
         job_list[entry]['done'] = not job_list[entry]['done']
         job_list[entry]['attempted'] = job_list[entry]['done']
@@ -1156,6 +1182,29 @@ def save_job_list():
         with open(job_list_filename, 'w+') as f:
             json.dump(job_list, f)
 
+def create_alternate_job_name(name):
+    index = 2
+    done = False
+    new_name = name[:JOB_LIST_NAME_LENGTH]
+    while not done:
+        if new_name in job_list:
+            name_len = len(name)
+            name_appendix = f"({index})"
+            appendix_req_len = len(name_appendix)
+            len_to_cut = name_len + appendix_req_len - JOB_LIST_NAME_LENGTH
+            if len_to_cut > 0:
+                new_name = name[:len(name)-len_to_cut]
+            new_name = new_name + name_appendix
+            index += 1
+        else:
+            done = True
+
+    return new_name
+
+
+def normalize_job_name(name):
+    return name[:JOB_LIST_NAME_LENGTH].strip()
+
 
 def load_job_list():
     global job_list, job_list_filename, job_list_listbox
@@ -1163,8 +1212,36 @@ def load_job_list():
     if not IgnoreConfig and os.path.isfile(job_list_filename):
         f = open(job_list_filename)
         job_list = json.load(f)
-        for entry in job_list:
-            job_list_listbox.insert('end', entry)   # Add to listbox
+        # Explicitly copy keys
+        keys = list(job_list.keys())
+        for entry in keys:
+            # Check if 'description' field exists
+            if "description" not in job_list[entry]:  # Legacy entry, need to adapt
+                # Split legacy entry name (long) in two
+                parts = entry.split(",", 1)
+                new_entry_name = parts[0].strip()  # First part, always exists
+                new_entry_name = os.path.splitext(new_entry_name)[0][:JOB_LIST_NAME_LENGTH] # Remove extension if any, limit to 25
+                description = parts[1].strip()[:JOB_LIST_DESCRIPTION_LENGTH] if len(parts) > 1 else ""  # Second part or empty string
+                # Step 0: check is new entry key already exists
+                if new_entry_name in job_list:
+                    new_entry_name = create_alternate_job_name(new_entry_name)
+                logging.error(f"Detected legacy job list, replacing '{entry}' by '{new_entry_name}'")
+                # Step 1: Update entry with new key name
+                new_key = entry.replace(entry, new_entry_name)
+                job_list[new_key] = job_list.pop(entry)
+                # Step 2: Add new field
+                job_list[new_key]["description"] = description
+                # Update variable with new name for later use
+                entry = new_key
+            elif len(entry) > JOB_LIST_NAME_LENGTH:  # In case name is longer than JOB_LIST_NAME_LENGTH (25)
+                new_entry_name = normalize_job_name(entry)
+                logging.error(f"Detected name too long in job list, replacing '{entry}' by '{new_entry_name}'")
+                new_key = entry.replace(entry, new_entry_name)
+                job_list[new_key] = job_list.pop(entry)
+                entry = new_key
+            # Use string formatting to align "columns"
+            entry_formatted = f"{entry:<{JOB_LIST_NAME_LENGTH}} {job_list[entry]["description"]:<{JOB_LIST_DESCRIPTION_LENGTH}}"
+            job_list_listbox.insert('end', entry_formatted)   # Add to listbox
             job_list[entry]['attempted'] = job_list[entry]['done']  # Add default value for new json field
         f.close()
         idx = 0
@@ -1173,30 +1250,6 @@ def load_job_list():
             idx += 1
     else:   # No job list file. Set empty config to force defaults
         job_list = {}
-
-
-def save_bad_frame_list():
-    bad_frame_list_name = f"{os.path.split(SourceDir)[-1]}"
-    # Set filename
-    bad_frame_list_filename = f"bad_frame_list.{bad_frame_list_name}.json"
-    full_path_bad_frame_list_filename = os.path.join(resources_dir, bad_frame_list_filename)
-
-    # Serialize (save) the list to a file
-    with open(full_path_bad_frame_list_filename, "w") as file:
-        json.dump(bad_frame_list, file)
-
-
-def load_bad_frame_list():
-    global bad_frame_list
-    bad_frame_list_name = f"{os.path.split(SourceDir)[-1]}"
-    # Set filename
-    bad_frame_list_filename = f"bad_frame_list.{bad_frame_list_name}.json"
-    full_path_bad_frame_list_filename = os.path.join(resources_dir, bad_frame_list_filename)
-
-    # To read (deserialize) the list back
-    if os.path.isfile(full_path_bad_frame_list_filename):  # If hdr frames exist, add them
-        with open(full_path_bad_frame_list_filename, "r") as file:
-            bad_frame_list = json.load(file)
 
 
 def start_processing_job_list():
@@ -1298,7 +1351,7 @@ def sync_job_list_with_listbox():
 
     order_list=[]
     for idx in range(0, job_list_listbox.size()):
-        order_list.append(job_list_listbox.get(idx))
+        order_list.append(normalize_job_name(job_list_listbox.get(idx)))
 
     # Create a new dictionary with the desired order
     job_list = {key: job_list[key] for key in order_list}
@@ -1378,28 +1431,28 @@ def display_ffmpeg_result(ffmpeg_output):
 
 
 def register_frame():
-    global FPM_LastMinuteFrameTimes
-    global FPM_StartTime
-    global FPM_CalculatedValue
+    global FPS_LastMinuteFrameTimes
+    global FPS_StartTime
+    global FPS_CalculatedValue
 
     # Get current time
     frame_time = time.time()
     # Determine if we should start new count (last capture older than 5 seconds)
-    if len(FPM_LastMinuteFrameTimes) == 0 or FPM_LastMinuteFrameTimes[-1] < frame_time - 12:
-        FPM_StartTime = frame_time
-        FPM_LastMinuteFrameTimes.clear()
-        FPM_CalculatedValue = -1
+    if len(FPS_LastMinuteFrameTimes) == 0 or FPS_LastMinuteFrameTimes[-1] < frame_time - 12:
+        FPS_StartTime = frame_time
+        FPS_LastMinuteFrameTimes.clear()
+        FPS_CalculatedValue = -1
     # Add current time to list
-    FPM_LastMinuteFrameTimes.append(frame_time)
+    FPS_LastMinuteFrameTimes.append(frame_time)
     # Remove entries older than one minute
-    FPM_LastMinuteFrameTimes.sort()
-    while FPM_LastMinuteFrameTimes[0] <= frame_time-60:
-        FPM_LastMinuteFrameTimes.remove(FPM_LastMinuteFrameTimes[0])
+    FPS_LastMinuteFrameTimes.sort()
+    while FPS_LastMinuteFrameTimes[0] <= frame_time-60:
+        FPS_LastMinuteFrameTimes.remove(FPS_LastMinuteFrameTimes[0])
     # Calculate current value, only if current count has been going for more than 10 seconds
-    if frame_time - FPM_StartTime > 60:  # no calculations needed, frames in list are all in th elast 60 seconds
-        FPM_CalculatedValue = len(FPM_LastMinuteFrameTimes)
-    elif frame_time - FPM_StartTime > 10:  # some  calculations needed if less than 60 sec
-        FPM_CalculatedValue = int((len(FPM_LastMinuteFrameTimes) * 60) / (frame_time - FPM_StartTime))
+    if frame_time - FPS_StartTime > 60:  # no calculations needed, frames in list are all in the last 60 seconds
+        FPS_CalculatedValue = len(FPS_LastMinuteFrameTimes)/60
+    elif frame_time - FPS_StartTime > 10:  # some  calculations needed if less than 60 sec
+        FPS_CalculatedValue = int((len(FPS_LastMinuteFrameTimes) * 60) / (frame_time - FPS_StartTime))/60
 
 
 
@@ -1834,18 +1887,42 @@ def set_resolution(selected):
 def display_template_popup_closure():
     global debug_template_match, StabilizationThreshold
 
-    StabilizationThreshold = StabilizationThreshold_saved   # Restored original value
+    StabilizationThreshold = StabilizationThreshold_default   # Restored original value
     debug_template_match = False
     display_template_popup.set(False)
     general_config["TemplatePopupWindowPos"] = template_popup_window.geometry()
     template_popup_window.destroy()
 
 
+def save_bad_frame_list():
+    bad_frame_list_name = f"{os.path.split(SourceDir)[-1]}"
+    # Set filename
+    bad_frame_list_filename = f"bad_frame_list.{bad_frame_list_name}.json"
+    full_path_bad_frame_list_filename = os.path.join(resources_dir, bad_frame_list_filename)
+
+    # Serialize (save) the list to a file
+    with open(full_path_bad_frame_list_filename, "w") as file:
+        json.dump(bad_frame_list, file)
+
+
+def load_bad_frame_list():
+    global bad_frame_list
+    bad_frame_list_name = f"{os.path.split(SourceDir)[-1]}"
+    # Set filename
+    bad_frame_list_filename = f"bad_frame_list.{bad_frame_list_name}.json"
+    full_path_bad_frame_list_filename = os.path.join(resources_dir, bad_frame_list_filename)
+
+    # To read (deserialize) the list back
+    if os.path.isfile(full_path_bad_frame_list_filename):  # If hdr frames exist, add them
+        with open(full_path_bad_frame_list_filename, "r") as file:
+            bad_frame_list = json.load(file)
+
+
 def save_corrected_frames_loop(count_processed):
     global StabilizationThreshold
     count_this_slice = 0
     for bad_frame in bad_frame_list:
-        if (bad_frame[1] != 0 or bad_frame[2] != 0 or bad_frame[3] != StabilizationThreshold_saved) and not bad_frame[4]:
+        if (bad_frame[1] != 0 or bad_frame[2] != 0 or bad_frame[3] != StabilizationThreshold_default) and not bad_frame[4]:
             StabilizationThreshold = bad_frame[3]
             frame_encode(bad_frame[0], -1, True, bad_frame[1], bad_frame[2])
             bad_frame[4] = True # Saved flag
@@ -1866,7 +1943,7 @@ def save_corrected_frames():
     count = 0
 
     for bad_frame in bad_frame_list:
-        if (bad_frame[1] != 0 or bad_frame[2] != 0 or bad_frame[3] != StabilizationThreshold_saved) and not bad_frame[4]:
+        if (bad_frame[1] != 0 or bad_frame[2] != 0 or bad_frame[3] != StabilizationThreshold_default) and not bad_frame[4]:
             count += 1
 
     if count == 0:
@@ -1878,6 +1955,15 @@ def save_corrected_frames():
         template_popup_window.update()
         win.after(100, save_corrected_frames_loop, 0)  # Start processing in chunks 
 
+
+def delete_detected_frames():
+    if tk.messagebox.askyesno(
+        "Deleting info",
+        f"There are currently {len(bad_frame_list)} misaligned registered by AfterScan, "
+        f"as well as user information to align {count_corrected_bad_frames} of them.\r\n"
+        "Are you sure you want to detete it?"):
+        bad_frame_list.clear()
+        debug_template_popup_refresh()
 
 def find_closest(sorted_list, target):
     # Check if the list is empty
@@ -1957,7 +2043,7 @@ def debug_template_popup_refresh():
     if current_bad_frame_index == -1:
         current_bad_frame_index = 0
     if len(bad_frame_list) > 0:
-        #CurrentFrame = bad_frame_list[current_bad_frame_index][0]
+        CurrentFrame = bad_frame_list[current_bad_frame_index][0]
         x = bad_frame_list[current_bad_frame_index][1]
         y = bad_frame_list[current_bad_frame_index][2]
     else:
@@ -1984,24 +2070,24 @@ def display_previous_bad_frame(count):
     if current_bad_frame_index == -1:
         return
     if current_bad_frame_index > 0:
-        if StabilizationThreshold != StabilizationThreshold_saved:
+        if StabilizationThreshold != StabilizationThreshold_default:
             bad_frame_list[current_bad_frame_index][3] = StabilizationThreshold # Save threshold before moving
             bad_frame_list[current_bad_frame_index][4] = False  # Not saved yet
         current_bad_frame_index -= count
         if current_bad_frame_index < 0:
             current_bad_frame_index = 0
         # if not bad_frame_list[current_bad_frame_index][4]:  # If not saved yet, recover tunes threshold, otherwise keep previous (faster when processign consecutive frames)
-        if bad_frame_list[current_bad_frame_index][3] != StabilizationThreshold_saved:
+        if bad_frame_list[current_bad_frame_index][3] != StabilizationThreshold_default:
             StabilizationThreshold = bad_frame_list[current_bad_frame_index][3] # Recover saved threshold
             threshold_value.set(StabilizationThreshold)
         debug_template_popup_refresh()
 
 
-def display_previous_bad_frame_1():
+def display_previous_bad_frame_1(event = None):
     display_previous_bad_frame(1)
 
 
-def display_previous_bad_frame_10():
+def display_previous_bad_frame_10(event = None):
     display_previous_bad_frame(10)
 
 
@@ -2011,26 +2097,34 @@ def display_next_bad_frame(count):
     if current_bad_frame_index == -1:
         return
     if current_bad_frame_index < len(bad_frame_list)-1:
-        if StabilizationThreshold != StabilizationThreshold_saved:
+        if StabilizationThreshold != StabilizationThreshold_default:
             bad_frame_list[current_bad_frame_index][3] = StabilizationThreshold # Save threshold before moving
             bad_frame_list[current_bad_frame_index][4] = False  # Not saved yet
         current_bad_frame_index += count
         if current_bad_frame_index >= len(bad_frame_list):
             current_bad_frame_index = len(bad_frame_list) - 1
         #if not bad_frame_list[current_bad_frame_index][4]:  # If not saved yet, recover tuned threshold, otherwise keep previous (faster when processign consecutive frames)
-        if bad_frame_list[current_bad_frame_index][3] != StabilizationThreshold_saved:
+        if bad_frame_list[current_bad_frame_index][3] != StabilizationThreshold_default:
             StabilizationThreshold = bad_frame_list[current_bad_frame_index][3] # Recover saved threshold
             threshold_value.set(StabilizationThreshold)
         debug_template_popup_refresh()
 
 
-def display_next_bad_frame_1():
+def display_next_bad_frame_1(event = None):
     display_next_bad_frame(1)
 
 
-def display_next_bad_frame_10():
+def display_next_bad_frame_10(event = None):
     display_next_bad_frame(10)
 
+
+def additional_shift_calculation(state):
+    displacement = 20   # Default displacement with keyboard
+    if bool(state & 0x0004):   # Control
+        displacement = 40
+    elif bool(state & 0x0001):  # Shift
+        displacement = 1    # Shift used to fine tune (I have seen it elsewhere)
+    return displacement
 
 def shift_bad_frame_up(event = None):
     global current_bad_frame_index
@@ -2038,7 +2132,12 @@ def shift_bad_frame_up(event = None):
     if current_bad_frame_index == -1:
         return
     
-    bad_frame_list[current_bad_frame_index][2] -= 5 if event == None else 1
+    if event == None:
+        displacement = 5
+    else:
+        displacement = additional_shift_calculation(event.state)
+
+    bad_frame_list[current_bad_frame_index][2] -= displacement
     frame_encode(CurrentFrame, -1, False, bad_frame_list[current_bad_frame_index][1], bad_frame_list[current_bad_frame_index][2])
     bad_frame_list[current_bad_frame_index][4] = False # Just modified, reset saved flag
 
@@ -2048,7 +2147,13 @@ def shift_bad_frame_down(event = None):
     global current_bad_frame_index
     if current_bad_frame_index == -1:
         return
-    bad_frame_list[current_bad_frame_index][2] += 5 if event == None else 1
+    
+    if event == None:
+        displacement = 5
+    else:
+        displacement = additional_shift_calculation(event.state)
+
+    bad_frame_list[current_bad_frame_index][2] += displacement
     frame_encode(CurrentFrame, -1, False, bad_frame_list[current_bad_frame_index][1], bad_frame_list[current_bad_frame_index][2])
     bad_frame_list[current_bad_frame_index][4] = False # Just modified, reset saved flag
 
@@ -2057,7 +2162,13 @@ def shift_bad_frame_left(event = None):
     global current_bad_frame_index
     if current_bad_frame_index == -1:
         return
-    bad_frame_list[current_bad_frame_index][1] -= 5 if event == None else 1
+    
+    if event == None:
+        displacement = 5
+    else:
+        displacement = additional_shift_calculation(event.state)
+
+    bad_frame_list[current_bad_frame_index][1] -= displacement
     frame_encode(CurrentFrame, -1, False, bad_frame_list[current_bad_frame_index][1], bad_frame_list[current_bad_frame_index][2])
     bad_frame_list[current_bad_frame_index][4] = False # Just modified, reset saved flag
 
@@ -2066,7 +2177,13 @@ def shift_bad_frame_right(event = None):
     global current_bad_frame_index
     if current_bad_frame_index == -1:
         return
-    bad_frame_list[current_bad_frame_index][1] += 5 if event == None else 1
+    
+    if event == None:
+        displacement = 5
+    else:
+        displacement = additional_shift_calculation(event.state)
+
+    bad_frame_list[current_bad_frame_index][1] += displacement
     frame_encode(CurrentFrame, -1, False, bad_frame_list[current_bad_frame_index][1], bad_frame_list[current_bad_frame_index][2])
     bad_frame_list[current_bad_frame_index][4] = False # Just modified, reset saved flag
 
@@ -2082,6 +2199,8 @@ def count_corrected_bad_frames():
 def bad_frames_increase_threshold(value):
     global StabilizationThreshold
     StabilizationThreshold += float(value)
+    if (StabilizationThreshold > 255):
+        StabilizationThreshold = 255.0
     threshold_value.set(StabilizationThreshold)
     debug_template_popup_refresh()
     bad_frame_list[current_bad_frame_index][4] = False
@@ -2098,6 +2217,8 @@ def bad_frames_increase_threshold_5():
 def bad_frames_decrease_threshold(value):
     global StabilizationThreshold
     StabilizationThreshold -= float(value)
+    if (StabilizationThreshold < 0):
+        StabilizationThreshold = 0.0
     threshold_value.set(StabilizationThreshold)
     debug_template_popup_refresh()
     bad_frame_list[current_bad_frame_index][4] = False
@@ -2110,6 +2231,10 @@ def bad_frames_decrease_threshold_1():
 def bad_frames_decrease_threshold_5():
     bad_frames_decrease_threshold(5)
 
+
+def set_high_sensitive_bad_frame_detection():
+    global high_sensitive_bad_frame_detection
+    high_sensitive_bad_frame_detection = high_sensitive_bad_frame_detection_value.get()
 
 def debug_template_popup_update_widgets(status):
     if debug_template_match:
@@ -2130,6 +2255,7 @@ def debug_template_popup_update_widgets(status):
         threshold_label.config(state=status)
         increase_threshold_button_1.config(state=status)
         increase_threshold_button_5.config(state=status)
+        delete_bad_frames_button.config(state=status)
 
 def debug_template_popup():
     global win
@@ -2147,9 +2273,11 @@ def debug_template_popup():
     global next_frame_button_1, next_frame_button_10, previous_frame_button_1, previous_frame_button_10, save_button, close_button
     global bad_frames_on_left_label, bad_frames_on_right_label
     global current_bad_frame_index
-    global StabilizationThreshold_saved, threshold_value
+    global StabilizationThreshold_default, threshold_value
     global decrease_threshold_button_1, threshold_label, increase_threshold_button_1
     global decrease_threshold_button_5, increase_threshold_button_5
+    global high_sensitive_bad_frame_detection_value
+    global delete_bad_frames_button
 
     if not developer_debug:
         return
@@ -2161,10 +2289,10 @@ def debug_template_popup():
 
     debug_template_match = True
 
-    StabilizationThreshold_saved = StabilizationThreshold   # To be restored on exit
+    StabilizationThreshold_default = StabilizationThreshold   # To be restored on exit
 
     template_popup_window = Toplevel(win)
-    template_popup_window.title("Misaligned frames editor")
+    template_popup_window.title("Misaligned frame monitoring/edition tool")
 
     template_popup_window.minsize(width=300, height=template_popup_window.winfo_height())
 
@@ -2291,6 +2419,17 @@ def debug_template_popup():
     corrected_bad_frame_text.set("Corrected frame count:")
     as_tooltips.add(corrected_bad_frame_label, "Number of frames that failed to be stabilized, that have been manually adjusted")
 
+    # Checkbox to allow high sensitive detencion (match < 0.9)
+    high_sensitive_bad_frame_detection_value = tk.BooleanVar(value=high_sensitive_bad_frame_detection)
+    high_sensitive_bad_frame_detection_checkbox = tk.Checkbutton(right_frame,
+                                                         text='Activate high-sensitive detection',
+                                                         variable=high_sensitive_bad_frame_detection_value,
+                                                         command=set_high_sensitive_bad_frame_detection,
+                                                         onvalue=True, offvalue=False,
+                                                         width=40, font=("Arial", FontSize))
+    high_sensitive_bad_frame_detection_checkbox.pack(pady=5, padx=10, anchor="center")
+    as_tooltips.add(high_sensitive_bad_frame_detection_checkbox, "Check in order to activate detection of slightly misaligned frames")
+
     # Frame for manual alignment buttons 
     frame_selection_frame = LabelFrame(right_frame, text="Misaligned frame selection") #, width=50, height=50)
     frame_selection_frame.pack(anchor="center", pady=5, padx=10)   # expand=True, fill="both", 
@@ -2317,6 +2456,10 @@ def debug_template_popup():
     next_frame_button_10 = Button(frame_selection_frame, text="▶▶", command=display_next_bad_frame_10, font=("Arial", FontSize), width=3)
     next_frame_button_10.grid(pady=2, padx=2, row=0, column=4)
     as_tooltips.add(next_frame_button_10, "Select next badly-stabilized frame")
+
+    # Bind Page Up and Page Down
+    template_popup_window.bind("<Prior>", display_previous_bad_frame_1)  # Page Up
+    template_popup_window.bind("<Next>", display_next_bad_frame_1) # Page Down
 
     #Label with bad frames to the left
     bad_frames_on_right_value = tk.IntVar()
@@ -2373,11 +2516,15 @@ def debug_template_popup():
     increase_threshold_button_5.pack(pady=10, padx=10, side=LEFT, anchor="center")
     as_tooltips.add(increase_threshold_button_1, "Increase threshold value by 5.")
 
+    delete_bad_frames_button = Button(right_frame, text="Delete all collected frame info", command=delete_detected_frames, font=("Arial", FontSize))
+    delete_bad_frames_button.pack(pady=10, padx=10, anchor="center")
+    as_tooltips.add(delete_bad_frames_button, "Delete all the information collected about misaligned frames, along with any correction info you might have provided.")
+
     # Frame for save/exit buttons
     save_exit_frame = Frame(right_frame)
     save_exit_frame.pack(anchor="center", pady=5, padx=10)
 
-    save_button = Button(save_exit_frame, text="Generate", command=save_corrected_frames, font=("Arial", FontSize))
+    save_button = Button(save_exit_frame, text="Re-generate corrected frames", command=save_corrected_frames, font=("Arial", FontSize))
     save_button.pack(pady=10, padx=10, side=LEFT, anchor="center")
     as_tooltips.add(save_button, "Generate new frames, with user adjustments, to target folder. Beware!!! Make sure you select 'Skip FrameRegeneration' when generating the video, otherwise the manual adjustement will be lost.")
 
@@ -2549,6 +2696,10 @@ def select_scale_frame(selected_frame):
 ################################
 
 
+def get_stabilization_threshold():
+    return StabilizationThreshold_default if ConvertLoopRunning else StabilizationThreshold
+
+
 def detect_film_type():
     global template_list
     global CurrentFrame, SourceDirFileList
@@ -2578,7 +2729,7 @@ def detect_film_type():
     for frame_to_check in FramesToCheck:
         img = cv2.imread(SourceDirFileList[frame_to_check], cv2.IMREAD_UNCHANGED)
         img_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        img_bw = cv2.threshold(img_gray, StabilizationThreshold, 255, cv2.THRESH_BINARY)[1]
+        img_bw = cv2.threshold(img_gray, StabilizationThreshold_default, 255, cv2.THRESH_BINARY)[1]
         search_img = get_image_left_stripe(img_bw)
         result = cv2.matchTemplate(search_img, template_1, cv2.TM_CCOEFF_NORMED)
         (minVal, maxVal, minLoc, maxLoc) = cv2.minMaxLoc(result)
@@ -2909,7 +3060,7 @@ def select_custom_template():
     global template_list, film_type
     global RectangleWindowTitle
     global area_select_image_factor
-    global low_contrast_custom_template, StabilizationThreshold
+    global low_contrast_custom_template
 
     # First, define custom template name and filename in case it needs to be deleted
     # Template Name = Last folder in the path, plus Frame From,  Frame to it not encoding all
@@ -2955,7 +3106,7 @@ def select_custom_template():
                 img_final = cv2.threshold(img_gray, 100, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
             else:
                 # img_bw = cv2.threshold(img_gray, float(StabilizationThreshold), 255, cv2.THRESH_TRUNC | cv2.THRESH_TRIANGLE)[1]
-                img_bw = cv2.threshold(img_gray, float(StabilizationThreshold), 255, cv2.THRESH_BINARY)[1]
+                img_bw = cv2.threshold(img_gray, float(StabilizationThreshold_default), 255, cv2.THRESH_BINARY)[1]
                 # img_edges = cv2.Canny(image=img_bw, threshold1=100, threshold2=20)  # Canny Edge Detection
                 img_final = img_bw
 
@@ -3063,7 +3214,7 @@ def match_template(frame_idx, template, img):
         return 0, (0, 0), 0, 0
 
     Done = False
-    local_threshold = StabilizationThreshold
+    local_threshold = get_stabilization_threshold()
     img_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)    # reduced left stripe to calculate white on black proportion
     # Init processing variables
     limit_threshold = 0
@@ -3272,7 +3423,10 @@ def resize_image(img, ratio):
     return cv2.resize(img, dsize)
 
 
-def get_image_left_stripe(img):
+# This old code was supposed to optimize the size of the search area, as it was assumed that the smaller the area, 
+# the fastest OpenCV would be in finding the template. However, once simplified (hardcoded to 20% left stripe of 
+# the image), it does not seem to cause any additional delay. We leav ethe old code here for the moment.
+def get_image_left_stripe_old(img):
     global HoleSearchTopLeft, HoleSearchBottomRight
     global template_list
     # Get partial image where the hole should be (to facilitate template search
@@ -3288,6 +3442,12 @@ def get_image_left_stripe(img):
     horizontal_range = (HoleSearchTopLeft[0], HoleSearchBottomRight[0])
     vertical_range = (HoleSearchTopLeft[1], HoleSearchBottomRight[1])
     return np.copy(img[vertical_range[0]:vertical_range[1], horizontal_range[0]:horizontal_range[1]])
+
+def get_image_left_stripe(img):
+    global HoleSearchTopLeft, HoleSearchBottomRight
+    global template_list
+
+    return np.copy(img[0:img.shape[1], 0:int(img.shape[0] * 0.2)])
 
 
 def gamma_correct_image(src, gamma):
@@ -3356,7 +3516,7 @@ def get_target_position(frame_idx, img, orientation='v', threshold=10, slice_wid
             sliced_image = img[pos:pos+slice_width, :int(width*0.15)]    # Don't need a full horizontal slice, holes must be in the leftmost 15%
 
         # Convert to pure black and white (binary image)
-        _, binary_img = cv2.threshold(sliced_image, StabilizationThreshold, 255, cv2.THRESH_BINARY)
+        _, binary_img = cv2.threshold(sliced_image, get_stabilization_threshold(), 255, cv2.THRESH_BINARY)
 
         # Sum along the width to get a 1D array representing white pixels at each height
         height_profile = np.sum(binary_img, axis=1 if orientation == 'v' else 0)
@@ -3507,7 +3667,7 @@ def stabilize_image(frame_idx, img, img_ref, offset_x = 0, offset_y = 0, img_ref
     if use_simple_stabilization:  # Standard stabilization using templates
         move_x, move_y = calculate_frame_displacement_simple(frame_idx, img_ref)
         match_level = 1
-        frame_threshold = StabilizationThreshold
+        frame_threshold = get_stabilization_threshold()
     else:
         move_x, move_y, top_left, match_level, frame_threshold  = calculate_frame_displacement_with_templates(frame_idx, img_ref, img_ref_alt, id)
         
@@ -3536,7 +3696,7 @@ def stabilize_image(frame_idx, img, img_ref, offset_x = 0, offset_y = 0, img_ref
         # Calculate rolling average of match level
         match_level_average.add_value(match_level)
         if missing_rows > 0 or match_level < 0.9:
-            if match_level < 0.7:   # Only add really bad matches
+            if match_level < 0.7 if not high_sensitive_bad_frame_detection else 0.9:   # Only add really bad matches
                 ### bad_frame_list.append([frame_idx, 0, 0, frame_threshold, False])
                 insert_or_replace_sorted(bad_frame_list, [frame_idx, 0, 0, frame_threshold, False])
             if missing_rows > 0:
@@ -3860,7 +4020,7 @@ def set_hole_search_area(img):
     result = cv2.matchTemplate(img_target, film_corner_template, cv2.TM_CCOEFF_NORMED)
     (minVal, maxVal, minLoc, maxLoc) = cv2.minMaxLoc(result)
     left_stripe_width = maxLoc[0] + template_list.get_active_size()[0]
-    left_stripe_width += 80 * int(img.shape[0]/1520)   # Increase width, proportional to the image size (250 pixels for default size 2028x1520)
+    left_stripe_width += int(80 * img.shape[0]/1520)   # Increase width, proportional to the image size (250 pixels for default size 2028x1520)
     logging.debug(f"Calculated left stripe width: {left_stripe_width}")
     if extended_stabilization.get():
         logging.debug("Extended stabilization requested: Widening search area by 50 pixels")
@@ -3915,7 +4075,7 @@ def start_convert():
     global job_list, CurrentJobEntry
     global stabilization_bounds_alert_counter
     global CsvFilename, CsvPathName, CsvFile
-    global FPM_LastMinuteFrameTimes
+    global FPS_LastMinuteFrameTimes
     global current_bad_frame_index
 
     if ConvertLoopRunning:
@@ -3928,8 +4088,8 @@ def start_convert():
         save_job_list()
         # Reset frames out of bounds counter
         stabilization_bounds_alert_counter = 0
-        # Empty FPM register list
-        FPM_LastMinuteFrameTimes.clear()
+        # Empty FPS register list
+        FPS_LastMinuteFrameTimes.clear()
         # Centralize 'frames_to_encode' update here
         if encode_all_frames.get():
             StartFrame = 0
@@ -4177,7 +4337,7 @@ def frame_encode(frame_idx, id, do_save = True, offset_x = 0, offset_y = 0):
     return len(images_to_merge) != 0
 
 def frame_update_ui(frame_idx, merged):
-    global first_absolute_frame, StartFrame, frames_to_encode, FPM_CalculatedValue
+    global first_absolute_frame, StartFrame, frames_to_encode, FPS_CalculatedValue
     global app_status_label
 
     frame_selected.set(frame_idx)
@@ -4188,8 +4348,8 @@ def frame_update_ui(frame_idx, merged):
     time_str = f"Film time: {(frame_idx//fps) // 60:02}:{(frame_idx//fps) % 60:02}"
     frame_slider_time.config(text=time_str)
     status_str = f"Status: Generating{' merged' if merged else ''} frames {((frame_idx - StartFrame+1) * 100 / frames_to_encode):.1f}%"
-    if FPM_CalculatedValue != -1:  # FPM not calculated yet, display some indication
-        status_str = status_str + f' (FPM:{FPM_CalculatedValue})'
+    if FPS_CalculatedValue != -1:  # FPS not calculated yet, display some indication
+        status_str = status_str + f' (FPS:{FPS_CalculatedValue:.1f})'
     app_status_label.config(text=status_str, fg='black')
 
 
@@ -4270,7 +4430,7 @@ def frame_generation_loop():
     global TargetDirFileList
     global frame_slider
     global MergeMertens
-    global FPM_CalculatedValue
+    global FPS_CalculatedValue
     global HdrFilesOnly
     global frame_encoding_queue
     global last_displayed_image, working_threads
@@ -4285,7 +4445,7 @@ def frame_generation_loop():
             display_image(message[2])
 
     if CurrentFrame >= StartFrame + frames_to_encode and last_displayed_image+1 >= StartFrame + frames_to_encode:
-        FPM_CalculatedValue = -1
+        FPS_CalculatedValue = -1
         # write average match quality in the status line, and in the widget
         status_str = f"Status: Frame generation OK - AvgQ: {int(match_level_average.get_average()*100)}"
         app_status_label.config(text=status_str, fg='green')
@@ -4344,7 +4504,7 @@ def frame_generation_loop():
         app_status_label.config(text=status_str, fg='red')
         generation_exit(success = False)
         stabilization_threshold_match_label.config(fg='lightgray', bg='lightgray', text='')
-        FPM_CalculatedValue = -1
+        FPS_CalculatedValue = -1
         # Refresh popup window
         debug_template_popup_refresh()
         # Enable manual stabilize popup widgets
@@ -4821,7 +4981,6 @@ def build_ui():
     global source_folder_btn, target_folder_btn
     global perform_stabilization, perform_stabilization_checkbox
     global stabilization_threshold_spinbox, stabilization_threshold_str
-    global StabilizationThreshold
     global stabilization_threshold_match_label
     global perform_rotation, perform_rotation_checkbox, rotation_angle_label
     global rotation_angle_spinbox, rotation_angle_str
@@ -4929,7 +5088,7 @@ def build_ui():
     # Create frame to select source and target folders *******************************
     folder_frame = LabelFrame(right_area_frame, text='Folder selection', width=50,
                               height=8, font=("Arial", FontSize-2))
-    folder_frame.pack(side=TOP, padx=2, pady=2, ipadx=5)
+    folder_frame.pack(padx=2, pady=2, ipadx=5, expand=True, fill="both")
 
     source_folder_frame = Frame(folder_frame)
     source_folder_frame.pack(side=TOP)
@@ -4978,7 +5137,7 @@ def build_ui():
     postprocessing_frame = LabelFrame(right_area_frame,
                                       text='Frame post-processing',
                                       width=40, height=8, font=("Arial", FontSize-2))
-    postprocessing_frame.pack(side=TOP, padx=2, pady=2, ipadx=5)
+    postprocessing_frame.pack(padx=2, pady=2, ipadx=5, expand=True, fill="both")
     postprocessing_row = 0
 
     # Radio buttons to select R8/S8. Required to select adequate pattern, and match position
@@ -5222,7 +5381,7 @@ def build_ui():
     video_frame = LabelFrame(right_area_frame,
                              text='Video generation',
                              width=50, height=8, font=("Arial", FontSize-2))
-    video_frame.pack(side=TOP, padx=2, pady=2, ipadx=5)
+    video_frame.pack(padx=2, pady=2, ipadx=5, expand=True, fill="both")
     video_row = 0
 
     # Check box to generate video or not
@@ -5233,7 +5392,7 @@ def build_ui():
                                              onvalue=True, offvalue=False,
                                              command=generate_video_selection,
                                              width=5, font=("Arial", FontSize))
-    generate_video_checkbox.grid(row=video_row, column=0, sticky=W)
+    generate_video_checkbox.grid(row=video_row, column=0, sticky=W, padx=5)
     generate_video_checkbox.config(state=NORMAL if ffmpeg_installed
                                    else DISABLED)
     as_tooltips.add(generate_video_checkbox, "Generate an MP4 video, once all frames have been processed")
@@ -5245,7 +5404,7 @@ def build_ui():
         variable=skip_frame_regeneration, onvalue=True, offvalue=False,
         width=20, font=("Arial", FontSize))
     skip_frame_regeneration_cb.grid(row=video_row, column=1,
-                                    columnspan=2, sticky=W)
+                                    columnspan=2, sticky=W, padx=5)
     skip_frame_regeneration_cb.config(state=NORMAL if ffmpeg_installed
                                       else DISABLED)
     as_tooltips.add(skip_frame_regeneration_cb, "If frames have ben already generated in a previous run, and you want to only generate the vieo, check this one")
@@ -5254,9 +5413,8 @@ def build_ui():
 
     # Video target folder
     video_target_dir_str = StringVar()
-    video_target_dir = Entry(video_frame, textvariable=video_target_dir_str, width=36, borderwidth=1, font=("Arial", FontSize))
-    video_target_dir.grid(row=video_row, column=0, columnspan=2,
-                             sticky=W)
+    video_target_dir = Entry(video_frame, textvariable=video_target_dir_str, width=34, borderwidth=1, font=("Arial", FontSize))
+    video_target_dir.grid(row=video_row, column=0, columnspan=2, sticky=W, padx=5)
     video_target_dir.bind('<<Paste>>', lambda event, entry=video_target_dir: on_paste_all_entries(event, entry))
     as_tooltips.add(video_target_dir, "Directory where the generated video will be stored")
 
@@ -5264,17 +5422,16 @@ def build_ui():
                                height=1, command=set_video_target_folder,
                                activebackground='green',
                                activeforeground='white', wraplength=80, font=("Arial", FontSize))
-    video_target_folder_btn.grid(row=video_row, column=2, columnspan=2, sticky=W)
+    video_target_folder_btn.grid(row=video_row, column=2, columnspan=2, sticky=W, padx=5)
     as_tooltips.add(video_target_folder_btn, "Selects directory where the generated video will be stored")
     video_row += 1
 
     # Video filename
     video_filename_str = StringVar()
     video_filename_label = Label(video_frame, text='Video filename:', font=("Arial", FontSize))
-    video_filename_label.grid(row=video_row, column=0, sticky=W)
+    video_filename_label.grid(row=video_row, column=0, sticky=W, padx=5)
     video_filename_name = Entry(video_frame, textvariable=video_filename_str, width=26 if BigSize else 33, borderwidth=1, font=("Arial", FontSize))
-    video_filename_name.grid(row=video_row, column=1, columnspan=2,
-                             sticky=W)
+    video_filename_name.grid(row=video_row, column=1, columnspan=2, sticky=W, padx=5)
     video_filename_name.bind('<<Paste>>', lambda event, entry=video_filename_name: on_paste_all_entries(event, entry))
     as_tooltips.add(video_filename_name, "Filename of video to be created")
 
@@ -5283,10 +5440,9 @@ def build_ui():
     # Video title (add title at the start of the video)
     video_title_str = StringVar()
     video_title_label = Label(video_frame, text='Video title:', font=("Arial", FontSize))
-    video_title_label.grid(row=video_row, column=0, sticky=W)
+    video_title_label.grid(row=video_row, column=0, sticky=W, padx=5)
     video_title_name = Entry(video_frame, textvariable=video_title_str, width=26 if BigSize else 33, borderwidth=1, font=("Arial", FontSize))
-    video_title_name.grid(row=video_row, column=1, columnspan=2,
-                             sticky=W)
+    video_title_name.grid(row=video_row, column=1, columnspan=2, sticky=W, padx=5)
     video_title_name.bind('<<Paste>>', lambda event, entry=video_title_name: on_paste_all_entries(event, entry))
     as_tooltips.add(video_title_name, "Video title. If entered, a simple title sequence will be generated at the start of the video, using a sequence randomly selected from the same video, running at half speed")
 
@@ -5318,37 +5474,36 @@ def build_ui():
     video_fps_frame = Frame(video_frame)
     video_fps_frame.grid(row=video_row, column=0, sticky=W)
     video_fps_label = Label(video_fps_frame, text='FPS:', font=("Arial", FontSize))
-    video_fps_label.pack(side=LEFT, anchor=W)
+    video_fps_label.pack(side=LEFT, anchor=W, padx=5)
     video_fps_label.config(state=DISABLED)
     video_fps_dropdown = OptionMenu(video_fps_frame,
                                     video_fps_dropdown_selected, *fps_list,
                                     command=set_fps)
     video_fps_dropdown.config(takefocus=1, font=("Arial", FontSize))
-    video_fps_dropdown.pack(side=LEFT, anchor=E)
+    video_fps_dropdown.pack(side=LEFT, anchor=E, padx=5)
     video_fps_dropdown.config(state=DISABLED)
     as_tooltips.add(video_fps_dropdown, "Number of frames per second (FPS) of the video to be generated. Usually Super8 goes at 18 FPS, and Regular 8 at 16 FPS, although some cameras allowed to use other speeds (faster for smoother movement, slower for extended play time)")
 
     # Create FFmpeg preset options
     ffmpeg_preset_frame = Frame(video_frame)
-    ffmpeg_preset_frame.grid(row=video_row, column=1, columnspan=2,
-                             sticky=W)
+    ffmpeg_preset_frame.grid(row=video_row, column=1, columnspan=2, sticky=W, padx=5)
     ffmpeg_preset = StringVar()
     ffmpeg_preset_rb1 = Radiobutton(ffmpeg_preset_frame,
                                     text="Best quality (slow)",
                                     variable=ffmpeg_preset, value='veryslow', font=("Arial", FontSize))
-    ffmpeg_preset_rb1.pack(side=TOP, anchor=W)
+    ffmpeg_preset_rb1.pack(side=TOP, anchor=W, padx=5)
     ffmpeg_preset_rb1.config(state=DISABLED)
     as_tooltips.add(ffmpeg_preset_rb1, "Best quality, but very slow encoding. Maps to the same ffmpeg option")
 
     ffmpeg_preset_rb2 = Radiobutton(ffmpeg_preset_frame, text="Medium",
                                     variable=ffmpeg_preset, value='medium', font=("Arial", FontSize))
-    ffmpeg_preset_rb2.pack(side=TOP, anchor=W)
+    ffmpeg_preset_rb2.pack(side=TOP, anchor=W, padx=5)
     ffmpeg_preset_rb2.config(state=DISABLED)
     as_tooltips.add(ffmpeg_preset_rb2, "Compromise between quality and encoding speed. Maps to the same ffmpeg option")
     ffmpeg_preset_rb3 = Radiobutton(ffmpeg_preset_frame,
                                     text="Fast (low quality)",
                                     variable=ffmpeg_preset, value='veryfast', font=("Arial", FontSize))
-    ffmpeg_preset_rb3.pack(side=TOP, anchor=W)
+    ffmpeg_preset_rb3.pack(side=TOP, anchor=W, padx=5)
     ffmpeg_preset_rb3.config(state=DISABLED)
     as_tooltips.add(ffmpeg_preset_rb3, "Faster encoding speed, lower quality (but not so much IMHO). Maps to the same ffmpeg option")
     ffmpeg_preset.set('medium')
@@ -5365,13 +5520,13 @@ def build_ui():
     resolution_frame = Frame(video_frame)
     resolution_frame.grid(row=video_row, column=0, columnspan= 2, sticky=W)
     resolution_label = Label(resolution_frame, text='Resolution:', font=("Arial", FontSize))
-    resolution_label.pack(side=LEFT, anchor=W)
+    resolution_label.pack(side=LEFT, anchor=W, padx=5)
     resolution_label.config(state=DISABLED)
     resolution_dropdown = OptionMenu(resolution_frame,
                                     resolution_dropdown_selected, *resolution_dict.keys(),
                                     command=set_resolution)
     resolution_dropdown.config(takefocus=1, font=("Arial", FontSize))
-    resolution_dropdown.pack(side=LEFT, anchor=E)
+    resolution_dropdown.pack(side=LEFT, anchor=E, padx=5)
     resolution_dropdown.config(state=DISABLED)
     as_tooltips.add(resolution_dropdown, "Resolution to be used when generating the video")
 
@@ -5379,9 +5534,9 @@ def build_ui():
 
     # Custom ffmpeg path
     custom_ffmpeg_path_label = Label(video_frame, text='Custom FFMpeg path:', font=("Arial", FontSize))
-    custom_ffmpeg_path_label.grid(row=video_row, column=0, sticky=W)
+    custom_ffmpeg_path_label.grid(row=video_row, column=0, sticky=W, padx=5)
     custom_ffmpeg_path = Entry(video_frame, width=26 if BigSize else 33, borderwidth=1, font=("Arial", FontSize))
-    custom_ffmpeg_path.grid(row=video_row, column=1, columnspan=2, sticky=W)
+    custom_ffmpeg_path.grid(row=video_row, column=1, columnspan=2, sticky=W, padx=5)
     custom_ffmpeg_path.delete(0, 'end')
     custom_ffmpeg_path.insert('end', FfmpegBinName)
     custom_ffmpeg_path.bind("<FocusOut>", custom_ffmpeg_path_focus_out)
@@ -5395,7 +5550,7 @@ def build_ui():
         extra_frame = LabelFrame(right_area_frame,
                                  text='Extra options',
                                  width=50, height=8, font=("Arial", FontSize-2))
-        extra_frame.pack(side=TOP, padx=5, pady=5, ipadx=5, ipady=5)
+        extra_frame.pack(padx=5, pady=5, ipadx=5, ipady=5, expand=True, fill="both")
         extra_row = 0
 
         # Spinbox to select stabilization threshold - Ignored, to be removed in the future
@@ -5422,7 +5577,7 @@ def build_ui():
         if True or developer_debug:
             display_template_popup = tk.BooleanVar(value=False)
             display_template_popup_checkbox = tk.Checkbutton(extra_frame,
-                                                     text='Misaligned frame correction tool',
+                                                     text='Misaligned frame monitoring/edition tool',
                                                      variable=display_template_popup,
                                                      onvalue=True, offvalue=False,
                                                      command=debug_template_popup,
@@ -5438,7 +5593,7 @@ def build_ui():
     job_list_frame.pack(side=TOP, padx=2, pady=2, anchor=W)
 
     # job listbox
-    job_list_listbox = Listbox(job_list_frame, width=65 if BigSize else 60, height=13 if BigSize else 19, font=("Arial", FontSize))
+    job_list_listbox = Listbox(job_list_frame, width=65 if BigSize else 60, height=13 if BigSize else 19, font=("DejaVu Sans Mono", FontSize))
     job_list_listbox.grid(column=0, row=0, padx=5, pady=2, ipadx=5)
     job_list_listbox.bind("<Delete>", job_list_delete_current)
     job_list_listbox.bind("<Return>", job_list_load_current)
@@ -5598,6 +5753,11 @@ def main(argv):
     go_disable_tooptips = False
 
     # Create job dictionary
+    # Dictionary fields
+    # 'description': Added in 1.12.09, to split job list entry name in two
+    # 'project': Contents of project_config
+    # 'done': Job already completed
+    # 'attempted': Job started but not completed
     job_list = {}
 
     # Create project settings dictionary
