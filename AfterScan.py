@@ -19,9 +19,9 @@ __author__ = 'Juan Remirez de Esparza'
 __copyright__ = "Copyright 2024, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
-__version__ = "1.12.10"
+__version__ = "1.12.11"
 __data_version__ = "1.0"
-__date__ = "2025-02-21"
+__date__ = "2025-02-22"
 __version_highlight__ = "Simplify get_target_position, make it to work with partial templates (part of a hole in S8)"
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
@@ -208,7 +208,6 @@ RotationAngle = 0.0
 StabilizeAreaDefined = False
 StabilizationThreshold = 220.0
 StabilizationThreshold_default = StabilizationThreshold
-stabilization_bounds_alert_counter = 0
 hole_search_area_adjustment_pending = False
 bad_frame_list = []     # List of tuples (5 elements each: Frame index, x offset, y offset, stabilization threshold, is frame saved)
 current_bad_frame_index = -1    # Curretn bad frame being displayed/edited
@@ -291,7 +290,7 @@ is_demo = False
 ForceSmallSize = False
 ForceBigSize = False
 dev_debug_enabled = False
-debug_template_match = False
+FrameSync_Viewer_opened = False
 
 GenerateCsv = False
 CsvFilename = ""
@@ -743,8 +742,8 @@ def load_project_config():
     # saving it in case of batch processing
     project_config_from_file = True
     widget_status_update(NORMAL)
-    if debug_template_match:
-        debug_template_popup_update_widgets(NORMAL)
+    if FrameSync_Viewer_opened:
+        FrameSync_Viewer_popup_update_widgets(NORMAL)
 
 def decode_project_config():        
     global SourceDir, TargetDir
@@ -965,15 +964,15 @@ def decode_project_config():
 
     if 'HighSensitiveBadFrameDetection' in project_config:
         high_sensitive_bad_frame_detection = project_config["HighSensitiveBadFrameDetection"] # widget variable is inside popup, might not be available
-        if debug_template_match:    # If popup opened, set checkbox
+        if FrameSync_Viewer_opened:    # If popup opened, set checkbox
             high_sensitive_bad_frame_detection_value.set(high_sensitive_bad_frame_detection)
 
     if 'CurrentBadFrameIndex' in project_config:
         current_bad_frame_index = project_config["CurrentBadFrameIndex"]
 
     widget_status_update(NORMAL)
-    if debug_template_match:
-        debug_template_popup_update_widgets(NORMAL)
+    if FrameSync_Viewer_opened:
+        FrameSync_Viewer_popup_update_widgets(NORMAL)
 
     load_bad_frame_list()
 
@@ -1129,7 +1128,8 @@ def job_list_load_selected():
 
         if entry_name in job_list:
             # Save misaligned frame list in case new job switches to a different source folder
-            save_bad_frame_list()
+            if len(bad_frame_list) > 0:
+                save_bad_frame_list()
             # Clear list of bad frames
             bad_frame_list.clear()
             current_bad_frame_index = -1
@@ -1286,8 +1286,8 @@ def start_processing_job_list():
     else:
         BatchJobRunning = True
         widget_status_update(DISABLED, start_batch_btn)
-        if debug_template_match:
-            debug_template_popup_update_widgets(DISABLED)
+        if FrameSync_Viewer_opened:
+            FrameSync_Viewer_popup_update_widgets(DISABLED)
 
         for entry in job_list:
             job_list[entry]['attempted'] = job_list[entry]['done'] # Reset attempted flag for those not done yet
@@ -1545,8 +1545,8 @@ def set_source_folder():
 
     init_display()
     widget_status_update(NORMAL)
-    if debug_template_match:
-        debug_template_popup_update_widgets(NORMAL)
+    if FrameSync_Viewer_opened:
+        FrameSync_Viewer_popup_update_widgets(NORMAL)
 
 
 
@@ -1628,7 +1628,6 @@ def widget_status_update(widget_state=0, button_action=0):
     global ffmpeg_preset_rb1, ffmpeg_preset_rb2, ffmpeg_preset_rb3
     global start_batch_btn
     global add_job_btn, delete_job_btn, rerun_job_btn
-    global stabilization_bounds_alert_checkbox
     global perform_fill_none_rb, perform_fill_fake_rb, perform_fill_dumb_rb
     global extended_stabilization_checkbox
     global SourceDirFileList
@@ -1786,7 +1785,6 @@ def rotation_angle_spinbox_focus_out(event):
 
 def perform_stabilization_selection():
     global perform_stabilization
-    global stabilization_bounds_alert_checkbox
 
     if ExpertMode:
         stabilization_threshold_spinbox.config(
@@ -1794,8 +1792,8 @@ def perform_stabilization_selection():
     project_config["PerformStabilization"] = perform_stabilization.get()
     win.after(5, scale_display_update)
     widget_status_update(NORMAL)
-    if debug_template_match:
-        debug_template_popup_update_widgets(NORMAL)
+    if FrameSync_Viewer_opened:
+        FrameSync_Viewer_popup_update_widgets(NORMAL)
 
 
 def low_contrast_custom_template_selection():
@@ -1803,8 +1801,8 @@ def low_contrast_custom_template_selection():
 
     project_config["LowContrastCustomTemplate"] = low_contrast_custom_template.get()
     widget_status_update(NORMAL)
-    if debug_template_match:
-        debug_template_popup_update_widgets(NORMAL)
+    if FrameSync_Viewer_opened:
+        FrameSync_Viewer_popup_update_widgets(NORMAL)
 
 
 def extended_stabilization_selection():
@@ -1813,8 +1811,8 @@ def extended_stabilization_selection():
     hole_search_area_adjustment_pending = True
     win.after(5, scale_display_update)
     widget_status_update(NORMAL)
-    if debug_template_match:
-        debug_template_popup_update_widgets(NORMAL)
+    if FrameSync_Viewer_opened:
+        FrameSync_Viewer_popup_update_widgets(NORMAL)
 
 
 def stabilization_threshold_selection(updown):
@@ -1836,7 +1834,6 @@ def perform_cropping_selection():
     global perform_stabilization
     global generate_video_checkbox
     global ui_init_done
-    global stabilization_bounds_alert_checkbox
 
     generate_video_checkbox.config(state=NORMAL if ffmpeg_installed
                                    else DISABLED)
@@ -1895,8 +1892,8 @@ def encode_all_frames_selection():
     global encode_all_frames
     project_config["EncodeAllFrames"] = encode_all_frames.get()
     widget_status_update(NORMAL)
-    if debug_template_match:
-        debug_template_popup_update_widgets(NORMAL)
+    if FrameSync_Viewer_opened:
+        FrameSync_Viewer_popup_update_widgets(NORMAL)
 
 
 def generate_video_selection():
@@ -1904,8 +1901,8 @@ def generate_video_selection():
 
     project_config["GenerateVideo"] = generate_video.get()
     widget_status_update(NORMAL)
-    if debug_template_match:
-        debug_template_popup_update_widgets(NORMAL)
+    if FrameSync_Viewer_opened:
+        FrameSync_Viewer_popup_update_widgets(NORMAL)
 
 
 def set_fps(selected):
@@ -1921,10 +1918,10 @@ def set_resolution(selected):
 
 
 def display_template_popup_closure():
-    global debug_template_match, StabilizationThreshold
+    global FrameSync_Viewer_opened, StabilizationThreshold
 
     StabilizationThreshold = StabilizationThreshold_default   # Restored original value
-    debug_template_match = False
+    FrameSync_Viewer_opened = False
     display_template_popup.set(False)
     general_config["TemplatePopupWindowPos"] = template_popup_window.geometry()
     template_popup_window.destroy()
@@ -1958,7 +1955,7 @@ def load_bad_frame_list():
     if current_bad_frame_index >= len(bad_frame_list):
         logging.debug(f"Loaded bad frame list ({bad_frame_list_filename}) is empty, resetting counter from {current_bad_frame_index} to zero")
         current_bad_frame_index = -1
-    debug_template_popup_refresh()
+    FrameSync_Viewer_popup_refresh()
 
 
 
@@ -1971,7 +1968,7 @@ def save_corrected_frames_loop(count_processed):
         win.config(cursor="")  # Change cursor to indicate processing
         template_popup_window.config(cursor="") 
         save_button.config(text="Re-generate corrected frames", bg=save_bg, fg=save_fg)
-        debug_template_popup_update_widgets(NORMAL)
+        FrameSync_Viewer_popup_update_widgets(NORMAL)
         widget_status_update(NORMAL, 0)
         if process_bad_frame_index >= len(bad_frame_list):
             tk.messagebox.showinfo("Re-generation complete", f"{count_processed} modified frames have been saved. "
@@ -2021,7 +2018,7 @@ def save_corrected_frames():
     if count == 0:
         tk.messagebox.showinfo("No frames to save", "No modified frames pending to be saved")
     else:
-        debug_template_popup_update_widgets(DISABLED, True)
+        FrameSync_Viewer_popup_update_widgets(DISABLED, True)
         widget_status_update(DISABLED, 0)
         win.config(cursor="watch")  # Set cursor to hourglass
         template_popup_window.config(cursor="watch")  # Set cursor to hourglass
@@ -2034,13 +2031,22 @@ def save_corrected_frames():
 
 
 def delete_detected_bad_frames():
-    if tk.messagebox.askyesno(
-        "Deleting info",
+    global current_bad_frame_index
+
+    retvalue = True
+
+    if len(bad_frame_list) > 0:
+        if tk.messagebox.askyesno(
+        "Deleting FrameSync info",
         f"There are currently {len(bad_frame_list)} misaligned registered by AfterScan, "
-        f"as well as user information to align {count_corrected_bad_frames} of them.\r\n"
-        "Are you sure you want to detete it?"):
-        bad_frame_list.clear()
-        debug_template_popup_refresh()
+        f"as well as user information to align {count_corrected_bad_frames()} of them.\r\n"
+        "Are you sure you want to detete this info?"):
+            bad_frame_list.clear()
+            current_bad_frame_index = -1
+            FrameSync_Viewer_popup_refresh()
+        else:
+            retvalue = False
+    return retvalue
 
 def find_closest(sorted_list, target):
     # Check if the list is empty
@@ -2111,10 +2117,10 @@ def insert_or_replace_sorted(sorted_list, new_inner_list):
     sorted_list.insert(left, new_inner_list)
 
 
-def debug_template_popup_refresh():
+def FrameSync_Viewer_popup_refresh():
     global CurrentFrame, current_bad_frame_index
 
-    if not debug_template_match:    # Nothing to refresh
+    if not FrameSync_Viewer_opened:    # Nothing to refresh
         return  
     
     if current_bad_frame_index == -1:
@@ -2132,7 +2138,7 @@ def debug_template_popup_refresh():
     frame_selected.set(CurrentFrame)
     frame_slider.set(CurrentFrame)
     scale_display_update(x, y)
-    if debug_template_match:
+    if FrameSync_Viewer_opened:
         corrected_bad_frame_text.set(f"Corrected frame count: {count_corrected_bad_frames()}")
         bad_frames_on_left_value.set(current_bad_frame_index)
         if len(bad_frame_list) > 0:
@@ -2157,7 +2163,7 @@ def display_previous_bad_frame(count):
         if bad_frame_list[current_bad_frame_index][3] != StabilizationThreshold_default:
             StabilizationThreshold = bad_frame_list[current_bad_frame_index][3] # Recover saved threshold
             threshold_value.set(StabilizationThreshold)
-        debug_template_popup_refresh()
+        FrameSync_Viewer_popup_refresh()
 
 
 def display_previous_bad_frame_1(event = None):
@@ -2184,7 +2190,7 @@ def display_next_bad_frame(count):
         if bad_frame_list[current_bad_frame_index][3] != StabilizationThreshold_default:
             StabilizationThreshold = bad_frame_list[current_bad_frame_index][3] # Recover saved threshold
             threshold_value.set(StabilizationThreshold)
-        debug_template_popup_refresh()
+        FrameSync_Viewer_popup_refresh()
 
 
 def display_next_bad_frame_1(event = None):
@@ -2279,7 +2285,7 @@ def bad_frames_increase_threshold(value):
     if (StabilizationThreshold > 255):
         StabilizationThreshold = 255.0
     threshold_value.set(StabilizationThreshold)
-    debug_template_popup_refresh()
+    FrameSync_Viewer_popup_refresh()
     bad_frame_list[current_bad_frame_index][4] = False
 
 
@@ -2297,7 +2303,7 @@ def bad_frames_decrease_threshold(value):
     if (StabilizationThreshold < 0):
         StabilizationThreshold = 0.0
     threshold_value.set(StabilizationThreshold)
-    debug_template_popup_refresh()
+    FrameSync_Viewer_popup_refresh()
     bad_frame_list[current_bad_frame_index][4] = False
 
 
@@ -2313,8 +2319,8 @@ def set_high_sensitive_bad_frame_detection():
     global high_sensitive_bad_frame_detection
     high_sensitive_bad_frame_detection = high_sensitive_bad_frame_detection_value.get()
 
-def debug_template_popup_update_widgets(status, except_save=False):
-    if debug_template_match:
+def FrameSync_Viewer_popup_update_widgets(status, except_save=False):
+    if FrameSync_Viewer_opened:
         frame_up_button.config(state=status)
         frame_left_button.config(state=status)
         frame_down_button.config(state=status)
@@ -2331,17 +2337,20 @@ def debug_template_popup_update_widgets(status, except_save=False):
         increase_threshold_button_1.config(state=status)
         increase_threshold_button_5.config(state=status)
         delete_bad_frames_button.config(state=status)
+        high_sensitive_bad_frame_detection_checkbox.config(state=status)
+        # Do not disable alert checkbox to give a chance to stop the alerts without stopping the encoding
+        # stabilization_bounds_alert_checkbox.config(state=status)
         close_button.config(state=status)
         if not except_save:
             save_button.config(state=status)
 
-def debug_template_popup():
+def FrameSync_Viewer_popup():
     global win
     global template_list
     global display_template_popup
     global template_popup_window
     global CropTopLeft, CropBottomRight
-    global debug_template_match, debug_template_width, debug_template_height
+    global FrameSync_Viewer_opened, debug_template_width, debug_template_height
     global current_frame_text, crop_text, film_type_text
     global search_area_text, template_type_text, hole_pos_text, template_size_text, template_wb_proportion_text, template_threshold_text
     global left_stripe_canvas, left_stripe_stabilized_canvas, template_canvas
@@ -2356,18 +2365,33 @@ def debug_template_popup():
     global decrease_threshold_button_5, increase_threshold_button_5
     global high_sensitive_bad_frame_detection_value
     global delete_bad_frames_button
+    global high_sensitive_bad_frame_detection_checkbox
+    global stabilization_bounds_alert, stabilization_bounds_alert_checkbox
 
-    if not display_template_popup.get():
-        debug_template_match = False
-        template_popup_window.destroy()
+    if FrameSync_Viewer_opened: # Already opened, user wnats to close
+        if ConvertLoopRunning:
+            if tk.messagebox.askyesno(
+                "Encoding in progress",
+                f"There is an encoding process in progress.\r\n"
+                f"If you close this popup, misaligned frames will stop being recorded for later correction.\r\n"
+                "Are you sure you want to close it?"):
+                FrameSync_Viewer_opened = False
+                template_popup_window.destroy()
+                return
+        else:
+            FrameSync_Viewer_opened = False
+            template_popup_window.destroy()
+            return
         return
 
-    debug_template_match = True
+    FrameSync_Viewer_opened = True
 
     StabilizationThreshold_default = StabilizationThreshold   # To be restored on exit
 
     template_popup_window = Toplevel(win)
-    template_popup_window.title("Misaligned frame monitoring/edition tool")
+    template_popup_window.title("FrameSync Viewer")
+    # Intercept window close (X button)
+    template_popup_window.protocol("WM_DELETE_WINDOW", FrameSync_Viewer_popup)
 
     template_popup_window.minsize(width=300, height=template_popup_window.winfo_height())
 
@@ -2419,35 +2443,50 @@ def debug_template_popup():
     # Add a label with the film type
     film_type_text = tk.StringVar()
     film_type_label = Label(right_frame, textvariable=film_type_text, font=("Arial", FontSize))
-    film_type_label.pack(pady=5, padx=10, anchor="center")
+    if not dev_debug_enabled:
+        film_type_label.forget()
+    else:
+        film_type_label.pack(pady=5, padx=10, anchor="center")
     film_type_text.set(f"Film type: {film_type.get()}")
     as_tooltips.add(film_type_label, "Type of film currentyl loaded")
 
     # Add a label with the cropping dimensions
     crop_text = tk.StringVar()
     crop_label = Label(right_frame, textvariable=crop_text, font=("Arial", FontSize))
-    crop_label.pack(pady=5, padx=10, anchor="center")
+    if not dev_debug_enabled:
+        crop_label.forget()
+    else:
+        crop_label.pack(pady=5, padx=10, anchor="center")
     crop_text.set(f"Crop: {CropTopLeft}, {CropBottomRight}")
     as_tooltips.add(crop_label, "Current cropping coordinates")
 
     # Add a label with the template type
     template_type_text = tk.StringVar()
     template_type_label = Label(right_frame, textvariable=template_type_text, font=("Arial", FontSize))
-    template_type_label.pack(pady=5, padx=10, anchor="center")
+    if not dev_debug_enabled:
+        template_type_label.forget()
+    else:
+        template_type_label.pack(pady=5, padx=10, anchor="center")
     template_type_text.set(f"Template type: {template_list.get_active_type()}")
     as_tooltips.add(template_type_label, "Current template type being used to stabilize frames")
 
     # Add a label with the stabilization info
     hole_pos_text = tk.StringVar()
     hole_pos_label = Label(right_frame, textvariable=hole_pos_text, font=("Arial", FontSize))
-    hole_pos_label.pack(pady=5, padx=10, anchor="center")
+    if not dev_debug_enabled:
+        hole_pos_label.forget()
+    else:
+        hole_pos_label.pack(pady=5, padx=10, anchor="center")
     hole_pos_text.set(f"Expected template pos: {hole_template_pos}")
     as_tooltips.add(hole_pos_label, "Position where the template is expected")
 
     #Label with template size
     template_size_text = tk.StringVar()
     template_size_label = Label(right_frame, textvariable=template_size_text, font=("Arial", FontSize))
-    template_size_label.pack(pady=5, padx=10, anchor="center")
+    if not dev_debug_enabled:
+        template_size_label.forget()
+    else:
+        template_size_label.pack(pady=5, padx=10, anchor="center")
     template_size_text.set(f"Template Size: {template_list.get_active_size()}")
     as_tooltips.add(template_size_label, "Size of current template")
 
@@ -2455,28 +2494,40 @@ def debug_template_popup():
     #Label with template white on black proportion
     template_wb_proportion_text = tk.StringVar()
     template_wb_proportion_label = Label(right_frame, textvariable=template_wb_proportion_text, font=("Arial", FontSize))
-    template_wb_proportion_label.pack(pady=5, padx=10, anchor="center")
+    if not dev_debug_enabled:
+        template_wb_proportion_label.forget()
+    else:
+        template_wb_proportion_label.pack(pady=5, padx=10, anchor="center")
     template_wb_proportion_text.set(f"WoB proportion: {int(template_list.get_active_wb_proportion() * 100)}%")
     '''
 
     #Label with template white on black proportion
     template_threshold_text = tk.StringVar()
     template_threshold_label = Label(right_frame, textvariable=template_threshold_text, font=("Arial", FontSize))
-    template_threshold_label.pack(pady=5, padx=10, anchor="center")
+    if not dev_debug_enabled:
+        template_threshold_label.forget()
+    else:
+        template_threshold_label.pack(pady=5, padx=10, anchor="center")
     template_threshold_text.set("Threshold: 0")
     as_tooltips.add(template_threshold_label, "Threshold used to match template")
 
     #Label with search area
     search_area_text = tk.StringVar()
     search_area_label = Label(right_frame, textvariable=search_area_text, font=("Arial", FontSize))
-    search_area_label.pack(pady=5, padx=10, anchor="center")
+    if not dev_debug_enabled:
+        search_area_label.forget()
+    else:
+        search_area_label.pack(pady=5, padx=10, anchor="center")
     search_area_text.set(f"Search Area: {HoleSearchTopLeft}, {HoleSearchBottomRight})")
     as_tooltips.add(search_area_label, "Area where template will be searched")
 
     #Label with current Frame details
     current_frame_text = tk.StringVar()
     current_frame_label = Label(right_frame, textvariable=current_frame_text, width=45, font=("Arial", FontSize))
-    current_frame_label.pack(pady=5, padx=10, anchor="center")
+    if not dev_debug_enabled:
+        current_frame_label.forget()
+    else:
+        current_frame_label.pack(pady=5, padx=10, anchor="center")
     current_frame_text.set("Current:")
     as_tooltips.add(current_frame_label, "Current frame details")
 
@@ -2504,6 +2555,16 @@ def debug_template_popup():
                                                          width=40, font=("Arial", FontSize))
     high_sensitive_bad_frame_detection_checkbox.pack(pady=5, padx=10, anchor="center")
     as_tooltips.add(high_sensitive_bad_frame_detection_checkbox, "Check in order to activate detection of slightly misaligned frames")
+
+    # Checkbox - Beep if stabilization forces image out of cropping bounds
+    stabilization_bounds_alert = tk.BooleanVar(value=False)
+    stabilization_bounds_alert_checkbox = tk.Checkbutton(right_frame,
+                                                         text='Beep when misaligned frame detected',
+                                                         variable=stabilization_bounds_alert,
+                                                         onvalue=True, offvalue=False,
+                                                         width=40, font=("Arial", FontSize))
+    stabilization_bounds_alert_checkbox.pack(pady=5, padx=10, anchor="center")
+    as_tooltips.add(stabilization_bounds_alert_checkbox, "Beep each time a misaligned frame is detected")
 
     # Frame for manual alignment buttons 
     frame_selection_frame = LabelFrame(right_frame, text="Misaligned frame selection") #, width=50, height=50)
@@ -2616,33 +2677,37 @@ def debug_template_popup():
         current_bad_frame_index = 0
 
     # Refresh popup window
-    debug_template_popup_refresh()
+    FrameSync_Viewer_popup_refresh()
 
     # Refresh template to have the alignment helper lines displayed
     debug_template_refresh_template()
 
     if ConvertLoopRunning:
-        debug_template_popup_update_widgets(DISABLED)
+        FrameSync_Viewer_popup_update_widgets(DISABLED)
 
     # Run a loop for the popup window
     template_popup_window.wait_window()
 
     display_template_popup.set(False)
-    debug_template_match = False
+    FrameSync_Viewer_opened = False
 
 
 def debug_template_display_info(frame_idx, threshold, top_left, move_x, move_y):
-    if debug_template_match:
+    if FrameSync_Viewer_opened:
         current_frame_text.set(f"Current Frm:{frame_idx}, Tmp.Pos.:{top_left}, ΔX:{move_x}, ΔY:{move_y}")
         template_threshold_text.set(f"Threshold: {threshold}")
-        bad_frame_text.set(f"Misaligned frame count: {len(bad_frame_list)}")
+        if frame_idx-StartFrame > 0:
+            BadFramesPercent = len(bad_frame_list) * 100 / (frame_idx-StartFrame)
+        else:
+            BadFramesPercent = 0
+        bad_frame_text.set(f"Misaligned frame count: {len(bad_frame_list)} ({BadFramesPercent:.1f})%")
 
 
 
 def debug_template_display_frame_raw(img):
     global left_stripe_canvas, left_stripe_stabilized_canvas
 
-    if debug_template_match:
+    if FrameSync_Viewer_opened:
         try:
             left_stripe_canvas.config(width=int(img.shape[1]*0.33))
             left_stripe_stabilized_canvas.config(width=img.shape[1]*0.33)
@@ -2654,7 +2719,7 @@ def debug_template_display_frame_raw(img):
 def debug_template_display_frame_stabilized(img):
     global left_stripe_stabilized_canvas
 
-    if debug_template_match:
+    if FrameSync_Viewer_opened:
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         debug_template_display_frame(left_stripe_stabilized_canvas, img)
 
@@ -2663,7 +2728,7 @@ def debug_template_refresh_template():
     global template_canvas, template_list
     global hole_pos_text, template_type_text, template_size_text, template_wb_proportion_text, film_type_text
 
-    if debug_template_match:
+    if FrameSync_Viewer_opened:
         hole_template_pos = template_list.get_active_position()
         ratio = 0.33  # Reduce template to one third
         aux = resize_image(template_list.get_active_template(), ratio)
@@ -2685,7 +2750,7 @@ def debug_template_refresh_template():
 def debug_template_display_frame(canvas, img):
     global debug_template_width, debug_template_height
 
-    if debug_template_match:
+    if FrameSync_Viewer_opened:
         try:
             height, width = img.shape[:2]
             ratio = debug_template_height / height
@@ -2707,7 +2772,7 @@ def scale_display_update(offset_x = 0, offset_y = 0):
     global perform_stabilization, perform_cropping, perform_rotation, hole_search_area_adjustment_pending
     global CropTopLeft, CropBottomRight
     global SourceDirFileList
-    global debug_template_match
+    global FrameSync_Viewer_opened
 
     frame_to_display = CurrentFrame
     if frame_to_display >= len(SourceDirFileList):
@@ -2730,7 +2795,7 @@ def scale_display_update(offset_x = 0, offset_y = 0):
         if not frame_scale_refresh_pending:
             if perform_rotation.get():
                 img = rotate_image(img)
-            if perform_stabilization.get() or debug_template_match:
+            if perform_stabilization.get() or FrameSync_Viewer_opened:
                 img = stabilize_image(CurrentFrame, img, img, offset_x, offset_y)
         if perform_cropping.get():
             img = crop_image(img, CropTopLeft, CropBottomRight)
@@ -3102,8 +3167,8 @@ def select_cropping_area():
 
     # Disable all buttons in main window
     widget_status_update(DISABLED,0)
-    if debug_template_match:
-        debug_template_popup_update_widgets(DISABLED)
+    if FrameSync_Viewer_opened:
+        FrameSync_Viewer_popup_update_widgets(DISABLED)
 
     win.update()
 
@@ -3113,8 +3178,8 @@ def select_cropping_area():
     if select_rectangle_area(is_cropping=True):
         CropAreaDefined = True
         widget_status_update(NORMAL, 0)
-        if debug_template_match:
-            debug_template_popup_update_widgets(NORMAL)
+        if FrameSync_Viewer_opened:
+            FrameSync_Viewer_popup_update_widgets(NORMAL)
         CropTopLeft = RectangleTopLeft
         CropBottomRight = RectangleBottomRight
         logging.debug("Crop area: (%i,%i) - (%i, %i)", CropTopLeft[0],
@@ -3122,8 +3187,8 @@ def select_cropping_area():
     else:
         CropAreaDefined = False
         widget_status_update(DISABLED, 0)
-        if debug_template_match:
-            debug_template_popup_update_widgets(DISABLED)
+        if FrameSync_Viewer_opened:
+            FrameSync_Viewer_popup_update_widgets(DISABLED)
         perform_cropping.set(False)
         perform_cropping.set(False)
         generate_video_checkbox.config(state=NORMAL if ffmpeg_installed
@@ -3137,8 +3202,8 @@ def select_cropping_area():
 
     # Enable all buttons in main window
     widget_status_update(NORMAL, 0)
-    if debug_template_match:
-        debug_template_popup_update_widgets(NORMAL)
+    if FrameSync_Viewer_opened:
+        FrameSync_Viewer_popup_update_widgets(NORMAL)
 
     win.after(5, scale_display_update)
     win.update()
@@ -3171,8 +3236,8 @@ def select_custom_template():
             return
         # Disable all buttons in main window
         widget_status_update(DISABLED, 0)
-        if debug_template_match:
-            debug_template_popup_update_widgets(DISABLED)
+        if FrameSync_Viewer_opened:
+            FrameSync_Viewer_popup_update_widgets(DISABLED)
 
         win.update()
 
@@ -3209,8 +3274,8 @@ def select_custom_template():
             template_list.add(template_name, full_path_template_filename, 'custom', RectangleTopLeft)   # size and template automatically refreshed upon addition
             logging.debug(f"Template top left-size: {template_list.get_active_position()} - {template_list.get_active_size()}")
             widget_status_update(NORMAL, 0)
-            if debug_template_match:
-                debug_template_popup_update_widgets(NORMAL)
+            if FrameSync_Viewer_opened:
+                FrameSync_Viewer_popup_update_widgets(NORMAL)
             custom_stabilization_btn.config(relief=SUNKEN)
 
             project_config['CustomTemplateExpectedPos'] = template_list.get_active_position()
@@ -3240,16 +3305,16 @@ def select_custom_template():
                     return
             custom_stabilization_btn.config(relief=RAISED)
             widget_status_update(DISABLED, 0)
-            if debug_template_match:
-                debug_template_popup_update_widgets(DISABLED)
+            if FrameSync_Viewer_opened:
+                FrameSync_Viewer_popup_update_widgets(DISABLED)
 
     project_config["CustomTemplateDefined"] = True if template_list.get_active_type() == 'custom' else False
     debug_template_refresh_template()
 
     # Enable all buttons in main window
     widget_status_update(NORMAL, 0)
-    if debug_template_match:
-        debug_template_popup_update_widgets(NORMAL)
+    if FrameSync_Viewer_opened:
+        FrameSync_Viewer_popup_update_widgets(NORMAL)
 
     win.update()
 
@@ -3768,13 +3833,11 @@ def stabilize_image(frame_idx, img, img_ref, offset_x = 0, offset_y = 0, img_ref
     global first_absolute_frame, StartFrame
     global HoleSearchTopLeft, HoleSearchBottomRight
     global CropTopLeft, CropBottomRight, win
-    global stabilization_bounds_alert, stabilization_bounds_alert_counter
-    global stabilization_bounds_alert_checkbox
     global project_name
     global frame_fill_type, extended_stabilization
     global CsvFramesOffPercent
     global stabilization_threshold_match_label
-    global debug_template_match
+    global FrameSync_Viewer_opened
     global perform_stabilization
     global template_list
 
@@ -3815,18 +3878,12 @@ def stabilize_image(frame_idx, img, img_ref, offset_x = 0, offset_y = 0, img_ref
         match_level_average.add_value(match_level)
         if missing_rows > 0 or match_level < 0.9:
             if match_level < 0.7 if not high_sensitive_bad_frame_detection else 0.9:   # Only add really bad matches
-                ### bad_frame_list.append([frame_idx, 0, 0, frame_threshold, False])
-                insert_or_replace_sorted(bad_frame_list, [frame_idx, 0, 0, frame_threshold, False])
-            if missing_rows > 0:
-                stabilization_bounds_alert_counter += 1
-                if stabilization_bounds_alert.get():
-                    win.bell()
+                if FrameSync_Viewer_opened:  # Generate bad frame list only if popup opened
+                    insert_or_replace_sorted(bad_frame_list, [frame_idx, 0, 0, frame_threshold, False])
+                    if stabilization_bounds_alert.get():
+                        win.bell()
             if GenerateCsv:
                 CsvFile.write('%i, %i, %i\n' % (first_absolute_frame+frame_idx, missing_rows, int(match_level*100)))
-    if frame_idx-StartFrame > 0:
-        CsvFramesOffPercent = stabilization_bounds_alert_counter * 100 / (frame_idx-StartFrame)
-    stabilization_bounds_alert_checkbox.config(text='Alert when image out of bounds (%i, %.1f%%)' % (
-            stabilization_bounds_alert_counter, CsvFramesOffPercent))
     if match_level < 0.7:   # If match level is too bad, revert to simple algorithm
         move_x, move_y = calculate_frame_displacement_simple(frame_idx, img)
     # Create the translation matrix using move_x and move_y (NumPy array): This is the actual stabilization
@@ -3864,7 +3921,7 @@ def stabilize_image(frame_idx, img, img_ref, offset_x = 0, offset_y = 0, img_ref
     else:
         translated_image = img
     # Draw stabilization rectangles only for image in popup debug window to allow having it activated while encoding
-    if not use_simple_stabilization and debug_template_match and top_left[1] != -1 :
+    if not use_simple_stabilization and FrameSync_Viewer_opened and top_left[1] != -1 :
         if not perform_stabilization.get():
             move_x = 0
             move_y = 0
@@ -4071,8 +4128,8 @@ def get_source_dir_file_list():
         CropBottomRight = (frame_width, frame_height)
 
     widget_status_update(NORMAL)
-    if debug_template_match:
-        debug_template_popup_update_widgets(NORMAL)
+    if FrameSync_Viewer_opened:
+        FrameSync_Viewer_popup_update_widgets(NORMAL)
 
     return len(SourceDirFileList)
 
@@ -4159,7 +4216,7 @@ def set_hole_search_area(img):
     # Now that we know the size of search area for the current project, we can calculate the WoB proportion
     # Width of search area as it is wider, and height of template as it is shorter
     template_list.set_active_wb_proportion(template_list.get_active_white_pixel_count() / (left_stripe_width * template_list.get_active_size()[1]))
-    if debug_template_match:
+    if FrameSync_Viewer_opened:
         template_wb_proportion_text.set(f"WoB proportion: {template_list.get_active_wb_proportion() * 100:2.1f}%")
     '''
 
@@ -4193,7 +4250,6 @@ def start_convert():
     global project_name
     global BatchJobRunning
     global job_list, CurrentJobEntry
-    global stabilization_bounds_alert_counter
     global CsvFilename, CsvPathName, CsvFile
     global FPS_LastMinuteFrameTimes
     global current_bad_frame_index
@@ -4202,12 +4258,12 @@ def start_convert():
         ConvertLoopExitRequested = True
         ConvertLoopRunning = False
     else:
+        if not delete_detected_bad_frames():
+            return
         # Save current project status
         save_general_config()
         save_project_config()
         save_job_list()
-        # Reset frames out of bounds counter
-        stabilization_bounds_alert_counter = 0
         # Empty FPS register list
         FPS_LastMinuteFrameTimes.clear()
         # Centralize 'frames_to_encode' update here
@@ -4243,8 +4299,8 @@ def start_convert():
             Go_btn.config(text="Stop", bg='red', fg='white')
             # Disable all buttons in main window
             widget_status_update(DISABLED, Go_btn)
-        if debug_template_match:
-            debug_template_popup_update_widgets(DISABLED)
+        if FrameSync_Viewer_opened:
+            FrameSync_Viewer_popup_update_widgets(DISABLED)
         win.update()
 
         if project_config["GenerateVideo"]:
@@ -4285,7 +4341,7 @@ def start_convert():
             match_level_average.clear()
             horizontal_offset_average.clear()
             # Disable manual stabilize popup widgets
-            debug_template_popup_update_widgets(DISABLED)
+            FrameSync_Viewer_popup_update_widgets(DISABLED)
             # Multiprocessing: Start all threads before encoding
             start_threads()
             win.after(1, frame_generation_loop)
@@ -4344,8 +4400,8 @@ def generation_exit(success = True):
     ConvertLoopRunning = False
     # Enable all buttons in main window
     widget_status_update(NORMAL, 0)
-    if debug_template_match:
-        debug_template_popup_update_widgets(NORMAL)
+    if FrameSync_Viewer_opened:
+        FrameSync_Viewer_popup_update_widgets(NORMAL)
     win.update()
     
     if stop_batch:
@@ -4363,7 +4419,7 @@ def frame_encode(frame_idx, id, do_save = True, offset_x = 0, offset_y = 0):
     global CropTopLeft, CropBottomRight
     global app_status_label
     global subprocess_event_queue
-    global debug_template_match
+    global FrameSync_Viewer_opened
     global file_type, file_type_out
 
     images_to_merge = []
@@ -4428,7 +4484,7 @@ def frame_encode(frame_idx, id, do_save = True, offset_x = 0, offset_y = 0):
         register_frame()
         if perform_rotation.get():
             img = rotate_image(img)
-        if perform_stabilization.get() or debug_template_match:
+        if perform_stabilization.get() or FrameSync_Viewer_opened:
             img = stabilize_image(frame_idx, img, img_ref, offset_x, offset_y, img_ref_aux, id)
         if perform_cropping.get():
             img = crop_image(img, CropTopLeft, CropBottomRight)
@@ -4517,7 +4573,6 @@ def check_subprocess_event_queue(user_terminated):
     global first_absolute_frame, frame_idx
     global subprocess_event_queue
     global last_displayed_image, active_threads
-    global stabilization_bounds_alert_checkbox, stabilization_bounds_alert_counter
     global ConvertLoopRunning
     global file_type_out
 
@@ -4606,9 +4661,9 @@ def frame_generation_loop():
             generation_exit()
         CurrentFrame -= 1  # Prevent being out of range
         # Refresh popup window
-        debug_template_popup_refresh()
+        FrameSync_Viewer_popup_refresh()
         # Enable manual stabilize popup widgets
-        debug_template_popup_update_widgets(NORMAL)
+        FrameSync_Viewer_popup_update_widgets(NORMAL)
         win.update()
         return
 
@@ -4636,9 +4691,9 @@ def frame_generation_loop():
         stabilization_threshold_match_label.config(fg='lightgray', bg='lightgray', text='')
         FPS_CalculatedValue = -1
         # Refresh popup window
-        debug_template_popup_refresh()
+        FrameSync_Viewer_popup_refresh()
         # Enable manual stabilize popup widgets
-        debug_template_popup_update_widgets(NORMAL)
+        FrameSync_Viewer_popup_update_widgets(NORMAL)
         win.update()
         return
 
@@ -5139,7 +5194,6 @@ def build_ui():
     global custom_ffmpeg_path
     global project_config
     global start_batch_btn, add_job_btn, delete_job_btn, rerun_job_btn
-    global stabilization_bounds_alert_checkbox, stabilization_bounds_alert
     global film_type_S8_rb, film_type_R8_rb
     global frame_from_str, frame_to_str, frame_from_entry, frame_to_entry, frames_separator_label
     global suspend_on_joblist_end
@@ -5495,18 +5549,6 @@ def build_ui():
 
     postprocessing_row += 1
 
-    # Checkbox - Beep if stabilization forces image out of cropping bounds
-    stabilization_bounds_alert = tk.BooleanVar(value=False)
-    stabilization_bounds_alert_checkbox = tk.Checkbutton(postprocessing_frame,
-                                                         text='Alert when image out of bounds',
-                                                         variable=stabilization_bounds_alert,
-                                                         onvalue=True, offvalue=False,
-                                                         width=40, font=("Arial", FontSize))
-    stabilization_bounds_alert_checkbox.grid(row=postprocessing_row, column=0, columnspan=3, sticky=W)
-    as_tooltips.add(stabilization_bounds_alert_checkbox, "Beep each time a badly aligned frame (requiring fill-in) is detected")
-
-    postprocessing_row += 1
-
     # Define video generating area ************************************
     video_frame = LabelFrame(right_area_frame,
                              text='Video generation',
@@ -5706,10 +5748,10 @@ def build_ui():
         # Check box to display misaligned frame monitor/editor
         display_template_popup = tk.BooleanVar(value=False)
         display_template_popup_checkbox = tk.Checkbutton(extra_frame,
-                                                    text='Misaligned frame monitoring/edition tool',
+                                                    text='FrameSync Viewer (popup window)',
                                                     variable=display_template_popup,
                                                     onvalue=True, offvalue=False,
-                                                    command=debug_template_popup,
+                                                    command=FrameSync_Viewer_popup,
                                                     width=33 if BigSize else 41, font=("Arial", FontSize))
         display_template_popup_checkbox.grid(row=extra_row, column=0, columnspan=2, sticky=W)
         as_tooltips.add(display_template_popup_checkbox, "Display popup window with dynamic debug information.Useful for developers only")
@@ -5876,8 +5918,7 @@ def main(argv):
     global BatchAutostart
     global num_threads
     global use_simple_stabilization
-
-    return
+    global dev_debug_enabled
 
     LoggingMode = "INFO"
     go_disable_tooptips = False
@@ -5900,7 +5941,7 @@ def main(argv):
     template_list.add("WB", hole_template_filename_wb, "aux", (0, 0))
     template_list.add("Corner", hole_template_filename_corner, "aux", (0, 0))
 
-    opts, args = getopt.getopt(argv, "hiel:dcst:12na")
+    opts, args = getopt.getopt(argv, "hiel:dcst:12nag")
 
     for opt, arg in opts:
         if opt == '-l':
@@ -5926,6 +5967,8 @@ def main(argv):
         elif opt == '-a':
             use_simple_stabilization = True
             print("Old stabilization")
+        elif opt == '-g':
+            dev_debug_enabled = True
         elif opt == '-h':
             print("AfterScan")
             print("  -l <log mode>  Set log level:")
@@ -5939,6 +5982,9 @@ def main(argv):
             print("  -1             Initiate on 'small screen' mode (resolution lower than than Full HD)")
             print("  -a             Use simple stabilization algorithm, not requiring templates (but slightly less precise)")
             exit()
+
+    if not dev_debug_enabled:  
+        pass
 
     LogLevel = getattr(logging, LoggingMode.upper(), None)
     if not isinstance(LogLevel, int):
