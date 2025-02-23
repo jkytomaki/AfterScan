@@ -31,15 +31,18 @@ class RollingAverage:
         self.sum = 0
 
     def add_value(self, value):
+        # If the deque is full, subtract the element that will be dropped
         if len(self.window) == self.window_size:
-            self.sum -= self.window.popleft()
-        self.window.append(value)
+            # Access the leftmost element before it's overwritten
+            self.sum -= self.window[0]  # Peek at the oldest value
+        self.window.append(value)  # Append new value, oldest is auto-removed by maxlen
         self.sum += value
-
+        
     def get_average(self):
         if len(self.window) <= 25:  # Do not start returning averages until at least 25 elements collected
             return None
         return self.sum / len(self.window)
 
     def clear(self):
-        return self.window.clear()
+        self.window.clear()
+        self.sum = 0

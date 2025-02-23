@@ -19,9 +19,9 @@ __author__ = 'Juan Remirez de Esparza'
 __copyright__ = "Copyright 2024, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
-__version__ = "1.12.11"
+__version__ = "1.12.12"
 __data_version__ = "1.0"
-__date__ = "2025-02-22"
+__date__ = "2025-02-23"
 __version_highlight__ = "Simplify get_target_position, make it to work with partial templates (part of a hole in S8)"
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
@@ -302,6 +302,7 @@ horizontal_offset_average = None
 
 
 use_simple_stabilization = False    # Stabilize using simpler (and slightier less precise) algorithm, no templates required
+precise_template_match = False
 
 # Token to be inserted in each queue on program closure, to allow threads to shut down cleanly
 END_TOKEN = "TERMINATE_PROCESS"
@@ -687,7 +688,9 @@ def save_project_config():
     project_config["VideoFilename"] = video_filename_str.get()
     project_config["FrameFrom"] = frame_from_str.get()
     project_config["FrameTo"] = frame_to_str.get()
-    project_config["HighSensitiveBadFrameDetection"] = high_sensitive_bad_frame_detection   # widget variable is inside popup, might not be available
+    # Next two items: widget variable is inside popup, might not be available, so use global variable
+    project_config["HighSensitiveBadFrameDetection"] = high_sensitive_bad_frame_detection
+    project_config["PreciseTemplateMatch"] = precise_template_match
     project_config["CurrentBadFrameIndex"] = current_bad_frame_index
     if StabilizeAreaDefined:
         project_config["PerformStabilization"] = perform_stabilization.get()
@@ -768,6 +771,7 @@ def decode_project_config():
     global Force43, Force169
     global perform_denoise, perform_sharpness, perform_gamma_correction, gamma_correction_str
     global high_sensitive_bad_frame_detection, current_bad_frame_index
+    global precise_template_match
 
     if 'SourceDir' in project_config:
         SourceDir = project_config["SourceDir"]
@@ -966,6 +970,12 @@ def decode_project_config():
         high_sensitive_bad_frame_detection = project_config["HighSensitiveBadFrameDetection"] # widget variable is inside popup, might not be available
         if FrameSync_Viewer_opened:    # If popup opened, set checkbox
             high_sensitive_bad_frame_detection_value.set(high_sensitive_bad_frame_detection)
+
+    if 'PreciseTemplateMatch' in project_config:
+        precise_template_match = project_config["PreciseTemplateMatch"] # widget variable is inside popup, might not be available
+        if FrameSync_Viewer_opened:    # If popup opened, set checkbox
+            precise_template_match_value.set(precise_template_match)
+
 
     if 'CurrentBadFrameIndex' in project_config:
         current_bad_frame_index = project_config["CurrentBadFrameIndex"]
@@ -1303,9 +1313,13 @@ def job_processing_loop():
     global suspend_on_completion
     global CurrentFrame
 
+    logging.debug(f"Starting batch loop")
     job_started = False
     for entry in job_list:
         if  not job_list[entry]['done'] and not job_list[entry]['attempted']:
+            # Save bad frame list if any
+            if len(bad_frame_list) > 0:
+                save_bad_frame_list()
             job_list[entry]['attempted'] = True
             job_list_listbox.selection_clear(0, END)
             idx = search_job_name_in_job_listbox(entry)
@@ -1324,6 +1338,10 @@ def job_processing_loop():
             # Load matching file list from newly selected dir
             get_source_dir_file_list()  # first_absolute_frame is set here
             get_target_dir_file_list()
+
+            logging.debug(f"Processing batch loop: Loaded {SourceDir} folder")
+            # Load bad frame list for new, current project
+            load_bad_frame_list()
 
             start_convert()
             job_started = True
@@ -1919,23 +1937,62 @@ def set_resolution(selected):
 
 def display_template_popup_closure():
     global FrameSync_Viewer_opened, StabilizationThreshold
-
-    StabilizationThreshold = StabilizationThreshold_default   # Restored original value
-    FrameSync_Viewer_opened = False
-    display_template_popup.set(False)
-    general_config["TemplatePopupWindowPos"] = template_popup_window.geometry()
-    template_popup_window.destroy()
+    if FrameSync_Viewer_opened:
+        FrameSync_Viewer_popup()    # Calling while opened will close it
 
 
-def save_bad_frame_list():
+def cleanup_bad_frame_list(limit):
+    """
+    Deletes all but the 3 most recent 'bad_frame_list.01_YYYYMMDD_HHMMSS.json' files
+    in the specified directory when there are more than 10 files.
+    
+    Args:
+        directory (str): Directory to search for files (default: current directory).
+    """
     bad_frame_list_name = f"{os.path.split(SourceDir)[-1]}"
     # Set filename
-    bad_frame_list_filename = f"bad_frame_list.{bad_frame_list_name}.json"
+    bad_frame_list_pattern_name = f"bad_frame_list.{bad_frame_list_name}_????????_??????.json.bak"
+    full_path_bad_frame_list_pattern_name = os.path.join(resources_dir, bad_frame_list_pattern_name)
+
+    # Get list of matching files
+    files = glob(full_path_bad_frame_list_pattern_name)
+    
+    # If there are more than <limit> files (normally 10)
+    if len(files) > limit:
+        # Sort files by modification time (most recent first)
+        files_sorted = sorted(files, key=os.path.getmtime, reverse=True)
+        
+        # Keep the 3 most recent files, mark the rest for deletion
+        files_to_keep = files_sorted[:3]
+        files_to_delete = files_sorted[3:]
+        
+        # Delete the older files
+        for file_path in files_to_delete:
+            try:
+                os.remove(file_path)
+            except OSError as e:
+                logging.error(f"Error deleting bad frame file {file_path}: {e}")
+        
+        logging.debug(f"Bad frame file cleanup completed. Kept the 3 most recent files: {files_to_keep}")
+
+
+def save_bad_frame_list(with_timestamp = False):
+    bad_frame_list_name = f"{os.path.split(SourceDir)[-1]}"
+    # Set filename
+    bad_frame_list_filename = f"bad_frame_list.{bad_frame_list_name}"
+    if with_timestamp:
+        bad_frame_list_filename += datetime.now().strftime("_%Y%m%d_%H%M%S")
+    bad_frame_list_filename += ".json"
+    if with_timestamp:
+        bad_frame_list_filename += ".bak"
     full_path_bad_frame_list_filename = os.path.join(resources_dir, bad_frame_list_filename)
 
     # Serialize (save) the list to a file
     with open(full_path_bad_frame_list_filename, "w") as file:
         json.dump(bad_frame_list, file)
+
+    if with_timestamp:  # Delete backup files if more than 10
+        cleanup_bad_frame_list(3)
 
 
 def load_bad_frame_list():
@@ -2036,11 +2093,14 @@ def delete_detected_bad_frames():
     retvalue = True
 
     if len(bad_frame_list) > 0:
-        if tk.messagebox.askyesno(
-        "Deleting FrameSync info",
-        f"There are currently {len(bad_frame_list)} misaligned registered by AfterScan, "
-        f"as well as user information to align {count_corrected_bad_frames()} of them.\r\n"
-        "Are you sure you want to detete this info?"):
+        if BatchJobRunning or tk.messagebox.askyesno(
+                            "Deleting FrameSync info",
+                            f"There are currently {len(bad_frame_list)} misaligned registered by AfterScan, "
+                            f"as well as user information to align {count_corrected_bad_frames()} of them.\r\n"
+                            "Are you sure you want to delete this info?"):
+            # To prevent losses, if a relevent number of bad frames exist, save to a file with timestamp
+            if len(bad_frame_list) > 20:
+                save_bad_frame_list(True)
             bad_frame_list.clear()
             current_bad_frame_index = -1
             FrameSync_Viewer_popup_refresh()
@@ -2319,6 +2379,12 @@ def set_high_sensitive_bad_frame_detection():
     global high_sensitive_bad_frame_detection
     high_sensitive_bad_frame_detection = high_sensitive_bad_frame_detection_value.get()
 
+
+def set_precise_template_match():
+    global precise_template_match
+    precise_template_match = precise_template_match_value.get()
+
+
 def FrameSync_Viewer_popup_update_widgets(status, except_save=False):
     if FrameSync_Viewer_opened:
         frame_up_button.config(state=status)
@@ -2340,6 +2406,7 @@ def FrameSync_Viewer_popup_update_widgets(status, except_save=False):
         high_sensitive_bad_frame_detection_checkbox.config(state=status)
         # Do not disable alert checkbox to give a chance to stop the alerts without stopping the encoding
         # stabilization_bounds_alert_checkbox.config(state=status)
+        # precise_template_match_checkbox.config(state=status)
         close_button.config(state=status)
         if not except_save:
             save_button.config(state=status)
@@ -2347,7 +2414,6 @@ def FrameSync_Viewer_popup_update_widgets(status, except_save=False):
 def FrameSync_Viewer_popup():
     global win
     global template_list
-    global display_template_popup
     global template_popup_window
     global CropTopLeft, CropBottomRight
     global FrameSync_Viewer_opened, debug_template_width, debug_template_height
@@ -2363,11 +2429,13 @@ def FrameSync_Viewer_popup():
     global StabilizationThreshold_default, threshold_value
     global decrease_threshold_button_1, threshold_label, increase_threshold_button_1
     global decrease_threshold_button_5, increase_threshold_button_5
-    global high_sensitive_bad_frame_detection_value
     global delete_bad_frames_button
-    global high_sensitive_bad_frame_detection_checkbox
+    global high_sensitive_bad_frame_detection_checkbox, high_sensitive_bad_frame_detection_value
+    global precise_template_match_checkbox, precise_template_match_value
     global stabilization_bounds_alert, stabilization_bounds_alert_checkbox
+    global StabilizationThreshold
 
+    Terminate = False
     if FrameSync_Viewer_opened: # Already opened, user wnats to close
         if ConvertLoopRunning:
             if tk.messagebox.askyesno(
@@ -2375,16 +2443,22 @@ def FrameSync_Viewer_popup():
                 f"There is an encoding process in progress.\r\n"
                 f"If you close this popup, misaligned frames will stop being recorded for later correction.\r\n"
                 "Are you sure you want to close it?"):
-                FrameSync_Viewer_opened = False
-                template_popup_window.destroy()
-                return
+                Terminate = True
         else:
+            Terminate = True
+        if Terminate:
+            StabilizationThreshold = StabilizationThreshold_default   # Restore original value
             FrameSync_Viewer_opened = False
+            general_config["TemplatePopupWindowPos"] = template_popup_window.geometry()
             template_popup_window.destroy()
-            return
+            # Release button
+            display_template_popup_btn.config(relief=RAISED)
+
         return
 
     FrameSync_Viewer_opened = True
+    # Push button
+    display_template_popup_btn.config(relief=SUNKEN)
 
     StabilizationThreshold_default = StabilizationThreshold   # To be restored on exit
 
@@ -2535,26 +2609,37 @@ def FrameSync_Viewer_popup():
     bad_frame_text = tk.StringVar()
     bad_frame_label = Label(right_frame, textvariable=bad_frame_text, width=45, font=("Arial", FontSize))
     bad_frame_label.pack(pady=5, padx=10, anchor="center")
-    bad_frame_text.set("Misaligned frame count:")
+    bad_frame_text.set("Misaligned frames:")
     as_tooltips.add(bad_frame_label, "Number of frames that failed to be stabilized")
 
     #Label with bad Frames modified
     corrected_bad_frame_text = tk.StringVar()
     corrected_bad_frame_label = Label(right_frame, textvariable=corrected_bad_frame_text, width=45, font=("Arial", FontSize))
     corrected_bad_frame_label.pack(pady=5, padx=10, anchor="center")
-    corrected_bad_frame_text.set("Corrected frame count:")
-    as_tooltips.add(corrected_bad_frame_label, "Number of frames that failed to be stabilized, that have been manually adjusted")
+    corrected_bad_frame_text.set("Corrected frames:")
+    as_tooltips.add(corrected_bad_frame_label, "Number of frames not properly stabilized, that have been manually adjusted")
+
+    # Checkbox to allow high sensitive detencion (match < 0.9)
+    precise_template_match_value = tk.BooleanVar(value=precise_template_match)
+    precise_template_match_checkbox = tk.Checkbutton(right_frame,
+                                                         text='High-Accuracy Alignment',
+                                                         variable=precise_template_match_value,
+                                                         command=set_precise_template_match,
+                                                         onvalue=True, offvalue=False,
+                                                         width=40, font=("Arial", FontSize))
+    precise_template_match_checkbox.pack(pady=5, padx=10, anchor="center")
+    as_tooltips.add(precise_template_match_checkbox, "Activate high accuracy template detection for better stabilization (implies slower encoding)")
 
     # Checkbox to allow high sensitive detencion (match < 0.9)
     high_sensitive_bad_frame_detection_value = tk.BooleanVar(value=high_sensitive_bad_frame_detection)
     high_sensitive_bad_frame_detection_checkbox = tk.Checkbutton(right_frame,
-                                                         text='Activate high-sensitive detection',
+                                                         text='Enhanced Sensitivity Detection',
                                                          variable=high_sensitive_bad_frame_detection_value,
                                                          command=set_high_sensitive_bad_frame_detection,
                                                          onvalue=True, offvalue=False,
                                                          width=40, font=("Arial", FontSize))
     high_sensitive_bad_frame_detection_checkbox.pack(pady=5, padx=10, anchor="center")
-    as_tooltips.add(high_sensitive_bad_frame_detection_checkbox, "Check in order to activate detection of slightly misaligned frames")
+    as_tooltips.add(high_sensitive_bad_frame_detection_checkbox, "Besides frames clearly misaligned, detect also slightly misaligned frames")
 
     # Checkbox - Beep if stabilization forces image out of cropping bounds
     stabilization_bounds_alert = tk.BooleanVar(value=False)
@@ -2583,11 +2668,11 @@ def FrameSync_Viewer_popup():
 
     previous_frame_button_1 = Button(frame_selection_frame, text="◀", command=display_previous_bad_frame_1, font=("Arial", FontSize), width=3)
     previous_frame_button_1.grid(pady=2, padx=2, row=0, column=2)
-    as_tooltips.add(previous_frame_button_1, "Select previous badly-stabilized frame (alternativelly, press PgUp)")
+    as_tooltips.add(previous_frame_button_1, "Select previous badly-stabilized frame (or press PgUp)")
 
     next_frame_button_1 = Button(frame_selection_frame, text="▶", command=display_next_bad_frame_1, font=("Arial", FontSize), width=3)
     next_frame_button_1.grid(pady=2, padx=2, row=0, column=3)
-    as_tooltips.add(next_frame_button_1, "Select next badly-stabilized frame (alternativelly, press PgDn)")
+    as_tooltips.add(next_frame_button_1, "Select next badly-stabilized frame (or press PgDn)")
 
     next_frame_button_10 = Button(frame_selection_frame, text="▶▶", command=display_next_bad_frame_10, font=("Arial", FontSize), width=3)
     next_frame_button_10.grid(pady=2, padx=2, row=0, column=4)
@@ -2631,7 +2716,7 @@ def FrameSync_Viewer_popup():
 
     decrease_threshold_button_5 = Button(manual_threshold_frame, text="◀◀", command=bad_frames_decrease_threshold_5, font=("Arial", FontSize))
     decrease_threshold_button_5.pack(pady=10, padx=10, side=LEFT, anchor="center")
-    as_tooltips.add(decrease_threshold_button_5, "Decrease threshold value by 5 (alternativelly, press home)")
+    as_tooltips.add(decrease_threshold_button_5, "Decrease threshold value by 5 (or press home)")
 
     decrease_threshold_button_1 = Button(manual_threshold_frame, text="◀", command=bad_frames_decrease_threshold_1, font=("Arial", FontSize))
     decrease_threshold_button_1.pack(pady=10, padx=10, side=LEFT, anchor="center")
@@ -2650,7 +2735,7 @@ def FrameSync_Viewer_popup():
 
     increase_threshold_button_5 = Button(manual_threshold_frame, text="▶▶", command=bad_frames_increase_threshold_5, font=("Arial", FontSize))
     increase_threshold_button_5.pack(pady=10, padx=10, side=LEFT, anchor="center")
-    as_tooltips.add(increase_threshold_button_1, "Increase threshold value by 5 (alternativelly, press end)")
+    as_tooltips.add(increase_threshold_button_1, "Increase threshold value by 5 (or press end)")
 
     delete_bad_frames_button = Button(right_frame, text="Delete all collected frame info", command=delete_detected_bad_frames, font=("Arial", FontSize))
     delete_bad_frames_button.pack(pady=10, padx=10, anchor="center")
@@ -2688,7 +2773,6 @@ def FrameSync_Viewer_popup():
     # Run a loop for the popup window
     template_popup_window.wait_window()
 
-    display_template_popup.set(False)
     FrameSync_Viewer_opened = False
 
 
@@ -2696,11 +2780,12 @@ def debug_template_display_info(frame_idx, threshold, top_left, move_x, move_y):
     if FrameSync_Viewer_opened:
         current_frame_text.set(f"Current Frm:{frame_idx}, Tmp.Pos.:{top_left}, ΔX:{move_x}, ΔY:{move_y}")
         template_threshold_text.set(f"Threshold: {threshold}")
-        if frame_idx-StartFrame > 0:
-            BadFramesPercent = len(bad_frame_list) * 100 / (frame_idx-StartFrame)
-        else:
-            BadFramesPercent = 0
-        bad_frame_text.set(f"Misaligned frame count: {len(bad_frame_list)} ({BadFramesPercent:.1f})%")
+        if ConvertLoopRunning:
+            if frame_idx-StartFrame > 0:
+                BadFramesPercent = len(bad_frame_list) * 100 / (frame_idx-StartFrame)
+            else:
+                BadFramesPercent = 0
+            bad_frame_text.set(f"Misaligned frame count: {len(bad_frame_list)} ({BadFramesPercent:.1f})%")
 
 
 
@@ -3422,7 +3507,14 @@ def match_template(frame_idx, template, img):
         aux = cv2.matchTemplate(img_final, template, cv2.TM_CCOEFF_NORMED)
         (minVal, maxVal, minLoc, maxLoc) = cv2.minMaxLoc(aux)
         top_left = maxLoc
-        if ConvertLoopRunning and not Done:
+        if not ConvertLoopRunning:
+            best_match_level = round(maxVal,2)
+            best_thres = local_threshold
+            best_top_left = top_left
+            best_maxVal = maxVal
+            best_img_final = img_final
+            Done = True
+        if not Done:
             if round(maxVal,2) < 0.85: # Quality not good enough, try another threshold
                 if round(maxVal,2) >= best_match_level:
                     best_match_level = round(maxVal,2)
@@ -3430,29 +3522,30 @@ def match_template(frame_idx, template, img):
                     best_top_left = top_left
                     best_maxVal = maxVal
                     best_img_final = img_final
-
+            else:
+                if round(maxVal,2) >= best_match_level:
+                    best_match_level = round(maxVal,2)
+                    best_thres = local_threshold
+                    best_top_left = top_left
+                    best_maxVal = maxVal
+                    best_img_final = img_final
+                if not precise_template_match or best_match_level >= 0.95 or best_match_level > 0.7 and round(maxVal,2) < best_match_level / 2:
+                    Done = True # If threshold if really good, or much worse the n best so far, end this loop
+            if not Done:
                 if not back_percent_checked:
                     back_percent_checked = True
                     local_threshold = 259   # 254 + 5 to accound for deduction on first loop
                     limit_threshold = 150
                     step_threshold = -5
+                    #local_threshold = 145   # 254 + 5 to accound for deduction on first loop
+                    #limit_threshold = 255
+                    #step_threshold = +5
                 local_threshold += step_threshold
-                if (step_threshold > 0 and local_threshold >= limit_threshold) or (step_threshold < 0 and local_threshold <= limit_threshold):
-                    Done = True
-                elif abs(limit_threshold-local_threshold) <= 5:
-                    step_threshold = -1     # Fine tune when near the limit
-            else:
-                best_thres = local_threshold
-                best_top_left = top_left
-                best_maxVal = maxVal
-                best_img_final = img_final
-                Done = True
-        else:
-            best_thres = local_threshold
-            best_top_left = top_left
-            best_maxVal = maxVal
-            best_img_final = img_final
-            Done = True
+                if (step_threshold < 0 and local_threshold <= limit_threshold) or (step_threshold > 0 and local_threshold >= limit_threshold) :
+                    Done = True # End when reaching the limit (code for both directions, only one apply, as direction is harcoded in the vars)
+                elif abs(limit_threshold-local_threshold) <= 6:
+                    step_threshold = -1 if step_threshold < 0 else 1     # Fine tune when near the limit
+
     if best_maxVal == None:
         logging.error(f"Match level not determined: frame_idx {frame_idx}, best_thres: {best_thres}, best_top_left: {best_top_left}, "
                         "best_maxVal: {best_maxVal}, step_threshold: {step_threshold}, local_threshold: {local_threshold}, limit_threshold: {limit_threshold}")
@@ -3804,7 +3897,7 @@ def calculate_frame_displacement_with_templates(frame_idx, img_ref, img_ref_alt 
         if top_left[1] != -1 and match_level > 0.1:
             move_x = hole_template_pos[0] - top_left[0]
             move_y = hole_template_pos[1] - top_left[1]
-            if abs(move_x) > 150 or abs(move_y) > 350:  # if shift too big, ignore it, probably for the better
+            if abs(move_x) > 200 or abs(move_y) > 600:  # if shift too big, ignore it, probably for the better
                 logging.warning(f"Frame {frame_idx:5d}: Shift too big ({move_x}, {move_y}), ignoring it.")
                 move_x = 0
                 move_y = 0
@@ -4258,7 +4351,7 @@ def start_convert():
         ConvertLoopExitRequested = True
         ConvertLoopRunning = False
     else:
-        if not delete_detected_bad_frames():
+        if not skip_frame_regeneration.get() and not delete_detected_bad_frames():
             return
         # Save current project status
         save_general_config()
@@ -5203,10 +5296,10 @@ def build_ui():
     global suspend_on_completion
     global perform_fill_none_rb, perform_fill_fake_rb, perform_fill_dumb_rb
     global ExpertMode
-    global display_template_popup
     global BigSize, FontSize
     global template_list
     global low_contrast_custom_template
+    global display_template_popup_btn
 
     # Create a frame to add a border to the preview
     left_area_frame = Frame(win)
@@ -5415,7 +5508,7 @@ def build_ui():
     custom_stabilization_btn.config(relief=SUNKEN if template_list.get_active_type() == 'Custom' else RAISED)
     custom_stabilization_btn.grid(row=postprocessing_row, column=0, columnspan=2, padx=5, pady=5, sticky=W)
     as_tooltips.add(custom_stabilization_btn,
-                  "If you prefer to use a customized template for your project, instead of the automatic one selected by AfterScan, lick on this button to define it")
+                  "Define a custom template for this project (vs the automatic template defined by AfterScan)")
 
     low_contrast_custom_template = tk.BooleanVar(value=False)
     low_contrast_custom_template_checkbox = tk.Checkbutton(
@@ -5440,7 +5533,7 @@ def build_ui():
     # Label to display the match level of current frame to template
     stabilization_threshold_match_label = Label(postprocessing_frame, width=4, borderwidth=1, relief='sunken', font=("Arial", FontSize))
     stabilization_threshold_match_label.grid(row=postprocessing_row, column=0, sticky=E)
-    as_tooltips.add(stabilization_threshold_match_label, "This value shows the dynamic quality of sprocket hole template matching. Green is good, orange acceptable, red is bad")
+    as_tooltips.add(stabilization_threshold_match_label, "Dynamically displays the match quality of the sprocket hole template. Green is good, orange acceptable, red is bad")
 
     # Extended search checkbox (replace radio buttons for fast/precise stabilization)
     extended_stabilization = tk.BooleanVar(value=False)
@@ -5746,16 +5839,14 @@ def build_ui():
         extra_row += 1
 
         # Check box to display misaligned frame monitor/editor
-        display_template_popup = tk.BooleanVar(value=False)
-        display_template_popup_checkbox = tk.Checkbutton(extra_frame,
-                                                    text='FrameSync Viewer (popup window)',
-                                                    variable=display_template_popup,
-                                                    onvalue=True, offvalue=False,
+        display_template_popup_btn = Button(extra_frame,
+                                                    text='FrameSync Viewer',
                                                     command=FrameSync_Viewer_popup,
                                                     width=33 if BigSize else 41, font=("Arial", FontSize))
-        display_template_popup_checkbox.grid(row=extra_row, column=0, columnspan=2, sticky=W)
-        as_tooltips.add(display_template_popup_checkbox, "Display popup window with dynamic debug information.Useful for developers only")
-
+        display_template_popup_btn.config(relief=SUNKEN if FrameSync_Viewer_opened else RAISED)
+        display_template_popup_btn.grid(row=extra_row, column=0, columnspan=2, sticky="ew")
+        extra_frame.grid_columnconfigure(0, weight=1)
+        as_tooltips.add(display_template_popup_btn, "Display popup window with dynamic debug information.Useful for developers only")
 
     # Define job list area ***************************************************
     job_list_frame = LabelFrame(left_area_frame,
@@ -5984,7 +6075,7 @@ def main(argv):
             exit()
 
     if not dev_debug_enabled:  
-        pass
+        return
 
     LogLevel = getattr(logging, LoggingMode.upper(), None)
     if not isinstance(LogLevel, int):
