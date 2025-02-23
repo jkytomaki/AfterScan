@@ -19,10 +19,10 @@ __author__ = 'Juan Remirez de Esparza'
 __copyright__ = "Copyright 2024, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
-__version__ = "1.12.12"
+__version__ = "1.20.00"
 __data_version__ = "1.0"
 __date__ = "2025-02-23"
-__version_highlight__ = "Simplify get_target_position, make it to work with partial templates (part of a hole in S8)"
+__version_highlight__ = "Better stabilization algorithm + FrameSync Viewer (frame synchronization monitor and editor)"
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
 __status__ = "Development"
@@ -6075,7 +6075,7 @@ def main(argv):
             exit()
 
     if not dev_debug_enabled:  
-        return
+        pass
 
     LogLevel = getattr(logging, LoggingMode.upper(), None)
     if not isinstance(LogLevel, int):
