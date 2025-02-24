@@ -19,10 +19,10 @@ __author__ = 'Juan Remirez de Esparza'
 __copyright__ = "Copyright 2024, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
-__version__ = "1.20.00"
+__version__ = "1.20.01"
 __data_version__ = "1.0"
-__date__ = "2025-02-23"
-__version_highlight__ = "Better stabilization algorithm + FrameSync Viewer (frame synchronization monitor and editor)"
+__date__ = "2025-02-24"
+__version_highlight__ = "FrameSync Viewer: Move threshold controls up (should be used in priority)"
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
 __status__ = "Development"
@@ -2038,7 +2038,8 @@ def save_corrected_frames_loop(count_processed):
         return
 
     bad_frame = bad_frame_list[process_bad_frame_index]
-    if (bad_frame[1] != 0 or bad_frame[2] != 0 or bad_frame[3] != StabilizationThreshold_default) and not bad_frame[4]:
+    ###if (bad_frame[1] != 0 or bad_frame[2] != 0 or bad_frame[3] != StabilizationThreshold_default) and not bad_frame[4]:
+    if not bad_frame[4]:
         StabilizationThreshold = bad_frame[3]
         frame_encode(bad_frame[0], -1, True, bad_frame[1], bad_frame[2])
         frame_selected.set(bad_frame[0])
@@ -2069,7 +2070,8 @@ def save_corrected_frames():
     count = 0
 
     for bad_frame in bad_frame_list:
-        if (bad_frame[1] != 0 or bad_frame[2] != 0 or bad_frame[3] != StabilizationThreshold_default) and not bad_frame[4]:
+        ###if (bad_frame[1] != 0 or bad_frame[2] != 0 or bad_frame[3] != StabilizationThreshold_default) and not bad_frame[4]:
+        if not bad_frame[4]:
             count += 1
 
     if count == 0:
@@ -2183,8 +2185,9 @@ def FrameSync_Viewer_popup_refresh():
     if not FrameSync_Viewer_opened:    # Nothing to refresh
         return  
     
-    if current_bad_frame_index == -1:
+    if current_bad_frame_index == -1 and len(bad_frame_list) > 0:
         current_bad_frame_index = 0
+
     if len(bad_frame_list) > 0:
         CurrentFrame = bad_frame_list[current_bad_frame_index][0]
         x = bad_frame_list[current_bad_frame_index][1]
@@ -2199,10 +2202,11 @@ def FrameSync_Viewer_popup_refresh():
     frame_slider.set(CurrentFrame)
     scale_display_update(x, y)
     if FrameSync_Viewer_opened:
-        corrected_bad_frame_text.set(f"Corrected frame count: {count_corrected_bad_frames()}")
-        bad_frames_on_left_value.set(current_bad_frame_index)
+        bad_frame_text.set(f"Misaligned frames: {len(bad_frame_list)}")
+        corrected_bad_frame_text.set(f"Corrected frames: {count_corrected_bad_frames()}")
+        bad_frames_on_left_value.set(current_bad_frame_index if current_bad_frame_index != -1 else 0)
         if len(bad_frame_list) > 0:
-            bad_frames_on_right_value.set(len(bad_frame_list)-current_bad_frame_index-1)
+            bad_frames_on_right_value.set((len(bad_frame_list)-current_bad_frame_index-1) if current_bad_frame_index != -1 else 0)
         else:
             bad_frames_on_right_value.set(0)
 
@@ -2213,16 +2217,9 @@ def display_previous_bad_frame(count):
     if current_bad_frame_index == -1:
         return
     if current_bad_frame_index > 0:
-        if StabilizationThreshold != StabilizationThreshold_default:
-            bad_frame_list[current_bad_frame_index][3] = StabilizationThreshold # Save threshold before moving
-            bad_frame_list[current_bad_frame_index][4] = False  # Not saved yet
         current_bad_frame_index -= count
         if current_bad_frame_index < 0:
             current_bad_frame_index = 0
-        # if not bad_frame_list[current_bad_frame_index][4]:  # If not saved yet, recover tunes threshold, otherwise keep previous (faster when processign consecutive frames)
-        if bad_frame_list[current_bad_frame_index][3] != StabilizationThreshold_default:
-            StabilizationThreshold = bad_frame_list[current_bad_frame_index][3] # Recover saved threshold
-            threshold_value.set(StabilizationThreshold)
         FrameSync_Viewer_popup_refresh()
 
 
@@ -2240,16 +2237,9 @@ def display_next_bad_frame(count):
     if current_bad_frame_index == -1:
         return
     if current_bad_frame_index < len(bad_frame_list)-1:
-        if StabilizationThreshold != StabilizationThreshold_default:
-            bad_frame_list[current_bad_frame_index][3] = StabilizationThreshold # Save threshold before moving
-            bad_frame_list[current_bad_frame_index][4] = False  # Not saved yet
         current_bad_frame_index += count
         if current_bad_frame_index >= len(bad_frame_list):
             current_bad_frame_index = len(bad_frame_list) - 1
-        #if not bad_frame_list[current_bad_frame_index][4]:  # If not saved yet, recover tuned threshold, otherwise keep previous (faster when processign consecutive frames)
-        if bad_frame_list[current_bad_frame_index][3] != StabilizationThreshold_default:
-            StabilizationThreshold = bad_frame_list[current_bad_frame_index][3] # Recover saved threshold
-            threshold_value.set(StabilizationThreshold)
         FrameSync_Viewer_popup_refresh()
 
 
@@ -2288,6 +2278,7 @@ def shift_bad_frame_up(event = None):
 
 def shift_bad_frame_down(event = None):
     global current_bad_frame_index
+
     if current_bad_frame_index == -1:
         return
     
@@ -2303,6 +2294,7 @@ def shift_bad_frame_down(event = None):
 
 def shift_bad_frame_left(event = None):
     global current_bad_frame_index
+
     if current_bad_frame_index == -1:
         return
     
@@ -2318,6 +2310,7 @@ def shift_bad_frame_left(event = None):
 
 def shift_bad_frame_right(event = None):
     global current_bad_frame_index
+
     if current_bad_frame_index == -1:
         return
     
@@ -2334,20 +2327,25 @@ def shift_bad_frame_right(event = None):
 def count_corrected_bad_frames():
     count = 0
     for bad_frame in bad_frame_list:
-        if (bad_frame[1] != 0 or bad_frame[2] != 0) and not bad_frame[4]:   # If offset modified, but not saved
+        if not bad_frame[4]:   # If offset modified, but not saved
             count += 1
     return count
 
 
 def bad_frames_increase_threshold(value):
     global StabilizationThreshold
+
+    if current_bad_frame_index == -1:
+        return
+
     StabilizationThreshold += float(value)
     if (StabilizationThreshold > 255):
         StabilizationThreshold = 255.0
     threshold_value.set(StabilizationThreshold)
-    FrameSync_Viewer_popup_refresh()
+    bad_frame_list[current_bad_frame_index][3] = StabilizationThreshold # Save threshold 
+    frame_encode(CurrentFrame, -1, False, bad_frame_list[current_bad_frame_index][1], bad_frame_list[current_bad_frame_index][2])
     bad_frame_list[current_bad_frame_index][4] = False
-
+    
 
 def bad_frames_increase_threshold_1():
     bad_frames_increase_threshold(1)
@@ -2359,11 +2357,16 @@ def bad_frames_increase_threshold_5(event = None):
 
 def bad_frames_decrease_threshold(value):
     global StabilizationThreshold
+
+    if current_bad_frame_index == -1:
+        return
+
     StabilizationThreshold -= float(value)
     if (StabilizationThreshold < 0):
         StabilizationThreshold = 0.0
     threshold_value.set(StabilizationThreshold)
-    FrameSync_Viewer_popup_refresh()
+    bad_frame_list[current_bad_frame_index][3] = StabilizationThreshold # Save threshold 
+    frame_encode(CurrentFrame, -1, False, bad_frame_list[current_bad_frame_index][1], bad_frame_list[current_bad_frame_index][2])
     bad_frame_list[current_bad_frame_index][4] = False
 
 
@@ -2689,28 +2692,7 @@ def FrameSync_Viewer_popup():
     bad_frames_on_right_value.set(0)
     as_tooltips.add(bad_frames_on_right_label, "Number of badly-stabilized frames after the one currently selected")
 
-    # Frame for manual alignment buttons 
-    manual_position_frame = LabelFrame(right_frame, text="Manual frame shift controls") #, width=50, height=50)
-    manual_position_frame.pack(anchor="center", pady=5, padx=10)   # expand=True, fill="both", 
-
-    frame_up_button = Button(manual_position_frame, text="▲", command=shift_bad_frame_up, font=("Arial", FontSize), width=3)
-    frame_up_button.grid(pady=2, padx=2, row=0, column=2)
-    as_tooltips.add(frame_up_button, "Move current frame 1 pixel up (use cursor keys to move 20 pixels (10 with Ctrl, 5 with shift)")
-    frame_left_button = Button(manual_position_frame, text="◀", command=shift_bad_frame_left, font=("Arial", FontSize), width=3)
-    frame_left_button.grid(pady=2, padx=2, row=1, column=1)
-    as_tooltips.add(frame_left_button, "Move current frame 1 pixel to the left (use cursor keys to move 20 pixels (10 with Ctrl, 5 with shift))")
-    frame_down_button = Button(manual_position_frame, text="▼", command=shift_bad_frame_down, font=("Arial", FontSize), width=3)
-    frame_down_button.grid(pady=2, padx=2, row=1, column=2)
-    as_tooltips.add(frame_down_button, "Move current frame 1 pixel down (use cursor keys to move 20 pixels (10 with Ctrl, 5 with shift))")
-    frame_right_button = Button(manual_position_frame, text="▶", command=shift_bad_frame_right, font=("Arial", FontSize), width=3)
-    frame_right_button.grid(pady=2, padx=2, row=1, column=3)
-    as_tooltips.add(frame_right_button, "Move current frame 1 pixel to the right (use cursor keys to move 20 pixels (10 with Ctrl, 5 with shift)")
-    template_popup_window.bind("<Up>", shift_bad_frame_up)
-    template_popup_window.bind("<Down>", shift_bad_frame_down)
-    template_popup_window.bind("<Left>", shift_bad_frame_left)
-    template_popup_window.bind("<Right>", shift_bad_frame_right)
-
-    # Frame for manual alignment buttons 
+    # Frame for Threshold adjustment buttons 
     manual_threshold_frame = LabelFrame(right_frame, text="Manual threshold controls") #, width=50, height=50)
     manual_threshold_frame.pack(anchor="center", pady=5, padx=10)   # expand=True, fill="both", 
 
@@ -2737,13 +2719,35 @@ def FrameSync_Viewer_popup():
     increase_threshold_button_5.pack(pady=10, padx=10, side=LEFT, anchor="center")
     as_tooltips.add(increase_threshold_button_1, "Increase threshold value by 5 (or press end)")
 
-    delete_bad_frames_button = Button(right_frame, text="Delete all collected frame info", command=delete_detected_bad_frames, font=("Arial", FontSize))
-    delete_bad_frames_button.pack(pady=10, padx=10, anchor="center")
-    as_tooltips.add(delete_bad_frames_button, "Delete all the information collected about misaligned frames, along with any correction info you might have provided.")
-
     # Bind Page Up and Page Down
     template_popup_window.bind("<Home>", bad_frames_decrease_threshold_5)
     template_popup_window.bind("<End>", bad_frames_increase_threshold_5)
+
+    # Frame for manual alignment buttons 
+    manual_position_frame = LabelFrame(right_frame, text="Manual frame shift controls") #, width=50, height=50)
+    manual_position_frame.pack(anchor="center", pady=5, padx=10)   # expand=True, fill="both", 
+
+    frame_up_button = Button(manual_position_frame, text="▲", command=shift_bad_frame_up, font=("Arial", FontSize), width=3)
+    frame_up_button.grid(pady=2, padx=2, row=0, column=2)
+    as_tooltips.add(frame_up_button, "Move current frame 1 pixel up (use cursor keys to move 20 pixels (10 with Ctrl, 5 with shift)")
+    frame_left_button = Button(manual_position_frame, text="◀", command=shift_bad_frame_left, font=("Arial", FontSize), width=3)
+    frame_left_button.grid(pady=2, padx=2, row=1, column=1)
+    as_tooltips.add(frame_left_button, "Move current frame 1 pixel to the left (use cursor keys to move 20 pixels (10 with Ctrl, 5 with shift))")
+    frame_down_button = Button(manual_position_frame, text="▼", command=shift_bad_frame_down, font=("Arial", FontSize), width=3)
+    frame_down_button.grid(pady=2, padx=2, row=1, column=2)
+    as_tooltips.add(frame_down_button, "Move current frame 1 pixel down (use cursor keys to move 20 pixels (10 with Ctrl, 5 with shift))")
+    frame_right_button = Button(manual_position_frame, text="▶", command=shift_bad_frame_right, font=("Arial", FontSize), width=3)
+    frame_right_button.grid(pady=2, padx=2, row=1, column=3)
+    as_tooltips.add(frame_right_button, "Move current frame 1 pixel to the right (use cursor keys to move 20 pixels (10 with Ctrl, 5 with shift)")
+    template_popup_window.bind("<Up>", shift_bad_frame_up)
+    template_popup_window.bind("<Down>", shift_bad_frame_down)
+    template_popup_window.bind("<Left>", shift_bad_frame_left)
+    template_popup_window.bind("<Right>", shift_bad_frame_right)
+
+    # Frame info delete button
+    delete_bad_frames_button = Button(right_frame, text="Delete all collected frame info", command=delete_detected_bad_frames, font=("Arial", FontSize))
+    delete_bad_frames_button.pack(pady=10, padx=10, anchor="center")
+    as_tooltips.add(delete_bad_frames_button, "Delete all the information collected about misaligned frames, along with any correction info you might have provided.")
 
     # Frame for save/exit buttons
     save_exit_frame = Frame(right_frame)
@@ -2758,7 +2762,7 @@ def FrameSync_Viewer_popup():
     as_tooltips.add(close_button, "Close this window")
 
     # Initialize bad frame index
-    if current_bad_frame_index == -1:
+    if current_bad_frame_index == -1 and len(bad_frame_list) > 0:
         current_bad_frame_index = 0
 
     # Refresh popup window
@@ -2785,7 +2789,7 @@ def debug_template_display_info(frame_idx, threshold, top_left, move_x, move_y):
                 BadFramesPercent = len(bad_frame_list) * 100 / (frame_idx-StartFrame)
             else:
                 BadFramesPercent = 0
-            bad_frame_text.set(f"Misaligned frame count: {len(bad_frame_list)} ({BadFramesPercent:.1f})%")
+            bad_frame_text.set(f"Misaligned frames: {len(bad_frame_list)} ({BadFramesPercent:.1f})%")
 
 
 
@@ -3972,7 +3976,7 @@ def stabilize_image(frame_idx, img, img_ref, offset_x = 0, offset_y = 0, img_ref
         if missing_rows > 0 or match_level < 0.9:
             if match_level < 0.7 if not high_sensitive_bad_frame_detection else 0.9:   # Only add really bad matches
                 if FrameSync_Viewer_opened:  # Generate bad frame list only if popup opened
-                    insert_or_replace_sorted(bad_frame_list, [frame_idx, 0, 0, frame_threshold, False])
+                    insert_or_replace_sorted(bad_frame_list, [frame_idx, 0, 0, frame_threshold, True])
                     if stabilization_bounds_alert.get():
                         win.bell()
             if GenerateCsv:
