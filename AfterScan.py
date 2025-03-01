@@ -19,10 +19,11 @@ __author__ = 'Juan Remirez de Esparza'
 __copyright__ = "Copyright 2024, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
-__version__ = "1.20.01"
+__module__ = "AfterScan"
+__version__ = "1.20.02"
 __data_version__ = "1.0"
-__date__ = "2025-02-24"
-__version_highlight__ = "FrameSync Viewer: Move threshold controls up (should be used in priority)"
+__date__ = "2025-03-01"
+__version_highlight__ = "Add usage report code to AfterScan (copied from ALT-Scann8)"
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
 __status__ = "Development"
@@ -63,6 +64,15 @@ import queue
 from matplotlib import font_manager
 from tooltip import Tooltips
 from rolling_average import RollingAverage
+import hashlib
+import uuid
+import base64
+
+try:
+    import requests
+    requests_loaded = True
+except ImportError:
+    requests_loaded = False
 
 # Frame vars
 first_absolute_frame = 0
@@ -178,6 +188,7 @@ SourceDirFileList = []
 TargetDirFileList = []
 film_type = 'S8'
 frame_fill_type = 'fake'
+
 # Dimensions of frames in collection currently loaded: x, y (as it is needed often)
 frame_width = 2028
 frame_height = 1520
@@ -300,9 +311,14 @@ CsvFramesOffPercent = 0
 match_level_average = None
 horizontal_offset_average = None
 
+SavedWithVersion = None # Used to retrieve version from config file (with wich version was this config last saved)
 
 use_simple_stabilization = False    # Stabilize using simpler (and slightier less precise) algorithm, no templates required
 precise_template_match = False
+
+# Info required for usage counter
+UserConsent = None
+AnonymousUuid = None
 
 # Token to be inserted in each queue on program closure, to allow threads to shut down cleanly
 END_TOKEN = "TERMINATE_PROCESS"
@@ -530,6 +546,8 @@ def save_general_config():
     # Write config data upon exit
     general_config["GeneralConfigDate"] = str(datetime.now())
     general_config["WindowPos"] = win.geometry()
+    general_config["Version"] = __version__
+
     try:
         if template_popup_window.winfo_exists():
             general_config["TemplatePopupWindowPos"] = template_popup_window.geometry()
@@ -562,6 +580,8 @@ def decode_general_config():
     global project_name
     global FfmpegBinName
     global general_config
+    global UserConsent, AnonymousUuid
+    global SavedWithVersion
 
     if 'SourceDir' in general_config:
         SourceDir = general_config["SourceDir"]
@@ -576,6 +596,13 @@ def decode_general_config():
 
     if 'FfmpegBinName' in general_config:
         FfmpegBinName = general_config["FfmpegBinName"]
+
+    if 'UserConsent' in general_config:
+        UserConsent = general_config["UserConsent"]
+    if 'AnonymousUuid' in general_config:
+        AnonymousUuid = general_config["AnonymousUuid"]
+    if 'Version' in general_config:
+        SavedWithVersion = general_config["Version"]
 
 
 def update_project_settings():
@@ -5994,6 +6021,51 @@ def exit_app():  # Exit Application
     win.destroy()
 
 
+# Get or generate persistent user ID
+def get_user_id():
+    global AnonymousUuid, general_config
+    if AnonymousUuid != None:
+        return AnonymousUuid
+    else:
+        serial = None
+        try:
+            with open('/proc/cpuinfo', 'r') as f:
+                for line in f:
+                    if line.startswith('Serial'):
+                        serial = line.split(':')[1].strip()
+                        break # exit for loop after finding serial number.
+        except FileNotFoundError:
+            logging.error(f"e")
+        if serial == None:
+            AnonymousUuid = hashlib.sha256(str(uuid.uuid4()).encode()).hexdigest()
+            logging.debug(f"Generating generic uuid: {AnonymousUuid}")
+        else:
+            AnonymousUuid = hashlib.sha256(serial.encode()).hexdigest()
+            logging.debug(f"Generating RPi uuid: {AnonymousUuid}")
+        general_config['AnonymousUuid'] = AnonymousUuid
+        return AnonymousUuid
+
+
+# Ping server if requests is available (call once at startup)
+def report_usage():
+    if UserConsent == "yes" and requests_loaded:
+        encoded_2 = "Rucy5uZXQ6NTAwMC9jb3VudA=="
+        user_id = get_user_id()  # Reuse persistent ID
+        payload = {
+            "id": user_id,
+            "versions": {"product": __module__, "ui": __version__, "controller": ""}
+        }
+        encoded_1 = "aHR0cDovL2phdW4uZG"
+        server_url = base64.b64decode(encoded_1+encoded_2).decode("utf-8")        
+        try:
+            requests.post(server_url, json=payload, timeout=1)
+            logging.debug("Usage reporting done.")
+        except requests.RequestException:
+            pass  # Silent fail if offline
+    elif not requests_loaded:
+        logging.warning("Usage reporting skipped—install 'python3-requests' to enable (optional).")
+
+
 def main(argv):
     global LogLevel, LoggingMode
     global template_list
@@ -6014,6 +6086,7 @@ def main(argv):
     global num_threads
     global use_simple_stabilization
     global dev_debug_enabled
+    global UserConsent, general_config
 
     LoggingMode = "INFO"
     go_disable_tooptips = False
@@ -6096,6 +6169,16 @@ def main(argv):
 
     decode_general_config()
 
+    # Check reporting consent on first run
+    if requests_loaded:
+        if UserConsent == None:
+            consent = tk.messagebox.askyesno(
+                "AfterScan User Count",
+                "Help us count AfterScan users anonymously? Reports versions to track usage. No personal data is collected, just an anonymous hash plus AfterScan versions."
+            )
+            UserConsent = "yes" if consent else "no"
+            general_config['UserConsent'] = UserConsent
+
     multiprocessing_init()
 
     ffmpeg_installed = False
@@ -6169,6 +6252,8 @@ def main(argv):
     init_display()
 
     win.resizable(False, False) # Lock window size once all widgets have been added (make sure all fits)
+
+    report_usage()
 
     # If BatchAutostart, enable suspend on completion and start batch
     if BatchAutostart:
