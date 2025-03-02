@@ -20,10 +20,10 @@ __copyright__ = "Copyright 2024, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
 __module__ = "AfterScan"
-__version__ = "1.20.02"
+__version__ = "1.20.03"
 __data_version__ = "1.0"
 __date__ = "2025-03-01"
-__version_highlight__ = "Add usage report code to AfterScan (copied from ALT-Scann8)"
+__version_highlight__ = "Fix several bugs in stabilization code"
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
 __status__ = "Development"
@@ -2493,7 +2493,7 @@ def FrameSync_Viewer_popup():
     StabilizationThreshold_default = StabilizationThreshold   # To be restored on exit
 
     template_popup_window = Toplevel(win)
-    template_popup_window.title("FrameSync Viewer")
+    template_popup_window.title("FrameSync Editor")
     # Intercept window close (X button)
     template_popup_window.protocol("WM_DELETE_WINDOW", FrameSync_Viewer_popup)
 
@@ -2505,8 +2505,10 @@ def FrameSync_Viewer_popup():
     # Create three vertical frames in the bottom horizontal frame
     left_frame = Frame(template_popup_window, width=60, height=8)
     left_frame.pack(side=LEFT)
-    center_frame = Frame(template_popup_window, width=60, height=8)
-    center_frame.pack(side=LEFT)
+    center_left_frame = Frame(template_popup_window, width=160, height=8)
+    center_left_frame.pack(side=LEFT)
+    center_right_frame = Frame(template_popup_window, width=60, height=8)
+    center_right_frame.pack(side=LEFT)
     right_frame = Frame(template_popup_window, width=280, height=8)
     right_frame.pack(side=LEFT)
     # Add a label and a close button to the popup window
@@ -2533,15 +2535,15 @@ def FrameSync_Viewer_popup():
     template_canvas.image = DisplayableImage
 
     # Create Canvas to display image left stripe (stabilized)
-    left_stripe_stabilized_canvas = Canvas(center_frame, bg='dark grey',
+    left_stripe_stabilized_canvas = Canvas(center_left_frame, bg='dark grey',
                                  width=debug_template_width, height=debug_template_height)
-    left_stripe_stabilized_canvas.pack(side=LEFT, anchor=N)
+    left_stripe_stabilized_canvas.pack(side=TOP, anchor=N)
     as_tooltips.add(left_stripe_stabilized_canvas, "Current frame after stabilization, with detected template highlighted in green, orange or red depending on the quality of the match")
 
     # Create Canvas to display image left stripe (non stabilized)
-    left_stripe_canvas = Canvas(center_frame, bg='dark grey',
+    left_stripe_canvas = Canvas(center_right_frame, bg='dark grey',
                                  width=debug_template_width, height=debug_template_height)
-    left_stripe_canvas.pack(side=LEFT, anchor=N)
+    left_stripe_canvas.pack(side=TOP, anchor=N)
     as_tooltips.add(left_stripe_canvas, "Template search area for current frame before stabilization, used to find template")
 
     # Add a label with the film type
@@ -2820,23 +2822,29 @@ def debug_template_display_info(frame_idx, threshold, top_left, move_x, move_y):
 
 
 
-def debug_template_display_frame_raw(img):
-    global left_stripe_canvas, left_stripe_stabilized_canvas
+def debug_template_display_frame_raw(img, x, y, width, height, color):
+    global left_stripe_canvas
 
     if FrameSync_Viewer_opened:
         try:
+            img = np.stack((img,) * 3, axis=-1)
+            cv2.rectangle(img, (x, y), (x + width, y + height), color, 2)
             left_stripe_canvas.config(width=int(img.shape[1]*0.33))
-            left_stripe_stabilized_canvas.config(width=img.shape[1]*0.33)
         except Exception as e:
-            logging.error(f"Exception {e} when configuring canvas")
+            logging.error(f"Exception {e} when drawing raw canvas")
         debug_template_display_frame(left_stripe_canvas, img)
 
 
-def debug_template_display_frame_stabilized(img):
+def debug_template_display_frame_stabilized(img, x, y, width, height, color):
     global left_stripe_stabilized_canvas
 
     if FrameSync_Viewer_opened:
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        try:
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            cv2.rectangle(img, (x, y), (x + width, y + height), color, 2)
+            left_stripe_stabilized_canvas.config(width=img.shape[1]*0.33)
+        except Exception as e:        
+            logging.error(f"Exception {e} when drawing stabilized canvas")
         debug_template_display_frame(left_stripe_stabilized_canvas, img)
 
 
@@ -3923,7 +3931,6 @@ def calculate_frame_displacement_with_templates(frame_idx, img_ref, img_ref_alt 
                 top_left = best_top_left
                 img_matched = best_img_matched
                 break
-        debug_template_display_frame_raw(img_matched)
 
         if top_left[1] != -1 and match_level > 0.1:
             move_x = hole_template_pos[0] - top_left[0]
@@ -3937,7 +3944,8 @@ def calculate_frame_displacement_with_templates(frame_idx, img_ref, img_ref_alt 
             move_x = 0
             move_y = 0
         log_line = f"T{id} - " if id != -1 else ""
-        logging.debug(log_line+f"Frame {frame_idx:5d}: threshold: {frame_treshold:3d}, top left: ({top_left[0]:4d},{top_left[0]:4d}), move_x:{move_x:4d}, move_y:{move_y:4d}")
+        logging.debug(log_line+f"Frame {frame_idx:5d}: threshold: {frame_treshold:3d}, template: ({hole_template_pos[0]:4d},{hole_template_pos[1]:4d}), top left: ({top_left[0]:4d},{top_left[1]:4d}), move_x:{move_x:4d}, move_y:{move_y:4d}")
+        debug_template_display_frame_raw(img_matched, top_left[0], top_left[1], film_hole_template.shape[1], film_hole_template.shape[0], match_level_color_bgr(match_level))
         debug_template_display_info(frame_idx, frame_treshold, top_left, move_x, move_y)
 
         return move_x, move_y, top_left, match_level, frame_treshold
@@ -4053,11 +4061,10 @@ def stabilize_image(frame_idx, img, img_ref, offset_x = 0, offset_y = 0, img_ref
             move_x -= offset_x
             move_y -= offset_y
         left_stripe_img = get_image_left_stripe(translated_image)
-        cv2.rectangle(left_stripe_img, (top_left[0] + move_x, top_left[1] + move_y),
-                      (top_left[0] + template_list.get_active_size()[0] + move_x, top_left[1] + template_list.get_active_size()[1] + move_y), match_level_color_bgr(match_level), 2)
         # No need for a search area rectangle, since the image in the debug popup is already that rectangle
-        # cv2.rectangle(left_stripe_img, (HoleSearchTopLeft[0] + move_x, HoleSearchTopLeft[1] + move_y), (HoleSearchBottomRight[0] + move_x, HoleSearchBottomRight[1] + move_y), (255, 255, 255), 2)
-        debug_template_display_frame_stabilized(left_stripe_img)
+        debug_template_display_frame_stabilized(left_stripe_img, top_left[0] + move_x, top_left[1] + move_y,
+                                                template_list.get_active_size()[0], template_list.get_active_size()[1],
+                                                match_level_color_bgr(match_level))
 
     return translated_image
 
@@ -5871,7 +5878,7 @@ def build_ui():
 
         # Check box to display misaligned frame monitor/editor
         display_template_popup_btn = Button(extra_frame,
-                                                    text='FrameSync Viewer',
+                                                    text='FrameSync Editor',
                                                     command=FrameSync_Viewer_popup,
                                                     width=33 if BigSize else 41, font=("Arial", FontSize))
         display_template_popup_btn.config(relief=SUNKEN if FrameSync_Viewer_opened else RAISED)
