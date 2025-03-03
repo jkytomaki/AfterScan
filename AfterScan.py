@@ -20,10 +20,10 @@ __copyright__ = "Copyright 2024, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
 __module__ = "AfterScan"
-__version__ = "1.20.04"
+__version__ = "1.20.5"
 __data_version__ = "1.0"
 __date__ = "2025-03-03"
-__version_highlight__ = "Update scales in template list when loading new source folder"
+__version_highlight__ = "Add verification hashes to template files"
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
 __status__ = "Development"
@@ -129,6 +129,13 @@ hole_template_filename_bw = os.path.join(script_dir, "Pattern_BW.jpg")
 hole_template_filename_wb = os.path.join(script_dir, "Pattern_WB.jpg")
 hole_template_filename = hole_template_filename_s8
 files_to_delete = []
+EXPECTED_HASHES = {
+    'Pattern.S8.jpg': '4ff224513d7c021117f0274768ee4ff209d705fb7715d87f86800eb5dff933d4',
+    'Pattern.R8.jpg': '975f9cf9fe44110324a247ab3a27840b182ddb5bba9f6dca2b6853715c9a16ff',
+    'Pattern_BW.jpg': '4a90371097219e5d5604c00bead6710b694e70b48fe66dbc5c2ce31ceedce4cf',
+    'Pattern_WB.jpg': '60d50644f26407503267b763bcc48d7bec88dd6f58bb238cf9bec6ba86938f33',
+    'Pattern_Corner_TR.jpg': '5e56a49c029013588646b11adbdc4a223217abfb91423dd3cdde26abbf5dcd9c'
+}
 
 default_project_config = {
     "SourceDir": "",
@@ -5294,6 +5301,34 @@ def init_logging():
     logging.info("Log file: %s", log_file_fullpath)
 
 
+def verify_templates():
+    retvalue = True
+    error_message = ""
+    files_missing = []
+    files_invalid = []
+    for jpg, expected in EXPECTED_HASHES.items():
+        if not os.path.exists(os.path.join(script_dir, jpg)):
+            retvalue = False
+            files_missing.append(jpg)
+            continue
+        with open(os.path.join(script_dir, jpg), 'rb') as f:
+            current = hashlib.sha256(f.read()).hexdigest()
+        if current != expected:
+            retvalue = False
+            files_invalid.append(jpg)
+    if not retvalue:
+        error_message = "Error when loading template files.\r\n"
+        if len(files_missing) > 0:
+            error_message += f"Missing files: {', '.join(files_missing)}"
+            if len(files_invalid) > 0:
+                error_message += "\r\n"
+        if len(files_invalid) > 0:
+            error_message += f"Invalid files: {', '.join(files_invalid)}"
+        error_message += f"\r\nPlease install the correct template files for AfterScan {__version__} and try again."
+        tk.messagebox.showerror("Error!", error_message)
+    return retvalue, error_message
+
+
 def afterscan_init():
     global win, as_tooltips
     global TopWinX
@@ -6245,6 +6280,11 @@ def main(argv):
         raise ValueError('Invalid log level: %s' % LogLevel)
     else:
         init_logging()
+
+    templates_ok, error_msg = verify_templates()
+    if not templates_ok:
+        logging.error(error_msg)
+        return
 
     load_general_config()
 
