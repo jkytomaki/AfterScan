@@ -20,10 +20,10 @@ __copyright__ = "Copyright 2024, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
 __module__ = "AfterScan"
-__version__ = "1.20.7"
+__version__ = "1.20.8"
 __data_version__ = "1.0"
 __date__ = "2025-03-04"
-__version_highlight__ = "Add menu bar with links (to wiki, discord, etc)"
+__version_highlight__ = "Adjust template code to properly hadle different resolutions"
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
 __status__ = "Development"
@@ -133,7 +133,7 @@ hole_template_filename_wb = os.path.join(script_dir, "Pattern_WB.jpg")
 hole_template_filename = hole_template_filename_s8
 files_to_delete = []
 EXPECTED_HASHES = {
-    'Pattern.S8.jpg': '4ff224513d7c021117f0274768ee4ff209d705fb7715d87f86800eb5dff933d4',
+    'Pattern.S8.jpg': 'aef01c4bce5e7e04a157d92de26d2c143b6e42f79be15b40c39abbe49bc4a7a0',
     'Pattern.R8.jpg': '975f9cf9fe44110324a247ab3a27840b182ddb5bba9f6dca2b6853715c9a16ff',
     'Pattern_BW.jpg': '4a90371097219e5d5604c00bead6710b694e70b48fe66dbc5c2ce31ceedce4cf',
     'Pattern_WB.jpg': '60d50644f26407503267b763bcc48d7bec88dd6f58bb238cf9bec6ba86938f33',
@@ -318,6 +318,7 @@ ForceSmallSize = False
 ForceBigSize = False
 dev_debug_enabled = False
 FrameSync_Viewer_opened = False
+FrameSync_Images_Factor = 0.33
 
 GenerateCsv = False
 CsvFilename = ""
@@ -452,14 +453,16 @@ class TemplateList:
         return self.active_template.scaled_position
 
     def set_active_position(self, position):
-        self.active_template.position = position
-
+        self.active_template.scaled_position = position
+        self.active_template.position =  (int(t.scaled_position[0] / new_scale),
+                                    int(t.scaled_position[1] / new_scale))
     def get_active_size(self):
-        return self.active_template.size
+        return self.active_template.scaled_size
 
     def set_active_size(self, size):
-        self.active_template.size = size
-
+        self.active_template.scaled_size = size
+        self.active_template.size = (int(t.scaled_size[0] / new_scale),
+                                int(t.scaled_size[1] / new_scale))
     def get_scale(self):
         # Size reference 2028x1520
         return self.active_template.scale   # Scale is dynamic, as it depends on the set of images currently loaded
@@ -818,8 +821,7 @@ def load_project_config():
     # saving it in case of batch processing
     project_config_from_file = True
     widget_status_update(NORMAL)
-    if FrameSync_Viewer_opened:
-        FrameSync_Viewer_popup_update_widgets(NORMAL)
+    FrameSync_Viewer_popup_update_widgets(NORMAL)
 
 def decode_project_config():        
     global SourceDir, TargetDir
@@ -1054,8 +1056,7 @@ def decode_project_config():
         current_bad_frame_index = project_config["CurrentBadFrameIndex"]
 
     widget_status_update(NORMAL)
-    if FrameSync_Viewer_opened:
-        FrameSync_Viewer_popup_update_widgets(NORMAL)
+    FrameSync_Viewer_popup_update_widgets(NORMAL)
 
     load_bad_frame_list()
 
@@ -1421,8 +1422,7 @@ def start_processing_job_list():
     else:
         BatchJobRunning = True
         widget_status_update(DISABLED, start_batch_btn)
-        if FrameSync_Viewer_opened:
-            FrameSync_Viewer_popup_update_widgets(DISABLED)
+        FrameSync_Viewer_popup_update_widgets(DISABLED)
 
         for entry in job_list:
             job_list[entry]['attempted'] = job_list[entry]['done'] # Reset attempted flag for those not done yet
@@ -1690,8 +1690,7 @@ def set_source_folder():
 
     init_display()
     widget_status_update(NORMAL)
-    if FrameSync_Viewer_opened:
-        FrameSync_Viewer_popup_update_widgets(NORMAL)
+    FrameSync_Viewer_popup_update_widgets(NORMAL)
 
 
 
@@ -1937,8 +1936,7 @@ def perform_stabilization_selection():
     project_config["PerformStabilization"] = perform_stabilization.get()
     win.after(5, scale_display_update)
     widget_status_update(NORMAL)
-    if FrameSync_Viewer_opened:
-        FrameSync_Viewer_popup_update_widgets(NORMAL)
+    FrameSync_Viewer_popup_update_widgets(NORMAL)
 
 
 def low_contrast_custom_template_selection():
@@ -1946,8 +1944,7 @@ def low_contrast_custom_template_selection():
 
     project_config["LowContrastCustomTemplate"] = low_contrast_custom_template.get()
     widget_status_update(NORMAL)
-    if FrameSync_Viewer_opened:
-        FrameSync_Viewer_popup_update_widgets(NORMAL)
+    FrameSync_Viewer_popup_update_widgets(NORMAL)
 
 
 def extended_stabilization_selection():
@@ -1956,8 +1953,7 @@ def extended_stabilization_selection():
     hole_search_area_adjustment_pending = True
     win.after(5, scale_display_update)
     widget_status_update(NORMAL)
-    if FrameSync_Viewer_opened:
-        FrameSync_Viewer_popup_update_widgets(NORMAL)
+    FrameSync_Viewer_popup_update_widgets(NORMAL)
 
 
 def stabilization_threshold_selection(updown):
@@ -2037,8 +2033,7 @@ def encode_all_frames_selection():
     global encode_all_frames
     project_config["EncodeAllFrames"] = encode_all_frames.get()
     widget_status_update(NORMAL)
-    if FrameSync_Viewer_opened:
-        FrameSync_Viewer_popup_update_widgets(NORMAL)
+    FrameSync_Viewer_popup_update_widgets(NORMAL)
 
 
 def generate_video_selection():
@@ -2046,8 +2041,7 @@ def generate_video_selection():
 
     project_config["GenerateVideo"] = generate_video.get()
     widget_status_update(NORMAL)
-    if FrameSync_Viewer_opened:
-        FrameSync_Viewer_popup_update_widgets(NORMAL)
+    FrameSync_Viewer_popup_update_widgets(NORMAL)
 
 
 def set_fps(selected):
@@ -2536,30 +2530,31 @@ def set_precise_template_match():
 
 
 def FrameSync_Viewer_popup_update_widgets(status, except_save=False):
-    if FrameSync_Viewer_opened:
-        frame_up_button.config(state=status)
-        frame_left_button.config(state=status)
-        frame_down_button.config(state=status)
-        frame_right_button.config(state=status)
-        next_frame_button_1.config(state=status)
-        next_frame_button_10.config(state=status)
-        previous_frame_button_1.config(state=status)
-        previous_frame_button_10.config(state=status)
-        bad_frames_on_left_label.config(state=status)
-        bad_frames_on_right_label.config(state=status)
-        decrease_threshold_button_5.config(state=status)
-        decrease_threshold_button_1.config(state=status)
-        threshold_label.config(state=status)
-        increase_threshold_button_1.config(state=status)
-        increase_threshold_button_5.config(state=status)
-        delete_bad_frames_button.config(state=status)
-        high_sensitive_bad_frame_detection_checkbox.config(state=status)
-        # Do not disable alert checkbox to give a chance to stop the alerts without stopping the encoding
-        # stabilization_bounds_alert_checkbox.config(state=status)
-        # precise_template_match_checkbox.config(state=status)
-        close_button.config(state=status)
-        if not except_save:
-            save_button.config(state=status)
+    if not FrameSync_Viewer_opened:
+        return
+    frame_up_button.config(state=status)
+    frame_left_button.config(state=status)
+    frame_down_button.config(state=status)
+    frame_right_button.config(state=status)
+    next_frame_button_1.config(state=status)
+    next_frame_button_10.config(state=status)
+    previous_frame_button_1.config(state=status)
+    previous_frame_button_10.config(state=status)
+    bad_frames_on_left_label.config(state=status)
+    bad_frames_on_right_label.config(state=status)
+    decrease_threshold_button_5.config(state=status)
+    decrease_threshold_button_1.config(state=status)
+    threshold_label.config(state=status)
+    increase_threshold_button_1.config(state=status)
+    increase_threshold_button_5.config(state=status)
+    delete_bad_frames_button.config(state=status)
+    high_sensitive_bad_frame_detection_checkbox.config(state=status)
+    # Do not disable alert checkbox to give a chance to stop the alerts without stopping the encoding
+    # stabilization_bounds_alert_checkbox.config(state=status)
+    # precise_template_match_checkbox.config(state=status)
+    close_button.config(state=status)
+    if not except_save:
+        save_button.config(state=status)
 
 def FrameSync_Viewer_popup():
     global win
@@ -2635,10 +2630,10 @@ def FrameSync_Viewer_popup():
     #label = Label(left_frame, text="Current template:")
     #label.pack(pady=5, padx=10, anchor=W)
 
-    ratio = 0.33  # Reduce template to one third
+    # Frame sync image size factor precalculated when loadign frames
     active_template = template_list.get_active_template()
-    aux = resize_image(active_template, ratio)
-    template_canvas_height = int(frame_height*ratio)
+    aux = resize_image(active_template, FrameSync_Images_Factor)
+    template_canvas_height = int(frame_height*FrameSync_Images_Factor)
     debug_template_width = aux.shape[1]
     debug_template_height = aux.shape[0]
     # Set expected hole template pos
@@ -2651,7 +2646,7 @@ def FrameSync_Viewer_popup():
     as_tooltips.add(template_canvas, "Active template used to locate sprocket hole(s)")
 
     DisplayableImage = ImageTk.PhotoImage(Image.fromarray(aux))
-    template_canvas.create_image(0, int(hole_template_pos[1]*0.33), anchor=NW, image=DisplayableImage)
+    template_canvas.create_image(0, int(hole_template_pos[1]*FrameSync_Images_Factor), anchor=NW, image=DisplayableImage)
     template_canvas.image = DisplayableImage
 
     # Create Canvas to display image left stripe (stabilized)
@@ -2946,26 +2941,17 @@ def debug_template_display_frame_raw(img, x, y, width, height, color):
     global left_stripe_canvas
 
     if FrameSync_Viewer_opened:
-        try:
-            img = np.stack((img,) * 3, axis=-1)
-            cv2.rectangle(img, (x, y), (x + width, y + height), color, 2)
-            left_stripe_canvas.config(width=int(img.shape[1]*0.33))
-        except Exception as e:
-            logging.error(f"Exception {e} when drawing raw canvas")
-        debug_template_display_frame(left_stripe_canvas, img)
+        img = np.stack((img,) * 3, axis=-1)
+        debug_template_display_frame(left_stripe_canvas, img, x, y, width, height, color)
 
 
 def debug_template_display_frame_stabilized(img, x, y, width, height, color):
     global left_stripe_stabilized_canvas
 
     if FrameSync_Viewer_opened:
-        try:
-            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-            cv2.rectangle(img, (x, y), (x + width, y + height), color, 2)
-            left_stripe_stabilized_canvas.config(width=img.shape[1]*0.33)
-        except Exception as e:        
-            logging.error(f"Exception {e} when drawing stabilized canvas")
-        debug_template_display_frame(left_stripe_stabilized_canvas, img)
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        left_stripe_stabilized_canvas.config(width=img.shape[1]*FrameSync_Images_Factor)
+        debug_template_display_frame(left_stripe_stabilized_canvas, img, x, y, width, height, color)
 
 
 def debug_template_refresh_template():
@@ -2974,35 +2960,40 @@ def debug_template_refresh_template():
 
     if FrameSync_Viewer_opened:
         hole_template_pos = template_list.get_active_position()
-        ratio = 0.33  # Reduce template to one third
-        aux = resize_image(template_list.get_active_template(), ratio)
+        # Resize factor calculated when settign source folder
+        aux = resize_image(template_list.get_active_template(), FrameSync_Images_Factor)
         _, top, bottom = get_target_position(0, aux, 'v')  # get positions to draw template limits
-        template_canvas.config(width=int(template_list.get_active_size()[0]*ratio))
+        template_canvas.config(width=int(template_list.get_active_size()[0]*FrameSync_Images_Factor))
         template_canvas.delete('all')
         DisplayableImage = ImageTk.PhotoImage(Image.fromarray(aux))
-        template_canvas.create_image(0, int(hole_template_pos[1] * 0.33), anchor=NW, image=DisplayableImage)
+        template_canvas.create_image(0, int(hole_template_pos[1] * FrameSync_Images_Factor), anchor=NW, image=DisplayableImage)
         template_canvas.image = DisplayableImage
         # Draw a line (start x1, y1, end x2, y2)
-        template_canvas.create_line(0, int(hole_template_pos[1] * 0.33) + top, aux.shape[1], int(hole_template_pos[1] * 0.33) + top, fill="green", width=2)
-        template_canvas.create_line(0, int(hole_template_pos[1] * 0.33) + bottom, aux.shape[1], int(hole_template_pos[1] * 0.33) + bottom, fill="green", width=2)
+        template_canvas.create_line(0, int(hole_template_pos[1] * FrameSync_Images_Factor) + top, aux.shape[1], int(hole_template_pos[1] * FrameSync_Images_Factor) + top, fill="green", width=2)
+        template_canvas.create_line(0, int(hole_template_pos[1] * FrameSync_Images_Factor) + bottom, aux.shape[1], int(hole_template_pos[1] * FrameSync_Images_Factor) + bottom, fill="green", width=2)
         hole_pos_text.set(f"Expected template pos: {hole_template_pos}")
         template_type_text.set(f"Template type: {template_list.get_active_type()}")
         template_size_text.set(f"Template Size: {template_list.get_active_size()}")
         # template_wb_proportion_text.set(f"WoB proportion: {template_list.get_active_wb_proportion()*100:2.1f}%")
         film_type_text.set(f"Film type: {film_type.get()}")
 
-def debug_template_display_frame(canvas, img):
+def debug_template_display_frame(canvas, img, x, y, width, height, color):
     global debug_template_width, debug_template_height
 
     if FrameSync_Viewer_opened:
         try:
-            height, width = img.shape[:2]
-            ratio = debug_template_height / height
-            ratio = 0.33
-            resized_image = cv2.resize(img, (int(width*ratio), int(height*ratio)))
+            img_height, img_width = img.shape[:2]
+            # Resize factor precalculated when loading source folder
+            resized_image = cv2.resize(img, (int(img_width*FrameSync_Images_Factor), int(img_height*FrameSync_Images_Factor)))
+            # After resize, recalculate coordinates and draw rectangle
+            x = int(x*FrameSync_Images_Factor)
+            y = int(y*FrameSync_Images_Factor)
+            width = int(width*FrameSync_Images_Factor)
+            height = int(height*FrameSync_Images_Factor)
+            cv2.rectangle(resized_image, (x, y), (x + width, y + height), color, 1)
             pil_image = Image.fromarray(resized_image)
             photo_image = ImageTk.PhotoImage(image=pil_image)
-            canvas.config(height=int(height*ratio))
+            canvas.config(height=int(img_height*FrameSync_Images_Factor), width=int(img_width*FrameSync_Images_Factor))
             canvas.create_image(0, 0, anchor=NW, image=photo_image)
             canvas.image = photo_image
         except Exception as e:
@@ -3045,7 +3036,7 @@ def scale_display_update(offset_x = 0, offset_y = 0):
             img = crop_image(img, CropTopLeft, CropBottomRight)
         else:
             img = even_image(img)
-        if img is not None and not img.size == 0:   # Just in case img is nto well generated
+        if img is not None and not img.size == 0:   # Just in case img is not well generated
             display_image(img)
         if frame_scale_refresh_pending:
             frame_scale_refresh_pending = False
@@ -3411,8 +3402,7 @@ def select_cropping_area():
 
     # Disable all buttons in main window
     widget_status_update(DISABLED,0)
-    if FrameSync_Viewer_opened:
-        FrameSync_Viewer_popup_update_widgets(DISABLED)
+    FrameSync_Viewer_popup_update_widgets(DISABLED)
 
     win.update()
 
@@ -3422,8 +3412,7 @@ def select_cropping_area():
     if select_rectangle_area(is_cropping=True):
         CropAreaDefined = True
         widget_status_update(NORMAL, 0)
-        if FrameSync_Viewer_opened:
-            FrameSync_Viewer_popup_update_widgets(NORMAL)
+        FrameSync_Viewer_popup_update_widgets(NORMAL)
         CropTopLeft = RectangleTopLeft
         CropBottomRight = RectangleBottomRight
         logging.debug("Crop area: (%i,%i) - (%i, %i)", CropTopLeft[0],
@@ -3431,8 +3420,7 @@ def select_cropping_area():
     else:
         CropAreaDefined = False
         widget_status_update(DISABLED, 0)
-        if FrameSync_Viewer_opened:
-            FrameSync_Viewer_popup_update_widgets(DISABLED)
+        FrameSync_Viewer_popup_update_widgets(DISABLED)
         perform_cropping.set(False)
         perform_cropping.set(False)
         generate_video_checkbox.config(state=NORMAL if ffmpeg_installed
@@ -3446,8 +3434,7 @@ def select_cropping_area():
 
     # Enable all buttons in main window
     widget_status_update(NORMAL, 0)
-    if FrameSync_Viewer_opened:
-        FrameSync_Viewer_popup_update_widgets(NORMAL)
+    FrameSync_Viewer_popup_update_widgets(NORMAL)
 
     win.after(5, scale_display_update)
     win.update()
@@ -3480,8 +3467,7 @@ def select_custom_template():
             return
         # Disable all buttons in main window
         widget_status_update(DISABLED, 0)
-        if FrameSync_Viewer_opened:
-            FrameSync_Viewer_popup_update_widgets(DISABLED)
+        FrameSync_Viewer_popup_update_widgets(DISABLED)
 
         win.update()
 
@@ -3518,8 +3504,7 @@ def select_custom_template():
             template_list.add(template_name, full_path_template_filename, 'custom', RectangleTopLeft)   # size and template automatically refreshed upon addition
             logging.debug(f"Template top left-size: {template_list.get_active_position()} - {template_list.get_active_size()}")
             widget_status_update(NORMAL, 0)
-            if FrameSync_Viewer_opened:
-                FrameSync_Viewer_popup_update_widgets(NORMAL)
+            FrameSync_Viewer_popup_update_widgets(NORMAL)
             custom_stabilization_btn.config(relief=SUNKEN)
 
             project_config['CustomTemplateExpectedPos'] = template_list.get_active_position()
@@ -3549,16 +3534,14 @@ def select_custom_template():
                     return
             custom_stabilization_btn.config(relief=RAISED)
             widget_status_update(DISABLED, 0)
-            if FrameSync_Viewer_opened:
-                FrameSync_Viewer_popup_update_widgets(DISABLED)
+            FrameSync_Viewer_popup_update_widgets(DISABLED)
 
     project_config["CustomTemplateDefined"] = True if template_list.get_active_type() == 'custom' else False
     debug_template_refresh_template()
 
     # Enable all buttons in main window
     widget_status_update(NORMAL, 0)
-    if FrameSync_Viewer_opened:
-        FrameSync_Viewer_popup_update_widgets(NORMAL)
+    FrameSync_Viewer_popup_update_widgets(NORMAL)
 
     win.update()
 
@@ -4301,6 +4284,7 @@ def get_source_dir_file_list():
     global HdrFilesOnly
     global CropBottomRight
     global file_type, file_type_out
+    global FrameSync_Images_Factor
 
     if not os.path.isdir(SourceDir):
         return
@@ -4387,6 +4371,8 @@ def get_source_dir_file_list():
     # Set frame dimensions in globañl variable, for use everywhere
     frame_width = work_image.shape[1]
     frame_height = work_image.shape[0]
+    # Set reduction factor for frameview images
+    FrameSync_Images_Factor = 670 / frame_width
     # Next 3 statements were done only if batch mode was not active, but they are needed in all cases
     if BatchJobRunning:
         # why skipping it?
@@ -4407,9 +4393,8 @@ def get_source_dir_file_list():
         CropBottomRight = (frame_width, frame_height)
 
     widget_status_update(NORMAL)
-    if FrameSync_Viewer_opened:
-        FrameSync_Viewer_popup_update_widgets(NORMAL)
-
+    FrameSync_Viewer_popup_update_widgets(NORMAL)
+    
     return len(SourceDirFileList)
 
 
@@ -4578,8 +4563,7 @@ def start_convert():
             Go_btn.config(text="Stop", bg='red', fg='white')
             # Disable all buttons in main window
             widget_status_update(DISABLED, Go_btn)
-        if FrameSync_Viewer_opened:
-            FrameSync_Viewer_popup_update_widgets(DISABLED)
+        FrameSync_Viewer_popup_update_widgets(DISABLED)
         win.update()
 
         if project_config["GenerateVideo"]:
@@ -4679,8 +4663,7 @@ def generation_exit(success = True):
     ConvertLoopRunning = False
     # Enable all buttons in main window
     widget_status_update(NORMAL, 0)
-    if FrameSync_Viewer_opened:
-        FrameSync_Viewer_popup_update_widgets(NORMAL)
+    FrameSync_Viewer_popup_update_widgets(NORMAL)
     win.update()
     
     if stop_batch:
@@ -4873,7 +4856,7 @@ def check_subprocess_event_queue(user_terminated):
             if not user_terminated:    # Display image
                 if frame_idx >= last_displayed_image:
                     last_displayed_image = frame_idx
-                    display_image(img)
+                    # display_image(img)    # Terminating, no need to display remaining images
                     # Update UI with progress so far (double check we have not ended, it might happen during frame encoding)
                     if ConvertLoopRunning:
                         frame_update_ui(message[1], message[3])
@@ -4906,7 +4889,9 @@ def frame_generation_loop():
         message = subprocess_event_queue.get()
         if message[0] == "processed_image" and message[1] > last_displayed_image:
             last_displayed_image = message[1]
-            display_image(message[2])
+            if subprocess_event_queue.qsize() < 5:
+                display_image(message[2])
+            
 
     if CurrentFrame >= StartFrame + frames_to_encode and last_displayed_image+1 >= StartFrame + frames_to_encode:
         FPS_CalculatedValue = -1
@@ -6338,7 +6323,7 @@ def main(argv):
     project_settings = default_project_config.copy()
 
     template_list = TemplateList()
-    template_list.add("S8", hole_template_filename_s8, "S8", (44, 400))
+    template_list.add("S8", hole_template_filename_s8, "S8", (66, 728))
 #    template_list.add("R8", hole_template_filename_r8, "R8", (44, 134))    # Old template with two holes
     template_list.add("R8", hole_template_filename_r8, "R8", (65, 1080))
     template_list.add("BW", hole_template_filename_bw, "aux", (0, 0))
