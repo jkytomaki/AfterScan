@@ -20,10 +20,10 @@ __copyright__ = "Copyright 2024, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
 __module__ = "AfterScan"
-__version__ = "1.20.6"
+__version__ = "1.20.7"
 __data_version__ = "1.0"
 __date__ = "2025-03-04"
-__version_highlight__ = "Add verification hashes to template files"
+__version_highlight__ = "Add menu bar with links (to wiki, discord, etc)"
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
 __status__ = "Development"
@@ -68,6 +68,7 @@ import hashlib
 import uuid
 import base64
 from collections import deque
+import webbrowser
 
 try:
     import requests
@@ -99,8 +100,8 @@ denoise_window_size = 3
 temp_denoise_frame_deque = deque(maxlen=denoise_window_size)
 
 # Configuration & support file vars
-script_dir = os.path.realpath(sys.argv[0])
-script_dir = os.path.dirname(script_dir)
+script_dir = os.path.dirname(os.path.realpath(__file__))
+
 general_config_filename = os.path.join(script_dir, "AfterScan.json")
 project_settings_filename = os.path.join(script_dir, "AfterScan-projects.json")
 project_settings_backup_filename = os.path.join(script_dir, "AfterScan-projects.json.bak")
@@ -108,7 +109,9 @@ project_config_basename = "AfterScan-project.json"
 project_config_filename = ""
 project_config_from_file = True
 project_name = "No Project"
-job_list_filename = os.path.join(script_dir, "AfterScan_job_list.json")
+default_job_list_filename = os.path.join(script_dir, "AfterScan_job_list.json")
+JobListFilename = default_job_list_filename
+job_list_hash = None    # To determine if job list has changed since loaded
 temp_dir = os.path.join(script_dir, "temp")
 if not os.path.exists(temp_dir):
     os.mkdir(temp_dir)
@@ -620,7 +623,7 @@ def decode_general_config():
     global FfmpegBinName
     global general_config
     global UserConsent, AnonymousUuid, LastConsentDate
-    global SavedWithVersion
+    global SavedWithVersion, JobListFilename
 
     if 'SourceDir' in general_config:
         SourceDir = general_config["SourceDir"]
@@ -644,6 +647,8 @@ def decode_general_config():
         LastConsentDate = datetime.fromisoformat(general_config["LastConsentDate"])
     if 'Version' in general_config:
         SavedWithVersion = general_config["Version"]
+    if 'JobListFilename' in general_config:
+        JobListFilename = general_config["JobListFilename"]
 
 
 def update_project_settings():
@@ -1268,13 +1273,6 @@ def job_list_rerun_selected():
         rerun_job_btn.config(text='Rerun job' if job_list[entry]['done'] else 'Mark as run')
 
 
-def save_job_list():
-    global job_list, job_list_filename
-
-    if not IgnoreConfig:
-        with open(job_list_filename, 'w+') as f:
-            json.dump(job_list, f)
-
 def create_alternate_job_name(name):
     index = 2
     done = False
@@ -1311,14 +1309,72 @@ def search_job_name_in_job_listbox(job_name):
     return -1
 
 
-def load_job_list():
-    global job_list, job_list_filename, job_list_listbox
+def generate_dict_hash(dictionary):
+    """Generates a SHA-256 hash from a dictionary."""
+    serialized_dict = json.dumps(dictionary, sort_keys=True).encode('utf-8')
+    hash_object = hashlib.sha256(serialized_dict)
+    return hash_object.hexdigest()
 
-    if not IgnoreConfig and os.path.isfile(job_list_filename):
-        f = open(job_list_filename)
+
+def save_named_job_list():
+    global job_list
+    aux_file = filedialog.asksaveasfilename(
+        initialdir=script_dir,
+        defaultextension=".json",
+        initialfile=JobListFilename,
+        filetypes=[("JSON files", "*.json")],
+        title="Select file to save job list")
+    if len(aux_file) > 0:
+        if aux_file[-5:] != '.json':
+            aux_file = aux_file + '.json'
+        with open(aux_file, 'w+') as f:
+            json.dump(job_list, f, indent=4)
+
+
+def load_named_job_list():
+    global job_list, JobListFilename
+
+    aux_hash = generate_dict_hash(job_list)
+    if job_list_hash != aux_hash:   # Current job list modified since loaded
+        if tk.messagebox.askyesno(
+            "Save job list?",
+            "Current lob list contains unsaved changes.\r\n"
+            "Do you want to save them before loading the new job list?\r\n"):
+            save_named_job_list()
+
+    aux_file = filedialog.askopenfilename(
+        initialdir=script_dir,
+        defaultextension=".json",
+        filetypes=[("JSON files", "*.json")],
+        title="Select file to retrieve job list")
+    if len(aux_file) > 0:
+        load_job_list(aux_file)
+        JobListFilename = aux_file
+        general_config["JobListFilename"] = JobListFilename
+
+
+def save_job_list():
+    global job_list, default_job_list_filename
+
+    if not IgnoreConfig:
+        with open(default_job_list_filename, 'w+') as f:
+            json.dump(job_list, f, indent=4)
+
+
+def load_job_list(filename = None):
+    global job_list, default_job_list_filename, job_list_listbox, job_list_hash
+
+    if filename is None:
+        filename = default_job_list_filename
+
+    display_window_title()  # setting title of the window
+
+    if not IgnoreConfig and os.path.isfile(filename):
+        f = open(filename)
         job_list = json.load(f)
         # Explicitly copy keys
         keys = list(job_list.keys())
+        job_list_listbox.delete(0, 'end')
         for entry in keys:
             # Check if 'description' field exists
             if "description" not in job_list[entry]:  # Legacy entry, need to adapt
@@ -1353,6 +1409,7 @@ def load_job_list():
         for entry in job_list:
             job_list_listbox.itemconfig(idx, fg='black' if job_list[entry]['done'] == False else 'green')
             idx += 1
+        job_list_hash = generate_dict_hash(job_list)
     else:   # No job list file. Set empty config to force defaults
         job_list = {}
 
@@ -5376,7 +5433,7 @@ def afterscan_init():
         app_width = PreviewWidth + 380
         app_height = PreviewHeight + 330
 
-    win.title('AfterScan ' + __version__)  # setting title of the window
+    display_window_title()  # setting title of the window
     if 'WindowPos' in general_config:
          win.geometry(f"+{general_config['WindowPos'].split('+', 1)[1]}")
 
@@ -5408,6 +5465,13 @@ def afterscan_init():
         logging.info(f"Temporal denoise not available. OpenCV version is {cv2.__version__}")
 
     logging.debug("AfterScan initialized")
+
+
+def display_window_title():
+    title = f"{__module__} {__version__}"
+    if JobListFilename != default_job_list_filename:
+        title += f" - {os.path.split(JobListFilename)[1][:-5]}"
+    win.title(title)  # setting title of the window
 
 
 def build_ui():
@@ -5466,6 +5530,28 @@ def build_ui():
     global template_list
     global low_contrast_custom_template
     global display_template_popup_btn
+
+    # Menu bar
+    menu_bar = tk.Menu(win)
+    win.config(menu=menu_bar)
+    
+    # File menu
+    file_menu = tk.Menu(menu_bar, tearoff=0)
+    menu_bar.add_cascade(label="File", menu=file_menu)
+    file_menu.add_command(label="Save job list", command=save_named_job_list)
+    file_menu.add_command(label="Load job list", command=load_named_job_list)
+    file_menu.add_separator()  # Optional divider
+    file_menu.add_command(label="Exit", command=exit_app)
+
+    # Help Menu
+    help_menu = tk.Menu(menu_bar, tearoff=0)
+    menu_bar.add_cascade(label="Help", menu=help_menu)
+    help_menu.add_command(label="User Guide", command=lambda: webbrowser.open("https://github.com/jareff-g/AfterScan/wiki/AfterScan-user-interface-description"))
+    help_menu.add_command(label="Discord Server", command=lambda: webbrowser.open("https://discord.gg/r2UGkH7qg2"))
+    help_menu.add_command(label="AfterScan Wiki", command=lambda: webbrowser.open("https://github.com/jareff-g/AfterScan/wiki"))
+    if UserConsent == "no":
+        help_menu.add_command(label="Report AfterScan usage", command=lambda: get_consent(True))
+    help_menu.add_command(label="About AfterScan", command=lambda: webbrowser.open("https://github.com/jareff-g/AfterScan/wiki/AfterScan:-8mm,-Super-8-film-post-scan-utility"))
 
     # Create a frame to add a border to the preview
     left_area_frame = Frame(win)
@@ -6181,6 +6267,21 @@ def get_user_id():
         return AnonymousUuid
 
 
+def get_consent(force = False):
+    global UserConsent, general_config, LastConsentDate
+    # Check reporting consent
+    if requests_loaded:
+        if force or UserConsent == None or LastConsentDate == None or (UserConsent == 'no' and (datetime.today()-LastConsentDate).days >= 60):
+            consent = tk.messagebox.askyesno(
+                "AfterScan User Count",
+                "Help us count AfterScan users anonymously? Reports versions to track usage. No personal data is collected, just an anonymous hash plus AfterScan versions."
+            )
+            LastConsentDate = datetime.today()
+            general_config['LastConsentDate'] = LastConsentDate.isoformat()
+            UserConsent = "yes" if consent else "no"
+            general_config['UserConsent'] = UserConsent
+
+
 # Ping server if requests is available (call once at startup)
 def report_usage():
     if UserConsent == "yes" and requests_loaded:
@@ -6221,8 +6322,7 @@ def main(argv):
     global num_threads
     global use_simple_stabilization
     global dev_debug_enabled
-    global UserConsent, general_config, LastConsentDate
-
+    
     LoggingMode = "INFO"
     go_disable_tooptips = False
 
@@ -6287,8 +6387,9 @@ def main(argv):
             print("  -a             Use simple stabilization algorithm, not requiring templates (but slightly less precise)")
             exit()
 
-    if not dev_debug_enabled:  
-        pass
+    # Set our CWD to the same folder where the script is. 
+    # Otherwise webbrowser failt to launch (cannot open path of the current working directory: Permission denied)
+    os.chdir(script_dir) 
 
     LogLevel = getattr(logging, LoggingMode.upper(), None)
     if not isinstance(LogLevel, int):
@@ -6311,16 +6412,7 @@ def main(argv):
     decode_general_config()
 
     # Check reporting consent on first run
-    if requests_loaded:
-        if UserConsent == None or LastConsentDate == None or (UserConsent == 'no' and (datetime.today()-LastConsentDate).days >= 60):
-            consent = tk.messagebox.askyesno(
-                "AfterScan User Count",
-                "Help us count AfterScan users anonymously? Reports versions to track usage. No personal data is collected, just an anonymous hash plus AfterScan versions."
-            )
-            LastConsentDate = datetime.today()
-            general_config['LastConsentDate'] = LastConsentDate.isoformat()
-            UserConsent = "yes" if consent else "no"
-            general_config['UserConsent'] = UserConsent
+    get_consent()
 
     multiprocessing_init()
 
