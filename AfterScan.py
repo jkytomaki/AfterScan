@@ -20,9 +20,9 @@ __copyright__ = "Copyright 2024, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
 __module__ = "AfterScan"
-__version__ = "1.20.5"
+__version__ = "1.20.6"
 __data_version__ = "1.0"
-__date__ = "2025-03-03"
+__date__ = "2025-03-04"
 __version_highlight__ = "Add verification hashes to template files"
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
@@ -332,6 +332,7 @@ precise_template_match = False
 # Info required for usage counter
 UserConsent = None
 AnonymousUuid = None
+LastConsentDate = None
 
 # Token to be inserted in each queue on program closure, to allow threads to shut down cleanly
 END_TOKEN = "TERMINATE_PROCESS"
@@ -568,6 +569,16 @@ def set_project_defaults():
     project_config["FillBorders"] = False
 
 
+def sort_nested_json(data):
+    """Sorts keys in nested dictionaries."""
+    if isinstance(data, dict):
+        return {k: sort_nested_json(data[k]) for k in sorted(data)}
+    elif isinstance(data, list):
+        return [sort_nested_json(item) for item in data]
+    else:
+        return data
+
+
 def save_general_config():
     # Write config data upon exit
     general_config["GeneralConfigDate"] = str(datetime.now())
@@ -580,8 +591,10 @@ def save_general_config():
     except Exception as e:
         logging.debug(f"Error (expected) while trying to save template popup window geometry: {e}")
     if not IgnoreConfig:
-        with open(general_config_filename, 'w+') as f:
-            json.dump(general_config, f)
+        """Saves sorted nested JSON data to a file."""
+        sorted_data = sort_nested_json(general_config)
+        with open(general_config_filename, 'w') as f:
+            json.dump(sorted_data, f, indent=4)
 
 
 def load_general_config():
@@ -606,7 +619,7 @@ def decode_general_config():
     global project_name
     global FfmpegBinName
     global general_config
-    global UserConsent, AnonymousUuid
+    global UserConsent, AnonymousUuid, LastConsentDate
     global SavedWithVersion
 
     if 'SourceDir' in general_config:
@@ -627,6 +640,8 @@ def decode_general_config():
         UserConsent = general_config["UserConsent"]
     if 'AnonymousUuid' in general_config:
         AnonymousUuid = general_config["AnonymousUuid"]
+    if 'LastConsentDate' in general_config:
+        LastConsentDate = datetime.fromisoformat(general_config["LastConsentDate"])
     if 'Version' in general_config:
         SavedWithVersion = general_config["Version"]
 
@@ -6206,7 +6221,7 @@ def main(argv):
     global num_threads
     global use_simple_stabilization
     global dev_debug_enabled
-    global UserConsent, general_config
+    global UserConsent, general_config, LastConsentDate
 
     LoggingMode = "INFO"
     go_disable_tooptips = False
@@ -6297,11 +6312,13 @@ def main(argv):
 
     # Check reporting consent on first run
     if requests_loaded:
-        if UserConsent == None:
+        if UserConsent == None or LastConsentDate == None or (UserConsent == 'no' and (datetime.today()-LastConsentDate).days >= 60):
             consent = tk.messagebox.askyesno(
                 "AfterScan User Count",
                 "Help us count AfterScan users anonymously? Reports versions to track usage. No personal data is collected, just an anonymous hash plus AfterScan versions."
             )
+            LastConsentDate = datetime.today()
+            general_config['LastConsentDate'] = LastConsentDate.isoformat()
             UserConsent = "yes" if consent else "no"
             general_config['UserConsent'] = UserConsent
 
