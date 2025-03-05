@@ -20,7 +20,7 @@ __copyright__ = "Copyright 2024, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
 __module__ = "AfterScan"
-__version__ = "1.20.9"
+__version__ = "1.20.10"
 __data_version__ = "1.0"
 __date__ = "2025-03-05"
 __version_highlight__ = "Set frame slider below the preview image"
@@ -2241,9 +2241,11 @@ def delete_detected_bad_frames():
             current_bad_frame_index = -1
             FrameSync_Viewer_popup_refresh()
             # Also delete file where frames are saved
-            os.remove(get_bad_frame_list_filename())
+            if os.path.isfile(get_bad_frame_list_filename()):
+                os.remove(get_bad_frame_list_filename())
             for filename in glob(get_bad_frame_list_filename(with_timestamp=True, with_wildcards=True)):
-                os.remove(filename)
+                if os.path.isfile(filename):
+                    os.remove(filename)
         else:
             retvalue = False
     return retvalue
