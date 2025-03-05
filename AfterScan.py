@@ -20,10 +20,10 @@ __copyright__ = "Copyright 2024, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
 __module__ = "AfterScan"
-__version__ = "1.20.8"
+__version__ = "1.20.9"
 __data_version__ = "1.0"
-__date__ = "2025-03-04"
-__version_highlight__ = "Adjust template code to properly hadle different resolutions"
+__date__ = "2025-03-05"
+__version_highlight__ = "Set frame slider below the preview image"
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
 __status__ = "Development"
@@ -134,7 +134,7 @@ hole_template_filename = hole_template_filename_s8
 files_to_delete = []
 EXPECTED_HASHES = {
     'Pattern.S8.jpg': 'aef01c4bce5e7e04a157d92de26d2c143b6e42f79be15b40c39abbe49bc4a7a0',
-    'Pattern.R8.jpg': '975f9cf9fe44110324a247ab3a27840b182ddb5bba9f6dca2b6853715c9a16ff',
+    'Pattern.R8.jpg': '1603cfea6c6df69bc1312deaf4b91df213f1c288bee55b6893ad78b5a88746bf',
     'Pattern_BW.jpg': '4a90371097219e5d5604c00bead6710b694e70b48fe66dbc5c2ce31ceedce4cf',
     'Pattern_WB.jpg': '60d50644f26407503267b763bcc48d7bec88dd6f58bb238cf9bec6ba86938f33',
     'Pattern_Corner_TR.jpg': '5e56a49c029013588646b11adbdc4a223217abfb91423dd3cdde26abbf5dcd9c'
@@ -237,6 +237,9 @@ StabilizationThreshold = 220.0
 StabilizationThreshold_default = StabilizationThreshold
 hole_search_area_adjustment_pending = False
 bad_frame_list = []     # List of tuples (5 elements each: Frame index, x offset, y offset, stabilization threshold, is frame saved)
+# To migrate content of bad_frame_list to dictionaries (instead of smaller lists)
+# bad_frame_list elements = Frame index, x offset, y offset, stabilization threshold, is frame saved)
+bad_frame_info = {}
 current_bad_frame_index = -1    # Curretn bad frame being displayed/edited
 process_bad_frame_index = -1    # Bad frame index for re-generation
 stop_bad_frame_save = False     # Flag to force stop the save bad frame loop
@@ -2097,20 +2100,26 @@ def cleanup_bad_frame_list(limit):
         logging.debug(f"Bad frame file cleanup completed. Kept the 3 most recent files: {files_to_keep}")
 
 
-def save_bad_frame_list(with_timestamp = False):
-    bad_frame_list_name = f"{os.path.split(SourceDir)[-1]}"
+def get_bad_frame_list_filename(with_timestamp = False, with_wildcards = False):
     # Set filename
+    bad_frame_list_name = f"{os.path.split(SourceDir)[-1]}"
     bad_frame_list_filename = f"bad_frame_list.{bad_frame_list_name}"
     if with_timestamp:
-        bad_frame_list_filename += datetime.now().strftime("_%Y%m%d_%H%M%S")
+        if not with_wildcards:
+            bad_frame_list_filename += datetime.now().strftime("_%Y%m%d_%H%M%S")
+        else:
+            bad_frame_list_filename += '*'
     bad_frame_list_filename += ".json"
     if with_timestamp:
         bad_frame_list_filename += ".bak"
-    full_path_bad_frame_list_filename = os.path.join(resources_dir, bad_frame_list_filename)
+    return os.path.join(resources_dir, bad_frame_list_filename)
+    
 
+def save_bad_frame_list(with_timestamp = False):
+    full_path_bad_frame_list_filename = get_bad_frame_list_filename(with_timestamp)
     # Serialize (save) the list to a file
     with open(full_path_bad_frame_list_filename, "w") as file:
-        json.dump(bad_frame_list, file)
+        json.dump(bad_frame_list, file, indent=4)
 
     if with_timestamp:  # Delete backup files if more than 10
         cleanup_bad_frame_list(3)
@@ -2119,19 +2128,21 @@ def save_bad_frame_list(with_timestamp = False):
 def load_bad_frame_list():
     global bad_frame_list, current_bad_frame_index
 
-    # Set filename
-    bad_frame_list_name = f"{os.path.split(SourceDir)[-1]}"
-    bad_frame_list_filename = f"bad_frame_list.{bad_frame_list_name}.json"
-    full_path_bad_frame_list_filename = os.path.join(resources_dir, bad_frame_list_filename)
-    logging.debug(f"Loading bad frame list for {bad_frame_list_filename}, list length is {len(bad_frame_list)}, current index is {current_bad_frame_index}")
+    full_path_bad_frame_list_filename = get_bad_frame_list_filename()
+    logging.debug(f"Loading bad frame list for {full_path_bad_frame_list_filename}, list length is {len(bad_frame_list)}, current index is {current_bad_frame_index}")
 
-    # To read (deserialize) the list back
+    # To read (deserialize) the list back, convert elements to dictionary if required
     if os.path.isfile(full_path_bad_frame_list_filename):  # If hdr frames exist, add them
         with open(full_path_bad_frame_list_filename, "r") as file:
-            bad_frame_list = json.load(file)
-    
+            aux_list = json.load(file)
+        if isinstance(aux_list[0], list): # Migrate to dictionary
+            for bad_frame in aux_list:
+                bad_frame_list.append({'frame_idx': bad_frame[0], 'x': bad_frame[1], 'y': bad_frame[2], 'threshold': bad_frame[3], 'original_threshold': bad_frame[3], 'is_frame_saved': bad_frame[4]})
+        else:
+            bad_frame_list = aux_list
+
     if current_bad_frame_index >= len(bad_frame_list):
-        logging.debug(f"Loaded bad frame list ({bad_frame_list_filename}) is empty, resetting counter from {current_bad_frame_index} to zero")
+        logging.debug(f"Loaded bad frame list ({full_path_bad_frame_list_filename}) is empty, resetting counter from {current_bad_frame_index} to zero")
         current_bad_frame_index = -1
     FrameSync_Viewer_popup_refresh()
 
@@ -2161,18 +2172,17 @@ def save_corrected_frames_loop(count_processed):
         return
 
     bad_frame = bad_frame_list[process_bad_frame_index]
-    ###if (bad_frame[1] != 0 or bad_frame[2] != 0 or bad_frame[3] != StabilizationThreshold_default) and not bad_frame[4]:
-    if not bad_frame[4]:
-        StabilizationThreshold = bad_frame[3]
-        frame_encode(bad_frame[0], -1, True, bad_frame[1], bad_frame[2])
-        frame_selected.set(bad_frame[0])
-        frame_slider.set(bad_frame[0])
-        display_output_frame_by_number(bad_frame[0])
+    if not bad_frame['is_frame_saved']:
+        StabilizationThreshold = bad_frame['threshold']
+        frame_encode(bad_frame['frame_idx'], -1, True, bad_frame['x'], bad_frame['y'])
+        frame_selected.set(bad_frame['frame_idx'])
+        frame_slider.set(bad_frame['frame_idx'])
+        display_output_frame_by_number(bad_frame['frame_idx'])
         #win.update_idletasks()
         #template_popup_window.update_idletasks()
         #win.update()
         #template_popup_window.update()
-        bad_frame[4] = True # Saved flag
+        bad_frame['is_frame_saved'] = True # Saved flag
         count_processed += 1
 
     process_bad_frame_index += 1 
@@ -2194,8 +2204,7 @@ def save_corrected_frames():
     count = 0
 
     for bad_frame in bad_frame_list:
-        ###if (bad_frame[1] != 0 or bad_frame[2] != 0 or bad_frame[3] != StabilizationThreshold_default) and not bad_frame[4]:
-        if not bad_frame[4]:
+        if not bad_frame['is_frame_saved']:
             count += 1
 
     if count == 0:
@@ -2231,9 +2240,25 @@ def delete_detected_bad_frames():
             bad_frame_list.clear()
             current_bad_frame_index = -1
             FrameSync_Viewer_popup_refresh()
+            # Also delete file where frames are saved
+            os.remove(get_bad_frame_list_filename())
+            for filename in glob(get_bad_frame_list_filename(with_timestamp=True, with_wildcards=True)):
+                os.remove(filename)
         else:
             retvalue = False
     return retvalue
+
+
+def delete_current_bad_frame_info(event):
+    global current_bad_frame_index, StabilizationThreshold
+    # bad_frame_list elements = Frame index, x offset, y offset, stabilization threshold, is frame saved)
+    if current_bad_frame_index != -1:
+        bad_frame_list[current_bad_frame_index]['x'] = 0
+        bad_frame_list[current_bad_frame_index]['y'] = 0
+        bad_frame_list[current_bad_frame_index]['threshold'] = bad_frame_list[current_bad_frame_index]['original_threshold']
+        bad_frame_list[current_bad_frame_index]['is_frame_saved'] = False
+        FrameSync_Viewer_popup_refresh()
+
 
 def find_closest(sorted_list, target):
     # Check if the list is empty
@@ -2314,15 +2339,16 @@ def FrameSync_Viewer_popup_refresh():
         current_bad_frame_index = 0
 
     if len(bad_frame_list) > 0:
-        CurrentFrame = bad_frame_list[current_bad_frame_index][0]
-        x = bad_frame_list[current_bad_frame_index][1]
-        y = bad_frame_list[current_bad_frame_index][2]
+        CurrentFrame = bad_frame_list[current_bad_frame_index]['frame_idx']
+        x = bad_frame_list[current_bad_frame_index]['x']
+        y = bad_frame_list[current_bad_frame_index]['y']
     else:
         x = 0
         y = 0
     project_config["CurrentFrame"] = CurrentFrame
-    frame_slider.config(label='Global:'+
-                        str(CurrentFrame+first_absolute_frame))
+    selected_frame_number.config(text='Number:'+str(CurrentFrame+first_absolute_frame))
+    selected_frame_index.config(text='Index:'+str(CurrentFrame+1))
+    selected_frame_time.config(text=get_frame_time(CurrentFrame))
     frame_selected.set(CurrentFrame)
     frame_slider.set(CurrentFrame)
     scale_display_update(x, y)
@@ -2347,7 +2373,7 @@ def display_bad_frame_previous(count, skip_minor = False):
             break
         if not skip_minor:
             break
-        elif bad_frame_list[current_bad_frame_index][1] > 5 or bad_frame_list[current_bad_frame_index][2] > 5:
+        elif bad_frame_list[current_bad_frame_index]['x'] > 5 or bad_frame_list[current_bad_frame_index]['y'] > 5:
             break
     FrameSync_Viewer_popup_refresh()
 
@@ -2375,7 +2401,7 @@ def display_bad_frame_next(count, skip_minor = False):
             break
         if not skip_minor:
             break
-        elif bad_frame_list[current_bad_frame_index][1] > 5 or bad_frame_list[current_bad_frame_index][2] > 5:
+        elif bad_frame_list[current_bad_frame_index]['x'] > 5 or bad_frame_list[current_bad_frame_index]['y'] > 5:
             break
     FrameSync_Viewer_popup_refresh()
 
@@ -2411,9 +2437,9 @@ def shift_bad_frame_up(event = None):
     else:
         displacement = additional_shift_calculation(event.state)
 
-    bad_frame_list[current_bad_frame_index][2] -= displacement
-    frame_encode(CurrentFrame, -1, False, bad_frame_list[current_bad_frame_index][1], bad_frame_list[current_bad_frame_index][2])
-    bad_frame_list[current_bad_frame_index][4] = False # Just modified, reset saved flag
+    bad_frame_list[current_bad_frame_index]['y'] -= displacement
+    frame_encode(CurrentFrame, -1, False, bad_frame_list[current_bad_frame_index]['x'], bad_frame_list[current_bad_frame_index]['y'])
+    bad_frame_list[current_bad_frame_index]['is_frame_saved'] = False # Just modified, reset saved flag
 
 
 
@@ -2428,9 +2454,9 @@ def shift_bad_frame_down(event = None):
     else:
         displacement = additional_shift_calculation(event.state)
 
-    bad_frame_list[current_bad_frame_index][2] += displacement
-    frame_encode(CurrentFrame, -1, False, bad_frame_list[current_bad_frame_index][1], bad_frame_list[current_bad_frame_index][2])
-    bad_frame_list[current_bad_frame_index][4] = False # Just modified, reset saved flag
+    bad_frame_list[current_bad_frame_index]['y'] += displacement
+    frame_encode(CurrentFrame, -1, False, bad_frame_list[current_bad_frame_index]['x'], bad_frame_list[current_bad_frame_index]['y'])
+    bad_frame_list[current_bad_frame_index]['is_frame_saved'] = False # Just modified, reset saved flag
 
 
 def shift_bad_frame_left(event = None):
@@ -2444,9 +2470,9 @@ def shift_bad_frame_left(event = None):
     else:
         displacement = additional_shift_calculation(event.state)
 
-    bad_frame_list[current_bad_frame_index][1] -= displacement
-    frame_encode(CurrentFrame, -1, False, bad_frame_list[current_bad_frame_index][1], bad_frame_list[current_bad_frame_index][2])
-    bad_frame_list[current_bad_frame_index][4] = False # Just modified, reset saved flag
+    bad_frame_list[current_bad_frame_index]['x'] -= displacement
+    frame_encode(CurrentFrame, -1, False, bad_frame_list[current_bad_frame_index]['x'], bad_frame_list[current_bad_frame_index]['y'])
+    bad_frame_list[current_bad_frame_index]['is_frame_saved'] = False # Just modified, reset saved flag
 
 
 def shift_bad_frame_right(event = None):
@@ -2460,15 +2486,15 @@ def shift_bad_frame_right(event = None):
     else:
         displacement = additional_shift_calculation(event.state)
 
-    bad_frame_list[current_bad_frame_index][1] += displacement
-    frame_encode(CurrentFrame, -1, False, bad_frame_list[current_bad_frame_index][1], bad_frame_list[current_bad_frame_index][2])
-    bad_frame_list[current_bad_frame_index][4] = False # Just modified, reset saved flag
+    bad_frame_list[current_bad_frame_index]['x'] += displacement
+    frame_encode(CurrentFrame, -1, False, bad_frame_list[current_bad_frame_index]['x'], bad_frame_list[current_bad_frame_index]['y'])
+    bad_frame_list[current_bad_frame_index]['is_frame_saved'] = False # Just modified, reset saved flag
 
 
 def count_corrected_bad_frames():
     count = 0
     for bad_frame in bad_frame_list:
-        if not bad_frame[4]:   # If offset modified, but not saved
+        if not bad_frame['is_frame_saved']:   # If offset modified, but not saved
             count += 1
     return count
 
@@ -2483,9 +2509,9 @@ def bad_frames_increase_threshold(value):
     if (StabilizationThreshold > 255):
         StabilizationThreshold = 255.0
     threshold_value.set(StabilizationThreshold)
-    bad_frame_list[current_bad_frame_index][3] = StabilizationThreshold # Save threshold 
-    frame_encode(CurrentFrame, -1, False, bad_frame_list[current_bad_frame_index][1], bad_frame_list[current_bad_frame_index][2])
-    bad_frame_list[current_bad_frame_index][4] = False
+    bad_frame_list[current_bad_frame_index]['threshold'] = StabilizationThreshold # Save threshold 
+    frame_encode(CurrentFrame, -1, False, bad_frame_list[current_bad_frame_index]['x'], bad_frame_list[current_bad_frame_index]['y'])
+    bad_frame_list[current_bad_frame_index]['is_frame_saved'] = False
     
 
 def bad_frames_increase_threshold_1():
@@ -2506,9 +2532,9 @@ def bad_frames_decrease_threshold(value):
     if (StabilizationThreshold < 0):
         StabilizationThreshold = 0.0
     threshold_value.set(StabilizationThreshold)
-    bad_frame_list[current_bad_frame_index][3] = StabilizationThreshold # Save threshold 
-    frame_encode(CurrentFrame, -1, False, bad_frame_list[current_bad_frame_index][1], bad_frame_list[current_bad_frame_index][2])
-    bad_frame_list[current_bad_frame_index][4] = False
+    bad_frame_list[current_bad_frame_index]['threshold'] = StabilizationThreshold # Save threshold 
+    frame_encode(CurrentFrame, -1, False, bad_frame_list[current_bad_frame_index]['x'], bad_frame_list[current_bad_frame_index]['y'])
+    bad_frame_list[current_bad_frame_index]['is_frame_saved'] = False
 
 
 def bad_frames_decrease_threshold_1():
@@ -2548,6 +2574,7 @@ def FrameSync_Viewer_popup_update_widgets(status, except_save=False):
     increase_threshold_button_1.config(state=status)
     increase_threshold_button_5.config(state=status)
     delete_bad_frames_button.config(state=status)
+    delete_current_bad_frame_button.config(state=status)
     high_sensitive_bad_frame_detection_checkbox.config(state=status)
     # Do not disable alert checkbox to give a chance to stop the alerts without stopping the encoding
     # stabilization_bounds_alert_checkbox.config(state=status)
@@ -2574,7 +2601,7 @@ def FrameSync_Viewer_popup():
     global StabilizationThreshold_default, threshold_value
     global decrease_threshold_button_1, threshold_label, increase_threshold_button_1
     global decrease_threshold_button_5, increase_threshold_button_5
-    global delete_bad_frames_button
+    global delete_bad_frames_button, delete_current_bad_frame_button
     global high_sensitive_bad_frame_detection_checkbox, high_sensitive_bad_frame_detection_value
     global precise_template_match_checkbox, precise_template_match_value
     global stabilization_bounds_alert, stabilization_bounds_alert_checkbox
@@ -2888,10 +2915,20 @@ def FrameSync_Viewer_popup():
     template_popup_window.bind("<Left>", shift_bad_frame_left)
     template_popup_window.bind("<Right>", shift_bad_frame_right)
 
-    # Frame info delete button
-    delete_bad_frames_button = Button(right_frame, text="Delete all collected frame info", command=delete_detected_bad_frames, font=("Arial", FontSize))
-    delete_bad_frames_button.pack(pady=10, padx=10, anchor="center")
-    as_tooltips.add(delete_bad_frames_button, "Delete all the information collected about misaligned frames, along with any correction info you might have provided.")
+    # Frame for delete info buttons 
+    delete_info_frame = Frame(right_frame)
+    delete_info_frame.pack(anchor="center", pady=5, padx=10)   # expand=True, fill="both", 
+
+    # Frame info delete all button
+    delete_bad_frames_button = Button(delete_info_frame, text="Delete all collected frame info", command=delete_detected_bad_frames, font=("Arial", FontSize))
+    delete_bad_frames_button.pack(pady=10, padx=10, side=LEFT, anchor="center")
+    as_tooltips.add(delete_bad_frames_button, "Delete all the information collected about misaligned frames, along with any changes you have made.")
+
+    # Frame info delete current button
+    delete_current_bad_frame_button = Button(delete_info_frame, text="Delete current frame info", command=delete_current_bad_frame_info, font=("Arial", FontSize))
+    delete_current_bad_frame_button.pack(pady=10, padx=10, side=RIGHT, anchor="center")
+    as_tooltips.add(delete_current_bad_frame_button, "Delete the edited values for this frame.")
+    template_popup_window.bind("<Delete>", delete_current_bad_frame_info)
 
     # Frame for save/exit buttons
     save_exit_frame = Frame(right_frame)
@@ -3060,8 +3097,9 @@ def select_scale_frame(selected_frame):
         frame_slider.focus()
         CurrentFrame = int(selected_frame)
         project_config["CurrentFrame"] = CurrentFrame
-        frame_slider.config(label='Global:'+
-                            str(CurrentFrame+first_absolute_frame))
+        selected_frame_number.config(text='Number:'+str(CurrentFrame+first_absolute_frame))
+        selected_frame_index.config(text='Index:'+str(CurrentFrame+1))
+        selected_frame_time.config(text=get_frame_time(CurrentFrame))
         if frame_scale_refresh_done:
             frame_scale_refresh_done = False
             frame_scale_refresh_pending = False
@@ -3480,7 +3518,7 @@ def select_custom_template():
             if os.path.isfile(file3):  # If hdr frames exist, add them
                 file = file3
             img = cv2.imread(file, cv2.IMREAD_UNCHANGED)
-            ### test to stabilize custom template itself usign simple algorithm
+            # test to stabilize custom template itself using simple algorithm
             move_x, move_y = calculate_frame_displacement_simple(CurrentFrame, img)
             img = shift_image(img, img.shape[1], img.shape[0], move_x, move_y)
 
@@ -3989,7 +4027,6 @@ def get_target_position(frame_idx, img, orientation='v', threshold=10, slice_wid
             offset = vertical_middle-result   # Return offset of the center of the biggest area with respect to the frame enter
             if abs(offset) > 300:
                 logging.warning(f"Frame {frame_idx}: Vertical offset too big {offset}.")
-            ###break
         else:
             offset = int(width*0.08) - result   # Return offset of the hole vertical edge with respect to the expected position
             # Difference between actual horizontal offset and average one should be smaller than 30 pixels (not much horizontal movement expected)
@@ -3998,7 +4035,6 @@ def get_target_position(frame_idx, img, orientation='v', threshold=10, slice_wid
                 offset = horizontal_offset_average.get_average()
             else:
                 horizontal_offset_average.add_value(offset)
-                ###break
     else:
         offset = 0
         result_start = 0
@@ -4128,7 +4164,9 @@ def stabilize_image(frame_idx, img, img_ref, offset_x = 0, offset_y = 0, img_ref
         if missing_rows > 0 or match_level < 0.9:
             if match_level < 0.7 if not high_sensitive_bad_frame_detection else 0.9:   # Only add really bad matches
                 if FrameSync_Viewer_opened:  # Generate bad frame list only if popup opened
-                    insert_or_replace_sorted(bad_frame_list, [frame_idx, 0, 0, frame_threshold, True])
+                    ##insert_or_replace_sorted(bad_frame_list, [frame_idx, 0, 0, frame_threshold, True])
+                    insert_or_replace_sorted(bad_frame_list, {'frame_idx': frame_idx, 'x': 0, 'y': 0, 'threshold': 
+                                                              frame_threshold, 'original_threshold': frame_threshold, 'is_frame_saved': True})
                     if stabilization_bounds_alert.get():
                         win.bell()
             if GenerateCsv:
@@ -4361,8 +4399,10 @@ def get_source_dir_file_list():
     numbers = list(map(int, temp))
     first_absolute_frame = numbers[0]
     last_absolute_frame = first_absolute_frame + len(SourceDirFileList)-1
-    frame_slider.config(from_=0, to=len(SourceDirFileList)-1,
-                        label='Global:'+str(CurrentFrame+first_absolute_frame))
+    frame_slider.config(from_=0, to=len(SourceDirFileList)-1)
+    selected_frame_number.config(text='Number:'+str(CurrentFrame+first_absolute_frame))
+    selected_frame_index.config(text='Index:'+str(CurrentFrame+1))
+    selected_frame_time.config(text=get_frame_time(CurrentFrame))
 
     # In order to determine hole height, no not take the first frame, as often
     # it is not so good. Take a frame 10% ahead in the set
@@ -4498,6 +4538,11 @@ def get_frame_number_from_filename(filename):
     else:
         # Return a default value or handle the case where no numbers are found
         return None
+
+
+def get_frame_time(frame_idx):
+    fps = 18 if film_type.get() == 'S8' else 16
+    return f"Film time: {(frame_idx // fps) // 60:02}:{(frame_idx // fps) % 60:02}"
 
 
 def start_convert():
@@ -4790,11 +4835,9 @@ def frame_update_ui(frame_idx, merged):
 
     frame_selected.set(frame_idx)
     frame_slider.set(frame_idx)
-    frame_slider.config(label='Processed:' +
-                              str(frame_idx + first_absolute_frame - StartFrame))
-    fps = 18 if film_type.get() == 'S8' else 16
-    time_str = f"Film time: {(frame_idx//fps) // 60:02}:{(frame_idx//fps) % 60:02}"
-    frame_slider_time.config(text=time_str)
+    selected_frame_number.config(text='Number:'+str(frame_idx+first_absolute_frame))
+    selected_frame_index.config(text='Index:'+str(frame_idx+1))
+    selected_frame_time.config(text=get_frame_time(frame_idx))
     status_str = f"Status: Generating{' merged' if merged else ''} frames {((frame_idx - StartFrame+1) * 100 / frames_to_encode):.1f}%"
     if FPS_CalculatedValue != -1:  # FPS not calculated yet, display some indication
         status_str = status_str + f' (FPS:{FPS_CalculatedValue:.1f})'
@@ -4915,7 +4958,7 @@ def frame_generation_loop():
         # Stop threads
         terminate_threads(False)
         # Sort bad frame list
-        bad_frame_list.sort(key=lambda x: x[0])
+        bad_frame_list.sort(key=lambda x: x['frame_idx'])
         # Generate video if requested or terminate
         if generate_video.get():
             ffmpeg_success = False
@@ -4945,7 +4988,7 @@ def frame_generation_loop():
         # Stop workers
         terminate_threads(True)
         # Sort bad frame list
-        bad_frame_list.sort(key=lambda x: x[0])
+        bad_frame_list.sort(key=lambda x: x['frame_idx'])
         logging.debug(f"frames_to_encode_queue.qsize = {frame_encoding_queue.qsize()}")
         logging.debug(f"subprocess_event_queue.qsize = {subprocess_event_queue.qsize()}")
         logging.debug("Exiting threads terminate")
@@ -5038,7 +5081,7 @@ def video_create_title():
     global StartFrame, first_absolute_frame, title_num_frames, frames_to_encode
     global file_type_out
 
-    if len(video_title_str.get()):   # if title defined --> kiki
+    if len(video_title_str.get()): 
         title_duration = round(len(video_title_str.get())*50/1000) # 50 ms per char
         title_duration = min(title_duration, 10)    # no more than 10 sec
         title_duration = max(title_duration, 3)    # no less than 3 sec
@@ -5070,7 +5113,6 @@ def video_create_title():
     else:
         title_duration = 0
         title_num_frames = 0
-
 
 
 def call_ffmpeg():
@@ -5235,12 +5277,10 @@ def video_generation_loop():
                     encoded_frame = int(frame_str)
                     frame_selected.set(StartFrame + first_absolute_frame + encoded_frame)
                     frame_slider.set(StartFrame + first_absolute_frame + encoded_frame)
-                    frame_slider.config(label='Processed:' +
-                                              str(encoded_frame))
-                    fps = 18 if film_type.get() == 'S8' else 16
-                    time_str = f"Film time: {(encoded_frame // fps) // 60:02}:{(encoded_frame // fps) % 60:02}"
-                    frame_slider_time.config(text=time_str)
-                    status_str = "Status: Generating video %.1f%%" % (encoded_frame*100/(frames_to_encode+title_num_frames))
+                    selected_frame_number.config(text='Number:'+str(encoded_frame+first_absolute_frame))
+                    selected_frame_index.config(text='Index:'+str(encoded_frame+1))
+                    selected_frame_time.config(text=get_frame_time(encoded_frame))
+                    status_str = f"Status: Generating video {encoded_frame*100/(frames_to_encode+title_num_frames):.1f}%"
                     app_status_label.config(text=status_str, fg='black')
                     display_output_frame_by_number(encoded_frame)
                 else:
@@ -5492,7 +5532,7 @@ def build_ui():
     global ffmpeg_preset_rb1, ffmpeg_preset_rb2, ffmpeg_preset_rb3
     global FfmpegBinName
     global skip_frame_regeneration
-    global frame_slider, frame_slider_time, CurrentFrame, frame_selected
+    global frame_slider, selected_frame_time, CurrentFrame, frame_selected, selected_frame_number, selected_frame_index
     global film_type
     global job_list_listbox, job_list_listbox_disabled
     global app_status_label
@@ -5550,44 +5590,52 @@ def build_ui():
                                  width=PreviewWidth, height=PreviewHeight)
     draw_capture_canvas.pack(side=TOP, anchor=N)
 
-    # Frame for standard widgets
-    right_area_frame = Frame(win, width=320, height=450)
+    # New scale under canvas 
+    frame_selected = IntVar()
+    frame_slider = Scale(border_frame, orient=HORIZONTAL, from_=0, to=0, showvalue=False,
+                         variable=frame_selected, command=select_scale_frame, highlightthickness=1,
+                         length=PreviewWidth, takefocus=1, font=("Arial", FontSize))
+    frame_slider.pack(side=BOTTOM, pady=4)
+    frame_slider.set(CurrentFrame)
+    as_tooltips.add(frame_slider, "Browse around frames to be processed")
+
+    # Frame for standard widgets to the right of the preview
+    right_area_frame = Frame(win)
     #right_area_frame.grid(row=0, column=1, rowspan=2, padx=5, pady=5, sticky=N)
     right_area_frame.pack(side=LEFT, padx=5, pady=5, anchor=N)
 
     # Frame for top section of standard widgets ******************************
-    regular_top_section_frame = Frame(right_area_frame, width=50, height=50)
+    regular_top_section_frame = Frame(right_area_frame)
     regular_top_section_frame.pack(side=TOP, padx=2, pady=2)
 
     # Create frame to display current frame and slider
     frame_frame = LabelFrame(regular_top_section_frame, text='Current frame',
                                width=35, height=10, font=("Arial", FontSize-2))
-    frame_frame.grid(row=0, column=0, sticky=W)
+    frame_frame.grid(row=1, column=0, sticky='nsew')
 
-    frame_slider_time = Label(frame_frame, width=12, text='Film time:', font=("Arial", FontSize-2))
-    frame_slider_time.pack(side=BOTTOM)
+    selected_frame_number = Label(frame_frame, width=12, text='Number:', font=("Arial", FontSize))
+    selected_frame_number.pack(side=TOP, pady=2)
+    as_tooltips.add(selected_frame_number, "Frame number, as stated in the filename")
 
-    frame_selected = IntVar()
-    frame_slider = Scale(frame_frame, orient=HORIZONTAL, from_=0, to=0,
-                         variable=frame_selected, command=select_scale_frame,
-                         length=120, label='Global:',
-                         highlightthickness=1, takefocus=1, font=("Arial", FontSize))
-    frame_slider.pack(side=BOTTOM, ipady=4)
-    frame_slider.set(CurrentFrame)
+    selected_frame_index = Label(frame_frame, width=12, text='Index:', font=("Arial", FontSize))
+    selected_frame_index.pack(side=TOP, pady=2)
+    as_tooltips.add(selected_frame_index, "Sequential frame index, from 1 to n")
 
-    as_tooltips.add(frame_slider, "Browse around frames to be processed")
+    selected_frame_time = Label(frame_frame, width=12, text='Film time:', font=("Arial", FontSize))
+    selected_frame_time.pack(side=TOP, pady=2)
+    as_tooltips.add(selected_frame_time, "Time in the source film where this frame is located")
 
     # Application status label
-    app_status_label = Label(regular_top_section_frame, width=46 if BigSize else 55, borderwidth=2,
+    app_status_label = Label(regular_top_section_frame, width=46 if BigSize else 46, borderwidth=2,
                              relief="groove", text='Status: Idle',
                              highlightthickness=1, font=("Arial", FontSize))
-    app_status_label.grid(row=1, column=0, columnspan=3, pady=5)
+    app_status_label.grid(row=2, column=0, columnspan=3, pady=5, sticky=EW)
 
     # Application Exit button
     Exit_btn = Button(regular_top_section_frame, text="Exit", width=10,
                       height=5, command=exit_app, activebackground='red',
                       activeforeground='white', wraplength=80, font=("Arial", FontSize))
-    Exit_btn.grid(row=0, column=1, sticky=W, padx=5)
+    Exit_btn.grid(row=0, column=1, rowspan=2, padx=10, sticky='nsew')
 
     as_tooltips.add(Exit_btn, "Exit AfterScan")
 
@@ -5595,18 +5643,41 @@ def build_ui():
     Go_btn = Button(regular_top_section_frame, text="Start", width=12, height=5,
                     command=start_convert, activebackground='green',
                     activeforeground='white', wraplength=80, font=("Arial", FontSize))
-    Go_btn.grid(row=0, column=2, sticky=W)
+    Go_btn.grid(row=0, column=2, rowspan=2, sticky='nsew')
 
     as_tooltips.add(Go_btn, "Start post-processing using current settings")
 
+    # Add AfterScan Logo
+    win.update_idletasks()
+    available_width = frame_frame.winfo_width()
+    logo_file = os.path.join(script_dir, "AfterScan_logo.jpeg")
+    try:
+        logo_image = Image.open(logo_file)  # Replace with your logo file name
+    except FileNotFoundError as e:
+        logo_image = None
+        logging.warning(f"Could not find AfterScan logo file: {e}")
+    if logo_image != None:
+        # Resize the image (e.g., to 50% of its original size)
+        ratio = available_width / logo_image.width
+        print(f"ratio: {ratio}, available_width: {available_width}, logo_image.width: {logo_image.width}")
+        new_width = int(logo_image.width * ratio)
+        new_height = int(logo_image.height * ratio)
+        resized_logo = logo_image.resize((new_width, new_height), Image.LANCZOS) #use LANCZOS for high quality resizing.
+        # Convert to PhotoImage
+        logo_image = ImageTk.PhotoImage(resized_logo)
+        if logo_image:
+            logo_label = tk.Label(regular_top_section_frame, image=logo_image)
+            logo_label.image = logo_image  # Keep a reference!
+            logo_label.grid(row=0, column=0, sticky='nsew')
+
     # Create frame to select source and target folders *******************************
-    folder_frame = LabelFrame(right_area_frame, text='Folder selection', width=50,
+    folder_frame = LabelFrame(right_area_frame, text='Folder selection', width=30,
                               height=8, font=("Arial", FontSize-2))
     folder_frame.pack(padx=2, pady=2, ipadx=5, expand=True, fill="both")
 
     source_folder_frame = Frame(folder_frame)
     source_folder_frame.pack(side=TOP)
-    frames_source_dir = Entry(source_folder_frame, width=36 if BigSize else 42,
+    frames_source_dir = Entry(source_folder_frame, width=34 if BigSize else 34,
                                     borderwidth=1, font=("Arial", FontSize))
     frames_source_dir.pack(side=LEFT)
     frames_source_dir.delete(0, 'end')
@@ -5626,7 +5697,7 @@ def build_ui():
 
     target_folder_frame = Frame(folder_frame)
     target_folder_frame.pack(side=TOP)
-    frames_target_dir = Entry(target_folder_frame, width=36 if BigSize else 42,
+    frames_target_dir = Entry(target_folder_frame, width=34 if BigSize else 34,
                                     borderwidth=1, font=("Arial", FontSize))
     frames_target_dir.pack(side=LEFT)
     frames_target_dir.bind('<<Paste>>', lambda event, entry=frames_target_dir: on_paste_all_entries(event, entry))
@@ -5657,11 +5728,11 @@ def build_ui():
     # Radio buttons to select R8/S8. Required to select adequate pattern, and match position
     film_type = StringVar()
     film_type_S8_rb = Radiobutton(postprocessing_frame, text="Super 8", variable=film_type, command=set_film_type,
-                                  width=11 if BigSize else 14, value='S8', font=("Arial", FontSize))
+                                  width=11 if BigSize else 11, value='S8', font=("Arial", FontSize))
     film_type_S8_rb.grid(row=postprocessing_row, column=0, sticky=W)
     as_tooltips.add(film_type_S8_rb, "Handle as Super 8 film")
     film_type_R8_rb = Radiobutton(postprocessing_frame, text="Regular 8", variable=film_type, command=set_film_type,
-                                  width=11 if BigSize else 14, value='R8', font=("Arial", FontSize))
+                                  width=11 if BigSize else 11, value='R8', font=("Arial", FontSize))
     film_type_R8_rb.grid(row=postprocessing_row, column=1, sticky=W)
     as_tooltips.add(film_type_R8_rb, "Handle as 8mm (Regular 8) film")
     film_type.set(project_config["FilmType"])
@@ -5882,7 +5953,7 @@ def build_ui():
     # Define video generating area ************************************
     video_frame = LabelFrame(right_area_frame,
                              text='Video generation',
-                             width=50, height=8, font=("Arial", FontSize-2))
+                             width=30, height=8, font=("Arial", FontSize-2))
     video_frame.pack(padx=2, pady=2, ipadx=5, expand=True, fill="both")
     video_row = 0
 
@@ -5915,7 +5986,7 @@ def build_ui():
 
     # Video target folder
     video_target_dir_str = StringVar()
-    video_target_dir = Entry(video_frame, textvariable=video_target_dir_str, width=34, borderwidth=1, font=("Arial", FontSize))
+    video_target_dir = Entry(video_frame, textvariable=video_target_dir_str, width=30, borderwidth=1, font=("Arial", FontSize))
     video_target_dir.grid(row=video_row, column=0, columnspan=2, sticky=W, padx=5)
     video_target_dir.bind('<<Paste>>', lambda event, entry=video_target_dir: on_paste_all_entries(event, entry))
     as_tooltips.add(video_target_dir, "Directory where the generated video will be stored")
@@ -5932,7 +6003,7 @@ def build_ui():
     video_filename_str = StringVar()
     video_filename_label = Label(video_frame, text='Video filename:', font=("Arial", FontSize))
     video_filename_label.grid(row=video_row, column=0, sticky=W, padx=5)
-    video_filename_name = Entry(video_frame, textvariable=video_filename_str, width=26 if BigSize else 33, borderwidth=1, font=("Arial", FontSize))
+    video_filename_name = Entry(video_frame, textvariable=video_filename_str, width=26 if BigSize else 26, borderwidth=1, font=("Arial", FontSize))
     video_filename_name.grid(row=video_row, column=1, columnspan=2, sticky=W, padx=5)
     video_filename_name.bind('<<Paste>>', lambda event, entry=video_filename_name: on_paste_all_entries(event, entry))
     as_tooltips.add(video_filename_name, "Filename of video to be created")
@@ -5943,7 +6014,7 @@ def build_ui():
     video_title_str = StringVar()
     video_title_label = Label(video_frame, text='Video title:', font=("Arial", FontSize))
     video_title_label.grid(row=video_row, column=0, sticky=W, padx=5)
-    video_title_name = Entry(video_frame, textvariable=video_title_str, width=26 if BigSize else 33, borderwidth=1, font=("Arial", FontSize))
+    video_title_name = Entry(video_frame, textvariable=video_title_str, width=26 if BigSize else 26, borderwidth=1, font=("Arial", FontSize))
     video_title_name.grid(row=video_row, column=1, columnspan=2, sticky=W, padx=5)
     video_title_name.bind('<<Paste>>', lambda event, entry=video_title_name: on_paste_all_entries(event, entry))
     as_tooltips.add(video_title_name, "Video title. If entered, a simple title sequence will be generated at the start of the video, using a sequence randomly selected from the same video, running at half speed")
@@ -6035,9 +6106,9 @@ def build_ui():
     video_row += 1
 
     # Custom ffmpeg path
-    custom_ffmpeg_path_label = Label(video_frame, text='Custom FFMpeg path:', font=("Arial", FontSize))
+    custom_ffmpeg_path_label = Label(video_frame, text='FFMpeg path:', font=("Arial", FontSize))
     custom_ffmpeg_path_label.grid(row=video_row, column=0, sticky=W, padx=5)
-    custom_ffmpeg_path = Entry(video_frame, width=26 if BigSize else 33, borderwidth=1, font=("Arial", FontSize))
+    custom_ffmpeg_path = Entry(video_frame, width=26 if BigSize else 26, borderwidth=1, font=("Arial", FontSize))
     custom_ffmpeg_path.grid(row=video_row, column=1, columnspan=2, sticky=W, padx=5)
     custom_ffmpeg_path.delete(0, 'end')
     custom_ffmpeg_path.insert('end', FfmpegBinName)
@@ -6079,7 +6150,7 @@ def build_ui():
         display_template_popup_btn = Button(extra_frame,
                                                     text='FrameSync Editor',
                                                     command=FrameSync_Viewer_popup,
-                                                    width=33 if BigSize else 41, font=("Arial", FontSize))
+                                                    width=20 if BigSize else 20, font=("Arial", FontSize))
         display_template_popup_btn.config(relief=SUNKEN if FrameSync_Viewer_opened else RAISED)
         display_template_popup_btn.grid(row=extra_row, column=0, columnspan=2, sticky="ew")
         extra_frame.grid_columnconfigure(0, weight=1)
@@ -6092,7 +6163,7 @@ def build_ui():
     job_list_frame.pack(side=TOP, padx=2, pady=2, anchor=W)
 
     # job listbox
-    job_list_listbox = Listbox(job_list_frame, width=65 if BigSize else 60, height=13 if BigSize else 19, font=("DejaVu Sans Mono", FontSize))
+    job_list_listbox = Listbox(job_list_frame, width=60 if BigSize else 60, height=13 if BigSize else 13, font=("DejaVu Sans Mono", FontSize))
     job_list_listbox.grid(column=0, row=0, padx=5, pady=2, ipadx=5)
     job_list_listbox.bind("<Delete>", job_list_delete_current)
     job_list_listbox.bind("<Return>", job_list_load_current)
@@ -6173,7 +6244,6 @@ def build_ui():
     as_tooltips.add(suspend_on_batch_completion_rb, "Do not suspend when done")
 
     suspend_on_completion.set("no_suspend")
-
 
     postprocessing_bottom_frame = Frame(video_frame, width=30)
     postprocessing_bottom_frame.grid(row=video_row, column=0)
@@ -6457,6 +6527,8 @@ def main(argv):
         copy_jpg_files(temp_dir, resources_dir)
 
     ui_init_done = True
+
+    template_list.set_scale(frame_width)    # frame_width set by get_source_dir_file_list
 
     # Disable a few items that should be not operational without source folder
     if len(SourceDir) == 0:
