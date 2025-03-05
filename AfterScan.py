@@ -20,10 +20,10 @@ __copyright__ = "Copyright 2024, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
 __module__ = "AfterScan"
-__version__ = "1.20.10"
+__version__ = "1.20.11"
 __data_version__ = "1.0"
 __date__ = "2025-03-05"
-__version_highlight__ = "Set frame slider below the preview image"
+__version_highlight__ = "Fix bug when encoding with FrameSyncEditor opened"
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
 __status__ = "Development"
@@ -2294,33 +2294,34 @@ def find_closest(sorted_list, target):
         return sorted_list[right]
     
 
-def insert_or_replace_sorted(sorted_list, new_inner_list):
+def insert_or_replace_sorted(sorted_list, new_inner_dict, key='frame_idx'):
     """
-    Insert a new inner list into a sorted list of lists, maintaining order based on the first element.
-    If the index already exists, replace the existing inner list with the new one.
-    
+    Insert a new inner dictionary into a sorted list of dictionaries, maintaining order based on the specified key.
+    If the key value already exists, replace the existing dictionary with the new one.
+
     Args:
-        sorted_list (list): A sorted list of lists where each inner list starts with an integer index.
-        new_inner_list (list): The new inner list to insert or replace with.
-    
+        sorted_list (list): A sorted list of dictionaries.
+        new_inner_dict (dict): The new dictionary to insert or replace with.
+        key (str): The key to use for sorting and matching (default: 'frame_number').
+
     Returns:
         None: Modifies sorted_list in place.
     """
     if not sorted_list:
-        sorted_list.append(new_inner_list)
+        sorted_list.append(new_inner_dict)
         return
 
-    target = new_inner_list[0]  # The index to match or insert
+    target = new_inner_dict[key]  # The key value to match or insert
     left, right = 0, len(sorted_list) - 1
 
     # Binary search to find the position
     while left <= right:
         mid = (left + right) // 2
-        current_index = sorted_list[mid][0]
+        current_index = sorted_list[mid][key]
 
         if current_index == target:
-            # Replace the existing inner list with the new one
-            sorted_list[mid] = new_inner_list
+            # Replace the existing dictionary with the new one
+            sorted_list[mid] = new_inner_dict
             return
         elif current_index < target:
             left = mid + 1
@@ -2328,8 +2329,7 @@ def insert_or_replace_sorted(sorted_list, new_inner_list):
             right = mid - 1
 
     # If no match found, insert at the correct position
-    sorted_list.insert(left, new_inner_list)
-
+    sorted_list.insert(left, new_inner_dict)
 
 def FrameSync_Viewer_popup_refresh():
     global CurrentFrame, current_bad_frame_index
@@ -2348,9 +2348,9 @@ def FrameSync_Viewer_popup_refresh():
         x = 0
         y = 0
     project_config["CurrentFrame"] = CurrentFrame
-    selected_frame_number.config(text='Number:'+str(CurrentFrame+first_absolute_frame))
-    selected_frame_index.config(text='Index:'+str(CurrentFrame+1))
-    selected_frame_time.config(text=get_frame_time(CurrentFrame))
+    selected_frame_number.config(text=f'Number:{CurrentFrame+first_absolute_frame}')
+    selected_frame_index.config(text=f'Index:{CurrentFrame+1}')
+    selected_frame_time.config(text=f'Film time{get_frame_time(CurrentFrame)}')
     frame_selected.set(CurrentFrame)
     frame_slider.set(CurrentFrame)
     scale_display_update(x, y)
@@ -3099,9 +3099,9 @@ def select_scale_frame(selected_frame):
         frame_slider.focus()
         CurrentFrame = int(selected_frame)
         project_config["CurrentFrame"] = CurrentFrame
-        selected_frame_number.config(text='Number:'+str(CurrentFrame+first_absolute_frame))
-        selected_frame_index.config(text='Index:'+str(CurrentFrame+1))
-        selected_frame_time.config(text=get_frame_time(CurrentFrame))
+        selected_frame_number.config(text=f'Number:{CurrentFrame+first_absolute_frame}')
+        selected_frame_index.config(text=f'Index:{CurrentFrame+1}')
+        selected_frame_time.config(text=f'Film time{get_frame_time(CurrentFrame)}')
         if frame_scale_refresh_done:
             frame_scale_refresh_done = False
             frame_scale_refresh_pending = False
@@ -4166,9 +4166,9 @@ def stabilize_image(frame_idx, img, img_ref, offset_x = 0, offset_y = 0, img_ref
         if missing_rows > 0 or match_level < 0.9:
             if match_level < 0.7 if not high_sensitive_bad_frame_detection else 0.9:   # Only add really bad matches
                 if FrameSync_Viewer_opened:  # Generate bad frame list only if popup opened
-                    ##insert_or_replace_sorted(bad_frame_list, [frame_idx, 0, 0, frame_threshold, True])
-                    insert_or_replace_sorted(bad_frame_list, {'frame_idx': frame_idx, 'x': 0, 'y': 0, 'threshold': 
-                                                              frame_threshold, 'original_threshold': frame_threshold, 'is_frame_saved': True})
+                    insert_or_replace_sorted(bad_frame_list, {'frame_idx': frame_idx, 'x': 0, 'y': 0, 
+                                                              'threshold': frame_threshold, 'original_threshold': frame_threshold, 
+                                                              'is_frame_saved': True})
                     if stabilization_bounds_alert.get():
                         win.bell()
             if GenerateCsv:
