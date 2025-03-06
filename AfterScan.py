@@ -20,10 +20,10 @@ __copyright__ = "Copyright 2024, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
 __module__ = "AfterScan"
-__version__ = "1.20.11"
+__version__ = "1.20.12"
 __data_version__ = "1.0"
 __date__ = "2025-03-05"
-__version_highlight__ = "Fix bug when encoding with FrameSyncEditor opened"
+__version_highlight__ = "Fix bug when loading/saving job lists"
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
 __status__ = "Development"
@@ -682,7 +682,7 @@ def save_project_settings():
         global_info = {'data_version': __data_version__, 'code_version': __version__, 'save_date': str(datetime.now())}
         list_to_save = [global_info, project_settings]
         with open(project_settings_filename, 'w+') as f:
-            json.dump(list_to_save, f)
+            json.dump(list_to_save, f, indent=4)
 
 
 def load_project_settings():
@@ -850,6 +850,9 @@ def decode_project_config():
     global perform_denoise, perform_sharpness, perform_gamma_correction, gamma_correction_str
     global high_sensitive_bad_frame_detection, current_bad_frame_index
     global precise_template_match
+
+    if SourceDir != "" and len(bad_frame_list) > 0:     # This function will load a new bad frame list, save current if it exists
+        save_bad_frame_list()
 
     if 'SourceDir' in project_config:
         SourceDir = project_config["SourceDir"]
@@ -1230,9 +1233,6 @@ def job_list_load_selected():
             # Set CurrentFrame in the middle of the project frame range
             CurrentFrame = int(project_config["FrameFrom"]) + (int(project_config["FrameTo"]) - int(project_config["FrameFrom"])) // 2
 
-            # Load misaligned frame list
-            load_bad_frame_list()
-
             # Enable Start and Crop buttons, plus slider, once we have files to handle
             cropping_btn.config(state=NORMAL)
             frame_slider.config(state=NORMAL)
@@ -1321,7 +1321,7 @@ def generate_dict_hash(dictionary):
 
 
 def save_named_job_list():
-    global job_list
+    global job_list, job_list_hash, JobListFilename
     aux_file = filedialog.asksaveasfilename(
         initialdir=script_dir,
         defaultextension=".json",
@@ -1329,14 +1329,18 @@ def save_named_job_list():
         filetypes=[("JSON files", "*.json")],
         title="Select file to save job list")
     if len(aux_file) > 0:
+        job_list_hash = generate_dict_hash(job_list)
         if aux_file[-5:] != '.json':
             aux_file = aux_file + '.json'
         with open(aux_file, 'w+') as f:
             json.dump(job_list, f, indent=4)
+        JobListFilename = aux_file
+        general_config["JobListFilename"] = JobListFilename
+        display_window_title()
 
 
 def load_named_job_list():
-    global job_list, JobListFilename
+    global job_list, JobListFilename, job_list_hash
 
     aux_hash = generate_dict_hash(job_list)
     if job_list_hash != aux_hash:   # Current job list modified since loaded
@@ -1355,6 +1359,8 @@ def load_named_job_list():
         load_job_list(aux_file)
         JobListFilename = aux_file
         general_config["JobListFilename"] = JobListFilename
+        job_list_hash = generate_dict_hash(job_list)
+        display_window_title()
 
 
 def save_job_list():
@@ -1468,8 +1474,6 @@ def job_processing_loop():
             get_target_dir_file_list()
 
             logging.debug(f"Processing batch loop: Loaded {SourceDir} folder")
-            # Load bad frame list for new, current project
-            load_bad_frame_list()
 
             start_convert()
             job_started = True
@@ -2065,6 +2069,21 @@ def display_template_popup_closure():
         FrameSync_Viewer_popup()    # Calling while opened will close it
 
 
+def refresh_current_frame_ui_info(frame_num, frame_first):
+    selected_frame_number.config(text=f'Number:{frame_num+frame_first}')
+    selected_frame_index.config(text=f'Index:{frame_num+1}')
+    selected_frame_time.config(text=f'Film time:{get_frame_time(frame_num)}')
+    if FrameSync_Viewer_opened:
+        if (len(bad_frame_list) > 1 and
+            'original_x' in bad_frame_list[current_bad_frame_index] and 
+            'original_y' in bad_frame_list[current_bad_frame_index] and 
+            'original_threshold' in bad_frame_list[current_bad_frame_index]):
+            pos_before_text.set(f"{bad_frame_list[current_bad_frame_index]['original_x']}, {bad_frame_list[current_bad_frame_index]['original_y']}")
+            threshold_before_text.set(f"T:{bad_frame_list[current_bad_frame_index]['original_threshold']}")
+            pos_after_text.set(f"{bad_frame_list[current_bad_frame_index]['x']}, {bad_frame_list[current_bad_frame_index]['y']}")
+            threshold_after_text.set(f"Ts:{bad_frame_list[current_bad_frame_index]['threshold']}")
+
+
 def cleanup_bad_frame_list(limit):
     """
     Deletes all but the 3 most recent 'bad_frame_list.01_YYYYMMDD_HHMMSS.json' files
@@ -2075,7 +2094,7 @@ def cleanup_bad_frame_list(limit):
     """
     bad_frame_list_name = f"{os.path.split(SourceDir)[-1]}"
     # Set filename
-    bad_frame_list_pattern_name = f"bad_frame_list.{bad_frame_list_name}_????????_??????.json.bak"
+    bad_frame_list_pattern_name = get_bad_frame_list_filename(with_timestamp=True, with_wildcards=True)
     full_path_bad_frame_list_pattern_name = os.path.join(resources_dir, bad_frame_list_pattern_name)
 
     # Get list of matching files
@@ -2103,7 +2122,7 @@ def cleanup_bad_frame_list(limit):
 def get_bad_frame_list_filename(with_timestamp = False, with_wildcards = False):
     # Set filename
     bad_frame_list_name = f"{os.path.split(SourceDir)[-1]}"
-    bad_frame_list_filename = f"bad_frame_list.{bad_frame_list_name}"
+    bad_frame_list_filename = f"AfterScan_bad_frame_list.{bad_frame_list_name}"
     if with_timestamp:
         if not with_wildcards:
             bad_frame_list_filename += datetime.now().strftime("_%Y%m%d_%H%M%S")
@@ -2348,9 +2367,7 @@ def FrameSync_Viewer_popup_refresh():
         x = 0
         y = 0
     project_config["CurrentFrame"] = CurrentFrame
-    selected_frame_number.config(text=f'Number:{CurrentFrame+first_absolute_frame}')
-    selected_frame_index.config(text=f'Index:{CurrentFrame+1}')
-    selected_frame_time.config(text=f'Film time{get_frame_time(CurrentFrame)}')
+    refresh_current_frame_ui_info(CurrentFrame, first_absolute_frame)
     frame_selected.set(CurrentFrame)
     frame_slider.set(CurrentFrame)
     scale_display_update(x, y)
@@ -2360,8 +2377,11 @@ def FrameSync_Viewer_popup_refresh():
         bad_frames_on_left_value.set(current_bad_frame_index if current_bad_frame_index != -1 else 0)
         if len(bad_frame_list) > 0:
             bad_frames_on_right_value.set((len(bad_frame_list)-current_bad_frame_index-1) if current_bad_frame_index != -1 else 0)
+            threshold_value.set(bad_frame_list[current_bad_frame_index]['threshold'])
         else:
             bad_frames_on_right_value.set(0)
+            threshold_value.set(0)
+
 
 
 def display_bad_frame_previous(count, skip_minor = False):
@@ -2377,7 +2397,10 @@ def display_bad_frame_previous(count, skip_minor = False):
             break
         elif bad_frame_list[current_bad_frame_index]['x'] > 5 or bad_frame_list[current_bad_frame_index]['y'] > 5:
             break
+    StabilizationThreshold = bad_frame_list[current_bad_frame_index]['threshold']
+    refresh_current_frame_ui_info(current_bad_frame_index, first_absolute_frame)
     FrameSync_Viewer_popup_refresh()
+    debug_template_refresh_template()
 
 
 def display_bad_frame_previous_1(event = None):
@@ -2405,7 +2428,11 @@ def display_bad_frame_next(count, skip_minor = False):
             break
         elif bad_frame_list[current_bad_frame_index]['x'] > 5 or bad_frame_list[current_bad_frame_index]['y'] > 5:
             break
+    StabilizationThreshold = bad_frame_list[current_bad_frame_index]['threshold']
+    refresh_current_frame_ui_info(current_bad_frame_index, first_absolute_frame)
     FrameSync_Viewer_popup_refresh()
+    debug_template_refresh_template()
+
 
 
 def display_bad_frame_next_1(event = None):
@@ -2442,6 +2469,8 @@ def shift_bad_frame_up(event = None):
     bad_frame_list[current_bad_frame_index]['y'] -= displacement
     frame_encode(CurrentFrame, -1, False, bad_frame_list[current_bad_frame_index]['x'], bad_frame_list[current_bad_frame_index]['y'])
     bad_frame_list[current_bad_frame_index]['is_frame_saved'] = False # Just modified, reset saved flag
+    pos_after_text.set(f"{bad_frame_list[current_bad_frame_index]['x']}, {bad_frame_list[current_bad_frame_index]['y']}")
+    threshold_after_text.set(f"Ts:{bad_frame_list[current_bad_frame_index]['threshold']}")
 
 
 
@@ -2459,6 +2488,8 @@ def shift_bad_frame_down(event = None):
     bad_frame_list[current_bad_frame_index]['y'] += displacement
     frame_encode(CurrentFrame, -1, False, bad_frame_list[current_bad_frame_index]['x'], bad_frame_list[current_bad_frame_index]['y'])
     bad_frame_list[current_bad_frame_index]['is_frame_saved'] = False # Just modified, reset saved flag
+    pos_after_text.set(f"{bad_frame_list[current_bad_frame_index]['x']}, {bad_frame_list[current_bad_frame_index]['y']}")
+    threshold_after_text.set(f"Ts:{bad_frame_list[current_bad_frame_index]['threshold']}")
 
 
 def shift_bad_frame_left(event = None):
@@ -2475,6 +2506,8 @@ def shift_bad_frame_left(event = None):
     bad_frame_list[current_bad_frame_index]['x'] -= displacement
     frame_encode(CurrentFrame, -1, False, bad_frame_list[current_bad_frame_index]['x'], bad_frame_list[current_bad_frame_index]['y'])
     bad_frame_list[current_bad_frame_index]['is_frame_saved'] = False # Just modified, reset saved flag
+    pos_after_text.set(f"{bad_frame_list[current_bad_frame_index]['x']}, {bad_frame_list[current_bad_frame_index]['y']}")
+    threshold_after_text.set(f"Ts:{bad_frame_list[current_bad_frame_index]['threshold']}")
 
 
 def shift_bad_frame_right(event = None):
@@ -2491,6 +2524,8 @@ def shift_bad_frame_right(event = None):
     bad_frame_list[current_bad_frame_index]['x'] += displacement
     frame_encode(CurrentFrame, -1, False, bad_frame_list[current_bad_frame_index]['x'], bad_frame_list[current_bad_frame_index]['y'])
     bad_frame_list[current_bad_frame_index]['is_frame_saved'] = False # Just modified, reset saved flag
+    pos_after_text.set(f"{bad_frame_list[current_bad_frame_index]['x']}, {bad_frame_list[current_bad_frame_index]['y']}")
+    threshold_after_text.set(f"Ts:{bad_frame_list[current_bad_frame_index]['threshold']}")
 
 
 def count_corrected_bad_frames():
@@ -2507,13 +2542,17 @@ def bad_frames_increase_threshold(value):
     if current_bad_frame_index == -1:
         return
 
-    StabilizationThreshold += float(value)
-    if (StabilizationThreshold > 255):
-        StabilizationThreshold = 255.0
+    save_thres = StabilizationThreshold
+    bad_frame_list[current_bad_frame_index]['threshold'] += float(value)
+    if (bad_frame_list[current_bad_frame_index]['threshold'] > 255):
+        bad_frame_list[current_bad_frame_index]['threshold'] = 255.0
+    StabilizationThreshold = bad_frame_list[current_bad_frame_index]['threshold']
     threshold_value.set(StabilizationThreshold)
-    bad_frame_list[current_bad_frame_index]['threshold'] = StabilizationThreshold # Save threshold 
     frame_encode(CurrentFrame, -1, False, bad_frame_list[current_bad_frame_index]['x'], bad_frame_list[current_bad_frame_index]['y'])
     bad_frame_list[current_bad_frame_index]['is_frame_saved'] = False
+    StabilizationThreshold = save_thres
+    pos_after_text.set(f"{bad_frame_list[current_bad_frame_index]['x']}, {bad_frame_list[current_bad_frame_index]['y']}")
+    threshold_after_text.set(f"Ts:{bad_frame_list[current_bad_frame_index]['threshold']}")
     
 
 def bad_frames_increase_threshold_1():
@@ -2530,13 +2569,18 @@ def bad_frames_decrease_threshold(value):
     if current_bad_frame_index == -1:
         return
 
-    StabilizationThreshold -= float(value)
-    if (StabilizationThreshold < 0):
-        StabilizationThreshold = 0.0
+    save_thres = StabilizationThreshold
+    bad_frame_list[current_bad_frame_index]['threshold'] -= float(value)
+    if (bad_frame_list[current_bad_frame_index]['threshold'] < 0):
+        bad_frame_list[current_bad_frame_index]['threshold'] = 0.0
+    StabilizationThreshold = bad_frame_list[current_bad_frame_index]['threshold']
     threshold_value.set(StabilizationThreshold)
     bad_frame_list[current_bad_frame_index]['threshold'] = StabilizationThreshold # Save threshold 
     frame_encode(CurrentFrame, -1, False, bad_frame_list[current_bad_frame_index]['x'], bad_frame_list[current_bad_frame_index]['y'])
     bad_frame_list[current_bad_frame_index]['is_frame_saved'] = False
+    StabilizationThreshold = save_thres
+    pos_after_text.set(f"{bad_frame_list[current_bad_frame_index]['x']}, {bad_frame_list[current_bad_frame_index]['y']}")
+    threshold_after_text.set(f"Ts:{bad_frame_list[current_bad_frame_index]['threshold']}")
 
 
 def bad_frames_decrease_threshold_1():
@@ -2608,6 +2652,7 @@ def FrameSync_Viewer_popup():
     global precise_template_match_checkbox, precise_template_match_value
     global stabilization_bounds_alert, stabilization_bounds_alert_checkbox
     global StabilizationThreshold
+    global pos_before_text, pos_after_text, threshold_before_text, threshold_after_text
 
     Terminate = False
     if FrameSync_Viewer_opened: # Already opened, user wnats to close
@@ -2896,9 +2941,34 @@ def FrameSync_Viewer_popup():
     template_popup_window.bind("<Home>", bad_frames_decrease_threshold_5)
     template_popup_window.bind("<End>", bad_frames_increase_threshold_5)
 
+    # Frame for manual alignment buttons + before/after values
+    before_after_frame = Frame(right_frame) 
+    before_after_frame.pack(anchor="center", pady=5, padx=10)
+
+    # Frame for before values
+    values_before_frame = LabelFrame(before_after_frame, text="Original values")
+    values_before_frame.pack(side=LEFT, pady=5, padx=10)
+    
+    pos_before_text = tk.StringVar()
+    pos_before_text_label = Label(values_before_frame, textvariable=pos_before_text, font=("Arial", FontSize))
+    if not dev_debug_enabled:
+        pos_before_text_label.forget()
+    else:
+        pos_before_text_label.pack(side=TOP, pady=5, padx=10, anchor="center")
+    pos_before_text.set("Pos: 0,0")
+    # as_tooltips.add(pos_before_text_label, "TBD")
+    threshold_before_text = tk.StringVar()
+    threshold_before_text_label = Label(values_before_frame, textvariable=threshold_before_text, font=("Arial", FontSize))
+    if not dev_debug_enabled:
+        threshold_before_text_label.forget()
+    else:
+        threshold_before_text_label.pack(side=TOP, pady=5, padx=10, anchor="center")
+    threshold_before_text.set("Thres: 0")
+    # as_tooltips.add(threshold_before_text_label, "TBD")
+
     # Frame for manual alignment buttons 
-    manual_position_frame = LabelFrame(right_frame, text="Manual frame shift controls") #, width=50, height=50)
-    manual_position_frame.pack(anchor="center", pady=5, padx=10)   # expand=True, fill="both", 
+    manual_position_frame = LabelFrame(before_after_frame, text="Manual frame shift controls")
+    manual_position_frame.pack(side=LEFT, pady=5, padx=10)  
 
     frame_up_button = Button(manual_position_frame, text="▲", command=shift_bad_frame_up, font=("Arial", FontSize), width=3)
     frame_up_button.grid(pady=2, padx=2, row=0, column=2)
@@ -2916,6 +2986,27 @@ def FrameSync_Viewer_popup():
     template_popup_window.bind("<Down>", shift_bad_frame_down)
     template_popup_window.bind("<Left>", shift_bad_frame_left)
     template_popup_window.bind("<Right>", shift_bad_frame_right)
+
+    # Frame for after values
+    values_after_frame = LabelFrame(before_after_frame, text="Modified values")
+    values_after_frame.pack(side=LEFT, pady=5, padx=10)
+
+    pos_after_text = tk.StringVar()
+    pos_after_text_label = Label(values_after_frame, textvariable=pos_after_text, font=("Arial", FontSize))
+    if not dev_debug_enabled:
+        pos_after_text_label.forget()
+    else:
+        pos_after_text_label.pack(side=TOP, pady=5, padx=10, anchor="center")
+    pos_after_text.set("Pos: 0,0")
+    # as_tooltips.add(pos_after_text_label, "TBD")
+    threshold_after_text = tk.StringVar()
+    threshold_after_text_label = Label(values_after_frame, textvariable=threshold_after_text, font=("Arial", FontSize))
+    if not dev_debug_enabled:
+        threshold_after_text_label.forget()
+    else:
+        threshold_after_text_label.pack(side=TOP, pady=5, padx=10, anchor="center")
+    threshold_after_text.set("Thres: 0")
+    # as_tooltips.add(threshold_after_text_label, "TBD")
 
     # Frame for delete info buttons 
     delete_info_frame = Frame(right_frame)
@@ -3099,9 +3190,7 @@ def select_scale_frame(selected_frame):
         frame_slider.focus()
         CurrentFrame = int(selected_frame)
         project_config["CurrentFrame"] = CurrentFrame
-        selected_frame_number.config(text=f'Number:{CurrentFrame+first_absolute_frame}')
-        selected_frame_index.config(text=f'Index:{CurrentFrame+1}')
-        selected_frame_time.config(text=f'Film time{get_frame_time(CurrentFrame)}')
+        refresh_current_frame_ui_info(CurrentFrame, first_absolute_frame)
         if frame_scale_refresh_done:
             frame_scale_refresh_done = False
             frame_scale_refresh_pending = False
@@ -3697,20 +3786,13 @@ def match_template(frame_idx, template, img):
             best_img_final = img_final
             Done = True
         if not Done:
-            if round(maxVal,2) < 0.85: # Quality not good enough, try another threshold
-                if round(maxVal,2) >= best_match_level:
-                    best_match_level = round(maxVal,2)
-                    best_thres = local_threshold
-                    best_top_left = top_left
-                    best_maxVal = maxVal
-                    best_img_final = img_final
-            else:
-                if round(maxVal,2) >= best_match_level:
-                    best_match_level = round(maxVal,2)
-                    best_thres = local_threshold
-                    best_top_left = top_left
-                    best_maxVal = maxVal
-                    best_img_final = img_final
+            if round(maxVal,2) >= best_match_level: # Keep best values in any case
+                best_match_level = round(maxVal,2)
+                best_thres = local_threshold
+                best_top_left = top_left
+                best_maxVal = maxVal
+                best_img_final = img_final
+            if round(maxVal,2) >= 0.85: # Quality not good enough, try another threshold
                 if not precise_template_match or best_match_level >= 0.95 or best_match_level > 0.7 and round(maxVal,2) < best_match_level / 2:
                     Done = True # If threshold if really good, or much worse than best so far (means match level started decreasing in this loop), then end
             if not Done:
@@ -4057,53 +4139,53 @@ def calculate_frame_displacement_simple(frame_idx, img, threshold=10, slice_widt
 # Original algorithm based on templates
 # Extracted code to calculate displacement to use with the manual option
 def calculate_frame_displacement_with_templates(frame_idx, img_ref, img_ref_alt = None, id = -1):
-        # Set hole template expected position
-        hole_template_pos = template_list.get_active_position()
-        film_hole_template = template_list.get_active_template()
+    # Set hole template expected position
+    hole_template_pos = template_list.get_active_position()
+    film_hole_template = template_list.get_active_template()
 
-        # Search film hole pattern
-        best_match_level = 0
-        best_top_left = [0,0]
+    # Search film hole pattern
+    best_match_level = 0
+    best_top_left = [0,0]
 
-        # Get sprocket hole area
-        left_stripe_image = get_image_left_stripe(img_ref, 0.3)
-        img_ref_alt_used = False
-        while True:
-            frame_treshold, top_left, match_level, img_matched = match_template(frame_idx, film_hole_template, left_stripe_image)
-            match_level = max(0, match_level)   # in some cases, not sure why, match level is negative
-            if match_level >= 0.85:
-                break
-            else:
-                if match_level >= best_match_level:
-                    best_match_level = match_level
-                    best_top_left = top_left
-                    best_img_matched = img_matched
-            if not img_ref_alt_used and img_ref_alt is not None:
-                left_stripe_image = get_image_left_stripe(img_ref_alt, 0.3)
-                img_ref_alt_used = True
-            else:
-                match_level = best_match_level
-                top_left = best_top_left
-                img_matched = best_img_matched
-                break
+    # Get sprocket hole area
+    left_stripe_image = get_image_left_stripe(img_ref, 0.3)
+    img_ref_alt_used = False
+    while True:
+        frame_treshold, top_left, match_level, img_matched = match_template(frame_idx, film_hole_template, left_stripe_image)
+        match_level = max(0, match_level)   # in some cases, not sure why, match level is negative
+        if match_level >= 0.85:
+            break
+        else:
+            if match_level >= best_match_level:
+                best_match_level = match_level
+                best_top_left = top_left
+                best_img_matched = img_matched
+        if not img_ref_alt_used and img_ref_alt is not None:
+            left_stripe_image = get_image_left_stripe(img_ref_alt, 0.3)
+            img_ref_alt_used = True
+        else:
+            match_level = best_match_level
+            top_left = best_top_left
+            img_matched = best_img_matched
+            break
 
-        if top_left[1] != -1 and match_level > 0.1:
-            move_x = hole_template_pos[0] - top_left[0]
-            move_y = hole_template_pos[1] - top_left[1]
-            if abs(move_x) > 200 or abs(move_y) > 600:  # if shift too big, ignore it, probably for the better
-                logging.warning(f"Frame {frame_idx:5d}: Shift too big ({move_x}, {move_y}), ignoring it.")
-                move_x = 0
-                move_y = 0
-        else:   # If match is not good, keep the frame where it is, will probably look better
-            logging.warning(f"Frame {frame_idx:5d}: Template match not good ({match_level}""), ignoring it.")
+    if top_left[1] != -1 and match_level > 0.1:
+        move_x = hole_template_pos[0] - top_left[0]
+        move_y = hole_template_pos[1] - top_left[1]
+        if abs(move_x) > 200 or abs(move_y) > 600:  # if shift too big, ignore it, probably for the better
+            logging.warning(f"Frame {frame_idx:5d}: Shift too big ({move_x}, {move_y}), ignoring it.")
             move_x = 0
             move_y = 0
-        log_line = f"T{id} - " if id != -1 else ""
-        logging.debug(log_line+f"Frame {frame_idx:5d}: threshold: {frame_treshold:3d}, template: ({hole_template_pos[0]:4d},{hole_template_pos[1]:4d}), top left: ({top_left[0]:4d},{top_left[1]:4d}), move_x:{move_x:4d}, move_y:{move_y:4d}")
-        debug_template_display_frame_raw(img_matched, top_left[0], top_left[1], film_hole_template.shape[1], film_hole_template.shape[0], match_level_color_bgr(match_level))
-        debug_template_display_info(frame_idx, frame_treshold, top_left, move_x, move_y)
+    else:   # If match is not good, keep the frame where it is, will probably look better
+        logging.warning(f"Frame {frame_idx:5d}: Template match not good ({match_level}""), ignoring it.")
+        move_x = 0
+        move_y = 0
+    log_line = f"T{id} - " if id != -1 else ""
+    logging.debug(log_line+f"Frame {frame_idx:5d}: threshold: {frame_treshold:3d}, template: ({hole_template_pos[0]:4d},{hole_template_pos[1]:4d}), top left: ({top_left[0]:4d},{top_left[1]:4d}), move_x:{move_x:4d}, move_y:{move_y:4d}")
+    debug_template_display_frame_raw(img_matched, top_left[0], top_left[1], film_hole_template.shape[1], film_hole_template.shape[0], match_level_color_bgr(match_level))
+    debug_template_display_info(frame_idx, frame_treshold, top_left, move_x, move_y)
 
-        return move_x, move_y, top_left, match_level, frame_treshold
+    return move_x, move_y, top_left, match_level, frame_treshold
 
 
 def shift_image(img, width, height, move_x, move_y):
@@ -4167,6 +4249,7 @@ def stabilize_image(frame_idx, img, img_ref, offset_x = 0, offset_y = 0, img_ref
             if match_level < 0.7 if not high_sensitive_bad_frame_detection else 0.9:   # Only add really bad matches
                 if FrameSync_Viewer_opened:  # Generate bad frame list only if popup opened
                     insert_or_replace_sorted(bad_frame_list, {'frame_idx': frame_idx, 'x': 0, 'y': 0, 
+                                                              'original_x' : top_left[0], 'original_y': top_left[1],
                                                               'threshold': frame_threshold, 'original_threshold': frame_threshold, 
                                                               'is_frame_saved': True})
                     if stabilization_bounds_alert.get():
@@ -4402,9 +4485,7 @@ def get_source_dir_file_list():
     first_absolute_frame = numbers[0]
     last_absolute_frame = first_absolute_frame + len(SourceDirFileList)-1
     frame_slider.config(from_=0, to=len(SourceDirFileList)-1)
-    selected_frame_number.config(text='Number:'+str(CurrentFrame+first_absolute_frame))
-    selected_frame_index.config(text='Index:'+str(CurrentFrame+1))
-    selected_frame_time.config(text=get_frame_time(CurrentFrame))
+    refresh_current_frame_ui_info(CurrentFrame, first_absolute_frame)
 
     # In order to determine hole height, no not take the first frame, as often
     # it is not so good. Take a frame 10% ahead in the set
@@ -4544,7 +4625,7 @@ def get_frame_number_from_filename(filename):
 
 def get_frame_time(frame_idx):
     fps = 18 if film_type.get() == 'S8' else 16
-    return f"Film time: {(frame_idx // fps) // 60:02}:{(frame_idx // fps) % 60:02}"
+    return f"{(frame_idx // fps) // 60:02}:{(frame_idx // fps) % 60:02}"
 
 
 def start_convert():
@@ -4837,9 +4918,7 @@ def frame_update_ui(frame_idx, merged):
 
     frame_selected.set(frame_idx)
     frame_slider.set(frame_idx)
-    selected_frame_number.config(text='Number:'+str(frame_idx+first_absolute_frame))
-    selected_frame_index.config(text='Index:'+str(frame_idx+1))
-    selected_frame_time.config(text=get_frame_time(frame_idx))
+    refresh_current_frame_ui_info(frame_idx, first_absolute_frame)
     status_str = f"Status: Generating{' merged' if merged else ''} frames {((frame_idx - StartFrame+1) * 100 / frames_to_encode):.1f}%"
     if FPS_CalculatedValue != -1:  # FPS not calculated yet, display some indication
         status_str = status_str + f' (FPS:{FPS_CalculatedValue:.1f})'
@@ -5279,9 +5358,7 @@ def video_generation_loop():
                     encoded_frame = int(frame_str)
                     frame_selected.set(StartFrame + first_absolute_frame + encoded_frame)
                     frame_slider.set(StartFrame + first_absolute_frame + encoded_frame)
-                    selected_frame_number.config(text='Number:'+str(encoded_frame+first_absolute_frame))
-                    selected_frame_index.config(text='Index:'+str(encoded_frame+1))
-                    selected_frame_time.config(text=get_frame_time(encoded_frame))
+                    refresh_current_frame_ui_info(encoded_frame, first_absolute_frame)
                     status_str = f"Status: Generating video {encoded_frame*100/(frames_to_encode+title_num_frames):.1f}%"
                     app_status_label.config(text=status_str, fg='black')
                     display_output_frame_by_number(encoded_frame)
@@ -5623,7 +5700,7 @@ def build_ui():
     selected_frame_index.pack(side=TOP, pady=2)
     as_tooltips.add(selected_frame_index, "Sequential frame index, from 1 to n")
 
-    selected_frame_time = Label(frame_frame, width=12, text='Film time:', font=("Arial", FontSize))
+    selected_frame_time = Label(frame_frame, width=12, text='Time:', font=("Arial", FontSize))
     selected_frame_time.pack(side=TOP, pady=2)
     as_tooltips.add(selected_frame_time, "Time in the source film where this frame is located")
 
@@ -5661,7 +5738,6 @@ def build_ui():
     if logo_image != None:
         # Resize the image (e.g., to 50% of its original size)
         ratio = available_width / logo_image.width
-        print(f"ratio: {ratio}, available_width: {available_width}, logo_image.width: {logo_image.width}")
         new_width = int(logo_image.width * ratio)
         new_height = int(logo_image.height * ratio)
         resized_logo = logo_image.resize((new_width, new_height), Image.LANCZOS) #use LANCZOS for high quality resizing.
@@ -6396,8 +6472,7 @@ def main(argv):
 
     template_list = TemplateList()
     template_list.add("S8", hole_template_filename_s8, "S8", (66, 728))
-#    template_list.add("R8", hole_template_filename_r8, "R8", (44, 134))    # Old template with two holes
-    template_list.add("R8", hole_template_filename_r8, "R8", (65, 1080))
+    template_list.add("R8", hole_template_filename_r8, "R8", (65, 1080)) # Default R8 (bottom hole)
     template_list.add("BW", hole_template_filename_bw, "aux", (0, 0))
     template_list.add("WB", hole_template_filename_wb, "aux", (0, 0))
     template_list.add("Corner", hole_template_filename_corner, "aux", (0, 0))
