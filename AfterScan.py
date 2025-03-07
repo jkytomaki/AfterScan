@@ -20,16 +20,17 @@ __copyright__ = "Copyright 2024, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
 __module__ = "AfterScan"
-__version__ = "1.20.12"
+__version__ = "1.20.14"
 __data_version__ = "1.0"
-__date__ = "2025-03-05"
-__version_highlight__ = "Fix bug when loading/saving job lists"
+__date__ = "2025-03-07"
+__version_highlight__ = "Replace Listbox with ttk Treeview"
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
 __status__ = "Development"
 
 import tkinter as tk
 from tkinter import filedialog
+from tkinter import ttk
 
 import tkinter.messagebox
 from tkinter import DISABLED, NORMAL, LEFT, RIGHT, TOP, BOTTOM, N, W, E, NW, NS, EW, RAISED, SUNKEN, END, VERTICAL, HORIZONTAL
@@ -109,7 +110,8 @@ project_config_basename = "AfterScan-project.json"
 project_config_filename = ""
 project_config_from_file = True
 project_name = "No Project"
-default_job_list_filename = os.path.join(script_dir, "AfterScan_job_list.json")
+default_job_list_filename_legacy = os.path.join(script_dir, "AfterScan_job_list.json")
+default_job_list_filename = os.path.join(script_dir, "AfterScan.joblist.json")
 JobListFilename = default_job_list_filename
 job_list_hash = None    # To determine if job list has changed since loaded
 temp_dir = os.path.join(script_dir, "temp")
@@ -235,6 +237,7 @@ RotationAngle = 0.0
 StabilizeAreaDefined = False
 StabilizationThreshold = 220.0
 StabilizationThreshold_default = StabilizationThreshold
+
 hole_search_area_adjustment_pending = False
 bad_frame_list = []     # List of tuples (5 elements each: Frame index, x offset, y offset, stabilization threshold, is frame saved)
 # To migrate content of bad_frame_list to dictionaries (instead of smaller lists)
@@ -745,9 +748,6 @@ def save_project_config():
     global frame_from_str, frame_to_str
     global perform_denoise, perform_sharpness, perform_gamma_correction
 
-    # Do not save if current project comes from batch job
-    if not project_config_from_file or IgnoreConfig:
-        return
     # Write project data upon exit
     project_config["SourceDir"] = SourceDir
     project_config["TargetDir"] = TargetDir
@@ -780,6 +780,10 @@ def save_project_config():
     # remove deprecated items from config
     if "CustomHolePos" in project_config:
         del project_config["CustomHolePos"]
+
+    # Do not save if current project comes from batch job
+    if not project_config_from_file or IgnoreConfig:
+        return
 
     # No longer saving to dedicated file, all project settings in common file now
     # with open(project_config_filename, 'w+') as f:
@@ -1075,12 +1079,12 @@ Job list support functions
 ##########################
 """
 
-JOB_LIST_NAME_LENGTH = 25
-JOB_LIST_DESCRIPTION_LENGTH = 50
+JOB_LIST_NAME_LENGTH = 100
+JOB_LIST_DESCRIPTION_LENGTH = 100
 
 def job_list_process_selection(evt):
     global job_list
-    global job_list_listbox
+    global job_list_treeview
     global rerun_job_btn
     global job_list_listbox_disabled
 
@@ -1090,41 +1094,26 @@ def job_list_process_selection(evt):
     # Note here that Tkinter passes an event object to onselect()
     # w = evt.widget - We already know the widget
 
-    if job_list_listbox.size() == 0:
+    if len(job_list_treeview.get_children()) == 0:
         return
 
-    selected_indices = job_list_listbox.curselection()
-    if selected_indices:
-        selected = int(job_list_listbox.curselection()[0])
-        entry = normalize_job_name(job_list_listbox.get(selected))
-        rerun_job_btn.config(text='Rerun job' if job_list[entry]['done'] else rerun_job_btn.config(text='Mark as run'))
+    selected_index = job_list_treeview.selection()
+    if selected_index:
+        item_id = selected_index[0]
+        items = job_list_treeview.get_children()
+        index = items.index(item_id)  # Get current position
+        values = job_list_treeview.item(item_id, "values")  # Returns a tuple of all column values
+        if values:
+            entry = normalize_job_name(values[0])  # Get the first element
+            rerun_job_btn.config(text='Rerun job' if job_list[entry]['done'] else rerun_job_btn.config(text='Mark as run'))
 
-
-def job_listbox_find_entry(search_string):
-    """
-    Find the index of the first Listbox entry that starts with the given string.
-    
-    Args:
-        listbox: Tkinter Listbox widget
-        search_string (str): String to match at the start of an entry
-    
-    Returns:
-        int: Index of the first matching entry, or -1 if no match
-    """
-    # Pad the search string with spaces to match the column width
-    padded_search = f"{search_string:<{JOB_LIST_NAME_LENGTH}}"
-    for i in range(job_list_listbox.size()):  # Iterate over all entries
-        entry_text = job_list_listbox.get(i)  # Get text at index i
-        if entry_text.startswith(padded_search):
-            return i
-    return -1  # No match found
 
 
 def job_list_add_current():
     global job_list, template_list
     global CurrentFrame, StartFrame, frames_to_encode
     global project_config, video_filename_str
-    global job_list_listbox
+    global job_list_treeview
     global encode_all_frames, SourceDirFileList
     global frame_from_str, frame_to_str
     global resolution_dropdown_selected
@@ -1169,14 +1158,13 @@ def job_list_add_current():
         description = description + ", " + resolution_dropdown_selected.get()
 
     save_project = True
-    listbox_index = 'end'
+    item_id = None
     if entry_name in job_list:
         if tk.messagebox.askyesno(
                 "Job already exists",
                 "A job named " + entry_name + " exists already in the job list. "
                 "Do you want to overwrite it?."):
-            listbox_index = job_listbox_find_entry(entry_name)
-            job_list_listbox.delete(listbox_index)
+            item_id = search_job_name_in_job_treeview(entry_name)
         else:
             save_project = False
     if save_project:
@@ -1193,10 +1181,13 @@ def job_list_add_current():
         else:
             if 'CustomTemplateFilename' in project_config:
                 del project_config['CustomTemplateFilename']
-        entry_formatted = f"{entry_name:<{JOB_LIST_NAME_LENGTH}} {description:<{JOB_LIST_DESCRIPTION_LENGTH}}"
-        job_list_listbox.insert(listbox_index, entry_formatted)
-        job_list_listbox.itemconfig(listbox_index)
-        job_list_listbox.select_set(listbox_index)
+        if item_id is None:
+            item_id = job_list_treeview.insert('', 'end', values=(entry_name, description))
+        else:   # Update existing
+            job_list_treeview.item(item_id, values=(entry_name, description))
+
+        job_list_treeview.selection_set(item_id)  # Select the row
+        job_list_treeview.see(item_id)
 
 
 # gets currently selected job list item and loads it in the UI fields (to allow editing)
@@ -1204,7 +1195,7 @@ def job_list_load_selected():
     global job_list
     global CurrentFrame, StartFrame, frames_to_encode
     global project_config
-    global job_list_listbox
+    global job_list_treeview
     global encode_all_frames, SourceDirFileList
     global frame_from_str, frame_to_str
     global resolution_dropdown_selected
@@ -1212,69 +1203,84 @@ def job_list_load_selected():
 
     if job_list_listbox_disabled:
         return
-    selected = job_list_listbox.curselection()
-    if selected != ():
-        entry_name = normalize_job_name(job_list_listbox.get(selected[0]))  # we pick fist item as curselection returns a list
 
-        if entry_name in job_list:
-            # Save misaligned frame list in case new job switches to a different source folder
-            if len(bad_frame_list) > 0:
-                save_bad_frame_list()
-            # Clear list of bad frames
-            bad_frame_list.clear()
-            current_bad_frame_index = -1
-            # Copy job settings as current project settings
-            project_config = job_list[entry_name]['project']
-            decode_project_config()
-            # Load matching file list from newly selected dir
-            get_source_dir_file_list()  # first_absolute_frame is set here
-            general_config["SourceDir"] = SourceDir
+    selected_index = job_list_treeview.selection()
+    if selected_index:
+        item_id = selected_index[0]
+        items = job_list_treeview.get_children()
+        index = items.index(item_id)  # Get current position
+        values = job_list_treeview.item(item_id, "values")  # Returns a tuple of all column values
+        if values:
+            entry_name = normalize_job_name(values[0])  # Get the first element
+            if entry_name in job_list:
+                # Save misaligned frame list in case new job switches to a different source folder
+                if len(bad_frame_list) > 0:
+                    save_bad_frame_list()
+                # Clear list of bad frames
+                bad_frame_list.clear()
+                current_bad_frame_index = -1
+                # Copy job settings as current project settings
+                project_config = job_list[entry_name]['project']
+                decode_project_config()
+                # Load matching file list from newly selected dir
+                get_source_dir_file_list()  # first_absolute_frame is set here
+                general_config["SourceDir"] = SourceDir
 
-            # Set CurrentFrame in the middle of the project frame range
-            CurrentFrame = int(project_config["FrameFrom"]) + (int(project_config["FrameTo"]) - int(project_config["FrameFrom"])) // 2
+                # Set CurrentFrame in the middle of the project frame range
+                CurrentFrame = int(project_config["FrameFrom"]) + (int(project_config["FrameTo"]) - int(project_config["FrameFrom"])) // 2
 
-            # Enable Start and Crop buttons, plus slider, once we have files to handle
-            cropping_btn.config(state=NORMAL)
-            frame_slider.config(state=NORMAL)
-            Go_btn.config(state=NORMAL)
-            frame_slider.set(CurrentFrame)
-            init_display()
+                # Enable Start and Crop buttons, plus slider, once we have files to handle
+                cropping_btn.config(state=NORMAL)
+                frame_slider.config(state=NORMAL)
+                Go_btn.config(state=NORMAL)
+                frame_slider.set(CurrentFrame)
+                init_display()
 
 
 def job_list_delete_selected():
     global job_list
-    global job_list_listbox
+    global job_list_treeview
     global job_list_listbox_disabled
 
     if job_list_listbox_disabled:
         return
-    selected = job_list_listbox.curselection()
-    if selected != ():
-        job_list.pop(normalize_job_name(job_list_listbox.get(selected)))
-        job_list_listbox.delete(selected)
-        if selected[0] < job_list_listbox.size():
-            job_list_listbox.select_set(selected[0])
-        elif job_list_listbox.size() > 0:
-            job_list_listbox.select_set(selected[0]-1)
+
+    selected_index = job_list_treeview.selection()
+    if selected_index:
+        item_id = selected_index[0]
+        values = job_list_treeview.item(item_id, "values")  # Returns a tuple of all column values
+        if values:
+            # Get index of the selected line
+            items = job_list_treeview.get_children()
+            index = items.index(item_id) if item_id in items else -1
+            entry = normalize_job_name(values[0])  # Get the first element
+            job_list.pop(entry) # Delete from job list
+            job_list_treeview.delete(item_id)    # Delete from tree view
+            # Try to select the previous row if it exists
+            if index > 0:
+                job_list_treeview.selection_set(items[index - 1])  # Select previous row
+            elif index == 0 and len(items) > 1:
+                job_list_treeview.selection_set(items[1])  # Select the new first row if available
 
 
 def job_list_rerun_selected():
     global job_list
-    global job_list_listbox
+    global job_list_treeview
     global job_list_listbox_disabled
 
     if job_list_listbox_disabled:
         return
 
-    selected_indices = job_list_listbox.curselection()
-    if selected_indices != ():
-        selected = int(job_list_listbox.curselection()[0])
-        entry = normalize_job_name(job_list_listbox.get(selected))
-
-        job_list[entry]['done'] = not job_list[entry]['done']
-        job_list[entry]['attempted'] = job_list[entry]['done']
-        job_list_listbox.itemconfig(selected, fg='green' if job_list[entry]['done'] else 'black')
-        rerun_job_btn.config(text='Rerun job' if job_list[entry]['done'] else 'Mark as run')
+    selected_index = job_list_treeview.selection()
+    if selected_index:
+        item_id = selected_index[0]
+        values = job_list_treeview.item(item_id, "values")  # Returns a tuple of all column values
+        if values:
+            entry = normalize_job_name(values[0])  # Get the first element
+            job_list[entry]['done'] = not job_list[entry]['done']
+            job_list[entry]['attempted'] = job_list[entry]['done']
+            job_list_treeview.item(item_id, tags=("done",) if job_list[entry]['done'] else ("pending",))
+            rerun_job_btn.config(text='Rerun job' if job_list[entry]['done'] else 'Mark as run')
 
 
 def create_alternate_job_name(name):
@@ -1301,15 +1307,15 @@ def normalize_job_name(name):
     return name[:JOB_LIST_NAME_LENGTH].strip()
 
 
-def search_job_name_in_job_listbox(job_name):
+def search_job_name_in_job_treeview(job_name):
     """
     Find the index of the first element in a tuple that starts with search_str.
     Returns -1 if no match is found.
     """
-    job_listbox_elements = job_list_listbox.get(0, "end")
-    for i in range(len(job_listbox_elements)):
-        if job_listbox_elements[i].startswith(job_name):
-            return i
+    for item_id in job_list_treeview.get_children():  # Iterate over all items
+        values = job_list_treeview.item(item_id, "values")  # Get row values
+        if values and values[0] == job_name:  # Check first column
+            return item_id
     return -1
 
 
@@ -1326,12 +1332,16 @@ def save_named_job_list():
         initialdir=script_dir,
         defaultextension=".json",
         initialfile=JobListFilename,
-        filetypes=[("JSON files", "*.json")],
+        filetypes=[("Joblist JSON files", "*.joblist.json"), ("JSON files", "*.json")],
         title="Select file to save job list")
     if len(aux_file) > 0:
         job_list_hash = generate_dict_hash(job_list)
-        if aux_file[-5:] != '.json':
-            aux_file = aux_file + '.json'
+        # Remove only the exact suffix if present
+        if not aux_file.endswith(".joblist.json"):
+            # Remove .json or .joblist if they exist separately
+            aux_file = aux_file.removesuffix(".json").removesuffix(".joblist")
+            # Append the correct suffix
+            aux_file = f"{aux_file}.joblist.json"
         with open(aux_file, 'w+') as f:
             json.dump(job_list, f, indent=4)
         JobListFilename = aux_file
@@ -1353,7 +1363,7 @@ def load_named_job_list():
     aux_file = filedialog.askopenfilename(
         initialdir=script_dir,
         defaultextension=".json",
-        filetypes=[("JSON files", "*.json")],
+        filetypes=[("Joblist JSON files", "*.joblist.json"), ("JSON files", "*.json")],
         title="Select file to retrieve job list")
     if len(aux_file) > 0:
         load_job_list(aux_file)
@@ -1372,10 +1382,14 @@ def save_job_list():
 
 
 def load_job_list(filename = None):
-    global job_list, default_job_list_filename, job_list_listbox, job_list_hash
+    global job_list, default_job_list_filename, job_list_treeview, job_list_hash
 
     if filename is None:
-        filename = default_job_list_filename
+        if not os.path.isfile(default_job_list_filename):   
+            # if default job list file does not exist, try with legacy one (before 1.20.13)
+            filename = default_job_list_filename_legacy
+        else:
+            filename = default_job_list_filename
 
     display_window_title()  # setting title of the window
 
@@ -1384,7 +1398,8 @@ def load_job_list(filename = None):
         job_list = json.load(f)
         # Explicitly copy keys
         keys = list(job_list.keys())
-        job_list_listbox.delete(0, 'end')
+        for item_id in job_list_treeview.get_children():
+            job_list_treeview.delete(item_id)
         for entry in keys:
             # Check if 'description' field exists
             if "description" not in job_list[entry]:  # Legacy entry, need to adapt
@@ -1412,13 +1427,14 @@ def load_job_list(filename = None):
                 entry = new_key
             # Use string formatting to align "columns"
             entry_formatted = f"{entry:<{JOB_LIST_NAME_LENGTH}} {job_list[entry]["description"]:<{JOB_LIST_DESCRIPTION_LENGTH}}"
-            job_list_listbox.insert('end', entry_formatted)   # Add to listbox
+            job_list_treeview.insert('', 'end', values=(entry,job_list[entry]["description"]))   # Add to listbox
             job_list[entry]['attempted'] = job_list[entry]['done']  # Add default value for new json field
         f.close()
-        idx = 0
         for entry in job_list:
-            job_list_listbox.itemconfig(idx, fg='black' if job_list[entry]['done'] == False else 'green')
-            idx += 1
+            item_id = search_job_name_in_job_treeview(entry)
+            if item_id is not None:
+                job_list_treeview.item(item_id, tags=("done",) if job_list[entry]['done'] else ("pending",))
+
         job_list_hash = generate_dict_hash(job_list)
     else:   # No job list file. Set empty config to force defaults
         job_list = {}
@@ -1439,7 +1455,7 @@ def start_processing_job_list():
 
 
 def job_processing_loop():
-    global job_list, job_list_listbox
+    global job_list, job_list_treeview
     global project_config
     global CurrentJobEntry
     global BatchJobRunning
@@ -1450,14 +1466,16 @@ def job_processing_loop():
     logging.debug(f"Starting batch loop")
     job_started = False
     for entry in job_list:
-        if  not job_list[entry]['done'] and not job_list[entry]['attempted']:
+        if not job_list[entry]['done'] and not job_list[entry]['attempted']:
             # Save bad frame list if any
             if len(bad_frame_list) > 0:
                 save_bad_frame_list()
             job_list[entry]['attempted'] = True
-            job_list_listbox.selection_clear(0, END)
-            idx = search_job_name_in_job_listbox(entry)
-            job_list_listbox.itemconfig(idx, fg='blue')
+            for item_id in job_list_treeview.selection():  
+                job_list_treeview.selection_remove(item_id)  # Unselect each selected item
+            item_id = search_job_name_in_job_treeview(entry)
+            if item_id is not None:
+                job_list_treeview.item(item_id, tags=("ongoing",))
             CurrentJobEntry = entry
             if 'FrameFrom' in job_list[entry]['project']:
                 CurrentFrame = job_list[entry]['project']['FrameFrom']
@@ -1478,7 +1496,6 @@ def job_processing_loop():
             start_convert()
             job_started = True
             break
-        #job_list_listbox.selection_clear(idx)
     if not job_started:
         CurrentJobEntry = -1
         generation_exit()
@@ -1504,77 +1521,84 @@ def job_list_load_current(event):
 
 
 def job_list_rerun_current(event):
-    global job_list, job_list_listbox
+    global job_list, job_list_treeview
     global job_list_listbox_disabled
 
     if job_list_listbox_disabled:
         return
+
     job_list_rerun_selected()
-    selected_index = job_list_listbox.curselection()
-    if selected_index:
-        idx = selected_index[0]
-        job_list_listbox.selection_clear(0, tk.END)
-        if idx < job_list_listbox.size() - 1:
-            job_list_listbox.selection_set(idx + 1)
+
+    selected = job_list_treeview.selection()  # Get selected item(s)
+    if not selected:
+        return  # Nothing selected, do nothing
+
+    all_items = job_list_treeview.get_children()  # Get all row IDs
+    index = all_items.index(selected[0]) if selected[0] in all_items else -1
+
+    if index < len(all_items) - 1:  # Ensure it's not the last row
+        next_item = all_items[index + 1]
+        job_list_treeview.selection_set(next_item)  # Select next row
+        job_list_treeview.focus(next_item)  # Move focus to it
 
 
-def sync_job_list_with_listbox():
-    global job_list_listbox, job_list
+def sync_job_list_with_treeview():
+    global job_list_treeview, job_list
 
-    order_list=[]
-    for idx in range(0, job_list_listbox.size()):
-        order_list.append(normalize_job_name(job_list_listbox.get(idx)))
+    order_list = []
+    for item_id in job_list_treeview.get_children():
+        values = job_list_treeview.item(item_id, "values")  # Get row values
+        if values:  
+            order_list.append(normalize_job_name(values[0]))  # First column value
 
     # Create a new dictionary with the desired order
-    job_list = {key: job_list[key] for key in order_list}
+    job_list = {key: job_list[key] for key in order_list if key in job_list}
 
 
 def job_list_move_up(event):
-    global job_list_listbox, job_list
+    global job_list_treeview, job_list
     global job_list_listbox_disabled
 
     if job_list_listbox_disabled:
         return
-    selected_index = job_list_listbox.curselection()
+    selected_index = job_list_treeview.selection()
     if selected_index:
-        idx = selected_index[0]
-        if idx > 0:
-            item = job_list_listbox.get(idx)
-            job_list_listbox.delete(idx)
-            job_list_listbox.insert(idx - 1, item)
-            job_list_listbox.selection_clear(0, tk.END)
-            job_list_listbox.selection_set(idx - 1)
-            job_list_listbox.activate(idx - 1)
-            job_list_listbox.see(idx - 1)  # Scroll to the new selection
-            if item in job_list:
-                if job_list[item]['done'] == True:
-                    job_list_listbox.itemconfig(idx - 1, fg='green')
-            sync_job_list_with_listbox()
-            #return "break"
+        item_id = selected_index[0]
+        items = job_list_treeview.get_children()
+        index = items.index(item_id)  # Get current position
+        if index > 0:  # Ensure it's not already at the top
+            job_list_treeview.move(item_id, "", index - 1)  # Move up
+            # Update Job list
+            values = job_list_treeview.item(item_id, "values")  # Returns a tuple of all column values
+            if values:
+                item = values[0]  # Get the first element
+                if item in job_list:
+                    if job_list[item]['done'] == True:
+                        job_list_treeview.item(item_id, tags=("pending",) if job_list[item]['done'] == False else ("done",))
+                sync_job_list_with_treeview()
 
 
 def job_list_move_down(event):
-    global job_list_listbox, job_list
+    global job_list_treeview, job_list
     global job_list_listbox_disabled
 
     if job_list_listbox_disabled:
         return
-    selected_index = job_list_listbox.curselection()
+    selected_index = job_list_treeview.selection()
     if selected_index:
-        idx = selected_index[0]
-        if idx < job_list_listbox.size() - 1:
-            item = job_list_listbox.get(idx)
-            job_list_listbox.delete(idx)
-            job_list_listbox.insert(idx + 1, item)
-            job_list_listbox.selection_clear(0, tk.END)
-            job_list_listbox.selection_set(idx + 1)
-            job_list_listbox.activate(idx + 1)
-            job_list_listbox.see(idx + 1)  # Scroll to the new selection
-            if item in job_list:
-                if job_list[item]['done'] == True:
-                    job_list_listbox.itemconfig(selected_index + 1, fg='green')
-            sync_job_list_with_listbox()
-            #return "break"
+        item_id = selected_index[0]
+        items = job_list_treeview.get_children()
+        index = items.index(item_id)  # Get current position
+        if index < len(items) - 1:  # Ensure it's not already at the bottom
+            job_list_treeview.move(item_id, "", index + 1)  # Move down
+            # Update Job list
+            values = job_list_treeview.item(item_id, "values")  # Returns a tuple of all column values
+            if values:
+                item = values[0]  # Get the first element
+                if item in job_list:
+                    if job_list[item]['done'] == True:
+                        job_list_treeview.item(item_id, tags=("pending",) if job_list[item]['done'] == False else ("done",))
+                sync_job_list_with_treeview()
 
 
 """
@@ -1844,7 +1868,7 @@ def widget_status_update(widget_state=0, button_action=0):
         add_job_btn.config(state=widget_state)
         delete_job_btn.config(state=widget_state)
         rerun_job_btn.config(state=widget_state)
-        #job_list_listbox.config(state=widget_state)
+        #job_list_treeview.config(state=widget_state)
         if widget_state == DISABLED:
             job_list_listbox_disabled = True
         else:
@@ -1873,7 +1897,7 @@ def update_frame_from(event):
     global frame_from_str, frame_slider
     global CurrentFrame
     
-    if len(frame_from_str.get()) == 0 or event.num == 2:
+    if len(frame_from_str.get()) == 0 or frame_from_str.get() == '0' or event.num == 2:
         frame_from_str.set(CurrentFrame)
     else:
         select_scale_frame(frame_from_str.get())
@@ -1883,7 +1907,7 @@ def update_frame_from(event):
 def update_frame_to(event):
     global frame_to_str, frame_slider
     global CurrentFrame
-    if len(frame_to_str.get()) == 0 or event.num == 2:
+    if len(frame_to_str.get()) == 0 or frame_to_str.get() == '0' or event.num == 2:
         frame_to_str.set(CurrentFrame)
     else:
         select_scale_frame(frame_to_str.get())
@@ -2120,15 +2144,15 @@ def cleanup_bad_frame_list(limit):
 
 
 def get_bad_frame_list_filename(with_timestamp = False, with_wildcards = False):
-    # Set filename
+    # Set filename to framer source folder
     bad_frame_list_name = f"{os.path.split(SourceDir)[-1]}"
-    bad_frame_list_filename = f"AfterScan_bad_frame_list.{bad_frame_list_name}"
+    bad_frame_list_filename = f"{bad_frame_list_name}"
     if with_timestamp:
         if not with_wildcards:
             bad_frame_list_filename += datetime.now().strftime("_%Y%m%d_%H%M%S")
         else:
             bad_frame_list_filename += '*'
-    bad_frame_list_filename += ".json"
+    bad_frame_list_filename += ".badframes.json"
     if with_timestamp:
         bad_frame_list_filename += ".bak"
     return os.path.join(resources_dir, bad_frame_list_filename)
@@ -2148,7 +2172,6 @@ def load_bad_frame_list():
     global bad_frame_list, current_bad_frame_index
 
     full_path_bad_frame_list_filename = get_bad_frame_list_filename()
-    logging.debug(f"Loading bad frame list for {full_path_bad_frame_list_filename}, list length is {len(bad_frame_list)}, current index is {current_bad_frame_index}")
 
     # To read (deserialize) the list back, convert elements to dictionary if required
     if os.path.isfile(full_path_bad_frame_list_filename):  # If hdr frames exist, add them
@@ -2159,10 +2182,9 @@ def load_bad_frame_list():
                 bad_frame_list.append({'frame_idx': bad_frame[0], 'x': bad_frame[1], 'y': bad_frame[2], 'threshold': bad_frame[3], 'original_threshold': bad_frame[3], 'is_frame_saved': bad_frame[4]})
         else:
             bad_frame_list = aux_list
+        logging.debug(f"Loaded bad frame list for {full_path_bad_frame_list_filename}, list length is {len(bad_frame_list)}")
 
-    if current_bad_frame_index >= len(bad_frame_list):
-        logging.debug(f"Loaded bad frame list ({full_path_bad_frame_list_filename}) is empty, resetting counter from {current_bad_frame_index} to zero")
-        current_bad_frame_index = -1
+    current_bad_frame_index = -1
     FrameSync_Viewer_popup_refresh()
 
 
@@ -4256,7 +4278,7 @@ def stabilize_image(frame_idx, img, img_ref, offset_x = 0, offset_y = 0, img_ref
                         win.bell()
             if GenerateCsv:
                 CsvFile.write('%i, %i, %i\n' % (first_absolute_frame+frame_idx, missing_rows, int(match_level*100)))
-    if match_level < 0.7:   # If match level is too bad, revert to simple algorithm
+    if match_level < 0.4:   # If match level is too bad, revert to simple algorithm
         move_x, move_y = calculate_frame_displacement_simple(frame_idx, img)
     # Create the translation matrix using move_x and move_y (NumPy array): This is the actual stabilization
     # We double-check the check box since this function might be called just to debug template detection
@@ -4652,6 +4674,8 @@ def start_convert():
     else:
         if not skip_frame_regeneration.get() and not delete_detected_bad_frames():
             return
+        # Enforce minimum value for Gamma in case user clicks starts rigth after having manually entered a zero in GC box
+        gamma_enforce_min_value()
         # Save current project status
         save_general_config()
         save_project_config()
@@ -4758,7 +4782,7 @@ def generation_exit(success = True):
     global ConvertLoopRunning
     global Go_btn, save_bg, save_fg
     global BatchJobRunning
-    global job_list, CurrentJobEntry, job_list_listbox
+    global job_list, CurrentJobEntry, job_list_treeview
 
     go_suspend = False
     stop_batch = False
@@ -4767,19 +4791,19 @@ def generation_exit(success = True):
         if ConvertLoopExitRequested or CurrentJobEntry == -1:
             stop_batch = True
             if (CurrentJobEntry != -1):
-                idx = search_job_name_in_job_listbox(CurrentJobEntry)
-                if idx != -1:
-                    job_list_listbox.itemconfig(idx, fg='black')
+                item_id = search_job_name_in_job_treeview(CurrentJobEntry)
+                if item_id != -1:
+                    job_list_treeview.item(item_id, tags=("pending",))
         else:
             if success:
                 job_list[CurrentJobEntry]['done'] = True    # Flag as done
-                idx = search_job_name_in_job_listbox(CurrentJobEntry)
-                if idx != -1:
-                    job_list_listbox.itemconfig(idx, fg='green')
+                item_id = search_job_name_in_job_treeview(CurrentJobEntry)
+                if item_id != -1:
+                    job_list_treeview.item(item_id, tags=("done",))
             else:
-                idx = search_job_name_in_job_listbox(CurrentJobEntry)
-                if idx != -1:
-                    job_list_listbox.itemconfig(idx, fg='black')
+                item_id = search_job_name_in_job_treeview(CurrentJobEntry)
+                if item_id != -1:
+                    job_list_treeview.item(item_id, tags=("pending",))
             if suspend_on_completion.get() == 'job_completion':
                 stop_batch = True # Exit convert loop before suspend
                 go_suspend = True
@@ -5405,6 +5429,33 @@ Application top level functions
 ###############################
 """
 
+# Validation function for different widgets
+def validate_entry_length(P, widget_name):
+    max_lengths = {
+        "video_filename": 100,  # First Entry widget (Tkinter auto-names widgets)
+        "video_title": 100,   # Second Entry widget
+    }
+
+    max_length = max_lengths.get(widget_name.split(".")[-1], 10)  # Default to 10 if not found
+    if len(P) > max_length:
+        tk.messagebox.showerror("Error!",
+                            f"Maximum length for this field is {max_length}")
+        return 
+    return len(P) <= max_length
+
+
+def gamma_enforce_min_value(event=None):
+    """Ensure value is strictly greater than zero when focus is lost."""
+    try:
+        value = float(gamma_correction_spinbox.get())
+        if value <= 0:
+            gamma_correction_spinbox.delete(0, tk.END)
+            gamma_correction_spinbox.insert(0, "0.1")  # Reset to smallest valid value
+    except ValueError:
+        gamma_correction_spinbox.delete(0, tk.END)
+        gamma_correction_spinbox.insert(0, "0.1")  # Reset if input is completely invalid
+
+
 def multiprocessing_init():
     global num_threads
     global frame_encoding_queue, subprocess_event_queue
@@ -5574,8 +5625,21 @@ def afterscan_init():
 def display_window_title():
     title = f"{__module__} {__version__}"
     if JobListFilename != default_job_list_filename:
-        title += f" - {os.path.split(JobListFilename)[1][:-5]}"
+        aux = os.path.split(JobListFilename)[1]
+        if aux.endswith('.json'):
+            aux = aux.removesuffix('.json')
+        if aux.endswith('.joblist'):
+            aux = aux.removesuffix('.joblist')
+        title += f" - {aux}"
     win.title(title)  # setting title of the window
+
+
+# To avoi dgap in the right of last column, adjust last column width once
+def adjust_last_column():
+    total_width = job_list_treeview.winfo_width()
+    other_columns_width = sum(job_list_treeview.column(col, "width") for col in job_list_treeview["columns"][:-1])
+    last_col = job_list_treeview["columns"][-1]
+    job_list_treeview.column(last_col, width=max(100, total_width - other_columns_width))    
 
 
 def build_ui():
@@ -5613,7 +5677,7 @@ def build_ui():
     global skip_frame_regeneration
     global frame_slider, selected_frame_time, CurrentFrame, frame_selected, selected_frame_number, selected_frame_index
     global film_type
-    global job_list_listbox, job_list_listbox_disabled
+    global job_list_treeview, job_list_listbox_disabled
     global app_status_label
     global PreviewWidth, PreviewHeight
     global left_area_frame
@@ -5639,6 +5703,9 @@ def build_ui():
     menu_bar = tk.Menu(win)
     win.config(menu=menu_bar)
     
+    # Register max length validation function
+    vcmd = (win.register(validate_entry_length), "%P", "%W")  # Pass widget name (%W)
+
     # File menu
     file_menu = tk.Menu(menu_bar, tearoff=0)
     menu_bar.add_cascade(label="File", menu=file_menu)
@@ -6000,7 +6067,9 @@ def build_ui():
     gamma_correction_spinbox = tk.Spinbox(postprocessing_frame, width=3,
         textvariable=gamma_correction_str, from_=0.1, to=4, format="%.1f", increment=0.1, font=("Arial", FontSize))
     gamma_correction_spinbox.grid(row=postprocessing_row, column=2, sticky=E)
-    as_tooltips.add(gamma_correction_spinbox, "Gamma correction value (default is 2.2)")
+    as_tooltips.add(gamma_correction_spinbox, "Gamma correction value (default is 2.2, has to be greater than zero)")
+    # Bind focus-out event to enforce the minimum value
+    gamma_correction_spinbox.bind("<FocusOut>", gamma_enforce_min_value)
 
     postprocessing_row += 1
 
@@ -6081,7 +6150,9 @@ def build_ui():
     video_filename_str = StringVar()
     video_filename_label = Label(video_frame, text='Video filename:', font=("Arial", FontSize))
     video_filename_label.grid(row=video_row, column=0, sticky=W, padx=5)
-    video_filename_name = Entry(video_frame, textvariable=video_filename_str, width=26 if BigSize else 26, borderwidth=1, font=("Arial", FontSize))
+    video_filename_name = Entry(video_frame, textvariable=video_filename_str, name="video_filename", 
+                                validate="key", validatecommand=vcmd,
+                                width=26 if BigSize else 26, borderwidth=1, font=("Arial", FontSize))
     video_filename_name.grid(row=video_row, column=1, columnspan=2, sticky=W, padx=5)
     video_filename_name.bind('<<Paste>>', lambda event, entry=video_filename_name: on_paste_all_entries(event, entry))
     as_tooltips.add(video_filename_name, "Filename of video to be created")
@@ -6092,7 +6163,9 @@ def build_ui():
     video_title_str = StringVar()
     video_title_label = Label(video_frame, text='Video title:', font=("Arial", FontSize))
     video_title_label.grid(row=video_row, column=0, sticky=W, padx=5)
-    video_title_name = Entry(video_frame, textvariable=video_title_str, width=26 if BigSize else 26, borderwidth=1, font=("Arial", FontSize))
+    video_title_name = Entry(video_frame, textvariable=video_title_str, name="video_title", 
+                             validate="key", validatecommand=vcmd,
+                             width=26 if BigSize else 26, borderwidth=1, font=("Arial", FontSize))
     video_title_name.grid(row=video_row, column=1, columnspan=2, sticky=W, padx=5)
     video_title_name.bind('<<Paste>>', lambda event, entry=video_title_name: on_paste_all_entries(event, entry))
     as_tooltips.add(video_title_name, "Video title. If entered, a simple title sequence will be generated at the start of the video, using a sequence randomly selected from the same video, running at half speed")
@@ -6235,35 +6308,49 @@ def build_ui():
         as_tooltips.add(display_template_popup_btn, "Display popup window with dynamic debug information.Useful for developers only")
 
     # Define job list area ***************************************************
-    job_list_frame = LabelFrame(left_area_frame,
+    # Replace listbox with treeview
+    # Create a frame to hold Treeview and scrollbars
+    job_list_frame = ttk.LabelFrame(left_area_frame,
                              text='Job List',
-                             width=67, height=8, font=("Arial", FontSize-2))
+                             width=67, height=8)
     job_list_frame.pack(side=TOP, padx=2, pady=2, anchor=W)
 
-    # job listbox
-    job_list_listbox = Listbox(job_list_frame, width=60 if BigSize else 60, height=13 if BigSize else 13, font=("DejaVu Sans Mono", FontSize))
-    job_list_listbox.grid(column=0, row=0, padx=5, pady=2, ipadx=5)
-    job_list_listbox.bind("<Delete>", job_list_delete_current)
-    job_list_listbox.bind("<Return>", job_list_load_current)
-    job_list_listbox.bind("<KP_Enter>", job_list_load_current)
-    job_list_listbox.bind("<Double - Button - 1>", job_list_load_current)
-    job_list_listbox.bind("r", job_list_rerun_current)
-    job_list_listbox.bind('<<ListboxSelect>>', job_list_process_selection)
-    job_list_listbox.bind("u", job_list_move_up)
-    job_list_listbox.bind("d", job_list_move_down)
-    job_list_listbox_disabled = False   # to prevent processing clicks on listbox, as disabling it will prevent checkign status of each job
+    # Create Treeview with a single column
+    job_list_treeview = ttk.Treeview(job_list_frame, columns=("name","description",), show="headings")
+
+    # Define the single column
+    job_list_treeview.heading("name", text="Name")
+    job_list_treeview.heading("description", text="Description")
+    job_list_treeview.column("name", anchor="w", width=200, minwidth=200, stretch=False)
+    job_list_treeview.column("description", anchor="w", width=340, minwidth=340, stretch=False)
 
     # job listbox scrollbars
-    job_list_listbox_scrollbar_y = Scrollbar(job_list_frame, orient="vertical")
-    job_list_listbox_scrollbar_y.config(command=job_list_listbox.yview)
+    job_list_listbox_scrollbar_y = ttk.Scrollbar(job_list_frame, orient="vertical", command=job_list_treeview.yview)
+    job_list_treeview.configure(yscrollcommand=job_list_listbox_scrollbar_y.set)
     job_list_listbox_scrollbar_y.grid(row=0, column=1, sticky=NS)
-    job_list_listbox_scrollbar_x = Scrollbar(job_list_frame, orient="horizontal")
-    job_list_listbox_scrollbar_x.config(command=job_list_listbox.xview)
+    job_list_listbox_scrollbar_x = ttk.Scrollbar(job_list_frame, orient="horizontal", command=job_list_treeview.xview)
+    job_list_treeview.configure(xscrollcommand=job_list_listbox_scrollbar_x.set)
     job_list_listbox_scrollbar_x.grid(row=1, column=0, columnspan=1, sticky=EW)
 
-    job_list_listbox.config(xscrollcommand=job_list_listbox_scrollbar_x.set)
-    job_list_listbox.config(yscrollcommand=job_list_listbox_scrollbar_y.set)
+    # Layout
+    job_list_treeview.grid(column=0, row=0, padx=5, pady=2, ipadx=5)
 
+    # Define tags for different row colors
+    job_list_treeview.tag_configure("pending", foreground="black")
+    job_list_treeview.tag_configure("ongoing", foreground="blue")
+    job_list_treeview.tag_configure("done", foreground="green")
+
+    # Bind the keys to be used alog
+    job_list_treeview.bind("<Delete>", job_list_delete_current)
+    job_list_treeview.bind("<Return>", job_list_load_current)
+    job_list_treeview.bind("<KP_Enter>", job_list_load_current)
+    job_list_treeview.bind("<Double - Button - 1>", job_list_load_current)
+    job_list_treeview.bind("r", job_list_rerun_current)
+    job_list_treeview.bind('<<ListboxSelect>>', job_list_process_selection)
+    job_list_treeview.bind("u", job_list_move_up)
+    job_list_treeview.bind("d", job_list_move_down)
+    job_list_listbox_disabled = False   # to prevent processing clicks on listbox, as disabling it will prevent checkign status of each job
+    
     # Define job list button area
     job_list_btn_frame = Frame(job_list_frame,
                              width=50, height=8)
@@ -6598,6 +6685,8 @@ def main(argv):
 
     get_source_dir_file_list()
     get_target_dir_file_list()
+
+    adjust_last_column()
 
     # If Templates folder do not exist (introduced with AfterScan 1.12), copy over files from temp folder
     if copy_templates_from_temp:
