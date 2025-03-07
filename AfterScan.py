@@ -20,9 +20,9 @@ __copyright__ = "Copyright 2024, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
 __module__ = "AfterScan"
-__version__ = "1.20.12"
+__version__ = "1.20.13"
 __data_version__ = "1.0"
-__date__ = "2025-03-05"
+__date__ = "2025-03-07"
 __version_highlight__ = "Fix bug when loading/saving job lists"
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
@@ -109,7 +109,8 @@ project_config_basename = "AfterScan-project.json"
 project_config_filename = ""
 project_config_from_file = True
 project_name = "No Project"
-default_job_list_filename = os.path.join(script_dir, "AfterScan_job_list.json")
+default_job_list_filename_legacy = os.path.join(script_dir, "AfterScan_job_list.json")
+default_job_list_filename = os.path.join(script_dir, "AfterScan.joblist.json")
 JobListFilename = default_job_list_filename
 job_list_hash = None    # To determine if job list has changed since loaded
 temp_dir = os.path.join(script_dir, "temp")
@@ -235,6 +236,7 @@ RotationAngle = 0.0
 StabilizeAreaDefined = False
 StabilizationThreshold = 220.0
 StabilizationThreshold_default = StabilizationThreshold
+
 hole_search_area_adjustment_pending = False
 bad_frame_list = []     # List of tuples (5 elements each: Frame index, x offset, y offset, stabilization threshold, is frame saved)
 # To migrate content of bad_frame_list to dictionaries (instead of smaller lists)
@@ -1075,8 +1077,8 @@ Job list support functions
 ##########################
 """
 
-JOB_LIST_NAME_LENGTH = 25
-JOB_LIST_DESCRIPTION_LENGTH = 50
+JOB_LIST_NAME_LENGTH = 100
+JOB_LIST_DESCRIPTION_LENGTH = 100
 
 def job_list_process_selection(evt):
     global job_list
@@ -1326,12 +1328,16 @@ def save_named_job_list():
         initialdir=script_dir,
         defaultextension=".json",
         initialfile=JobListFilename,
-        filetypes=[("JSON files", "*.json")],
+        filetypes=[("Joblist JSON files", "*.joblist.json"), ("JSON files", "*.json")],
         title="Select file to save job list")
     if len(aux_file) > 0:
         job_list_hash = generate_dict_hash(job_list)
-        if aux_file[-5:] != '.json':
-            aux_file = aux_file + '.json'
+        # Remove only the exact suffix if present
+        if not aux_file.endswith(".joblist.json"):
+            # Remove .json or .joblist if they exist separately
+            aux_file = aux_file.removesuffix(".json").removesuffix(".joblist")
+            # Append the correct suffix
+            aux_file = f"{aux_file}.joblist.json"
         with open(aux_file, 'w+') as f:
             json.dump(job_list, f, indent=4)
         JobListFilename = aux_file
@@ -1353,7 +1359,7 @@ def load_named_job_list():
     aux_file = filedialog.askopenfilename(
         initialdir=script_dir,
         defaultextension=".json",
-        filetypes=[("JSON files", "*.json")],
+        filetypes=[("Joblist JSON files", "*.joblist.json"), ("JSON files", "*.json")],
         title="Select file to retrieve job list")
     if len(aux_file) > 0:
         load_job_list(aux_file)
@@ -1375,7 +1381,11 @@ def load_job_list(filename = None):
     global job_list, default_job_list_filename, job_list_listbox, job_list_hash
 
     if filename is None:
-        filename = default_job_list_filename
+        if not os.path.isfile(default_job_list_filename):   
+            # if default job list file does not exist, try with legacy one (before 1.20.13)
+            filename = default_job_list_filename_legacy
+        else:
+            filename = default_job_list_filename
 
     display_window_title()  # setting title of the window
 
@@ -1873,7 +1883,7 @@ def update_frame_from(event):
     global frame_from_str, frame_slider
     global CurrentFrame
     
-    if len(frame_from_str.get()) == 0 or event.num == 2:
+    if len(frame_from_str.get()) == 0 or frame_from_str.get() == '0' or event.num == 2:
         frame_from_str.set(CurrentFrame)
     else:
         select_scale_frame(frame_from_str.get())
@@ -1883,7 +1893,7 @@ def update_frame_from(event):
 def update_frame_to(event):
     global frame_to_str, frame_slider
     global CurrentFrame
-    if len(frame_to_str.get()) == 0 or event.num == 2:
+    if len(frame_to_str.get()) == 0 or frame_to_str.get() == '0' or event.num == 2:
         frame_to_str.set(CurrentFrame)
     else:
         select_scale_frame(frame_to_str.get())
@@ -2120,15 +2130,15 @@ def cleanup_bad_frame_list(limit):
 
 
 def get_bad_frame_list_filename(with_timestamp = False, with_wildcards = False):
-    # Set filename
+    # Set filename to framer source folder
     bad_frame_list_name = f"{os.path.split(SourceDir)[-1]}"
-    bad_frame_list_filename = f"AfterScan_bad_frame_list.{bad_frame_list_name}"
+    bad_frame_list_filename = f"{bad_frame_list_name}"
     if with_timestamp:
         if not with_wildcards:
             bad_frame_list_filename += datetime.now().strftime("_%Y%m%d_%H%M%S")
         else:
             bad_frame_list_filename += '*'
-    bad_frame_list_filename += ".json"
+    bad_frame_list_filename += ".badframes.json"
     if with_timestamp:
         bad_frame_list_filename += ".bak"
     return os.path.join(resources_dir, bad_frame_list_filename)
@@ -2148,7 +2158,6 @@ def load_bad_frame_list():
     global bad_frame_list, current_bad_frame_index
 
     full_path_bad_frame_list_filename = get_bad_frame_list_filename()
-    logging.debug(f"Loading bad frame list for {full_path_bad_frame_list_filename}, list length is {len(bad_frame_list)}, current index is {current_bad_frame_index}")
 
     # To read (deserialize) the list back, convert elements to dictionary if required
     if os.path.isfile(full_path_bad_frame_list_filename):  # If hdr frames exist, add them
@@ -2159,10 +2168,9 @@ def load_bad_frame_list():
                 bad_frame_list.append({'frame_idx': bad_frame[0], 'x': bad_frame[1], 'y': bad_frame[2], 'threshold': bad_frame[3], 'original_threshold': bad_frame[3], 'is_frame_saved': bad_frame[4]})
         else:
             bad_frame_list = aux_list
+        logging.debug(f"Loaded bad frame list for {full_path_bad_frame_list_filename}, list length is {len(bad_frame_list)}")
 
-    if current_bad_frame_index >= len(bad_frame_list):
-        logging.debug(f"Loaded bad frame list ({full_path_bad_frame_list_filename}) is empty, resetting counter from {current_bad_frame_index} to zero")
-        current_bad_frame_index = -1
+    current_bad_frame_index = -1
     FrameSync_Viewer_popup_refresh()
 
 
@@ -4256,7 +4264,7 @@ def stabilize_image(frame_idx, img, img_ref, offset_x = 0, offset_y = 0, img_ref
                         win.bell()
             if GenerateCsv:
                 CsvFile.write('%i, %i, %i\n' % (first_absolute_frame+frame_idx, missing_rows, int(match_level*100)))
-    if match_level < 0.7:   # If match level is too bad, revert to simple algorithm
+    if match_level < 0.4:   # If match level is too bad, revert to simple algorithm
         move_x, move_y = calculate_frame_displacement_simple(frame_idx, img)
     # Create the translation matrix using move_x and move_y (NumPy array): This is the actual stabilization
     # We double-check the check box since this function might be called just to debug template detection
@@ -4652,6 +4660,8 @@ def start_convert():
     else:
         if not skip_frame_regeneration.get() and not delete_detected_bad_frames():
             return
+        # Enforce minimum value for Gamma in case user clicks starts rigth after having manually entered a zero in GC box
+        gamma_enforce_min_value()
         # Save current project status
         save_general_config()
         save_project_config()
@@ -5405,6 +5415,33 @@ Application top level functions
 ###############################
 """
 
+# Validation function for different widgets
+def validate_entry_length(P, widget_name):
+    max_lengths = {
+        "video_filename": 100,  # First Entry widget (Tkinter auto-names widgets)
+        "video_title": 100,   # Second Entry widget
+    }
+
+    max_length = max_lengths.get(widget_name.split(".")[-1], 10)  # Default to 10 if not found
+    if len(P) > max_length:
+        tk.messagebox.showerror("Error!",
+                            f"Maximum length for this field is {max_length}")
+        return 
+    return len(P) <= max_length
+
+
+def gamma_enforce_min_value(event=None):
+    """Ensure value is strictly greater than zero when focus is lost."""
+    try:
+        value = float(gamma_correction_spinbox.get())
+        if value <= 0:
+            gamma_correction_spinbox.delete(0, tk.END)
+            gamma_correction_spinbox.insert(0, "0.1")  # Reset to smallest valid value
+    except ValueError:
+        gamma_correction_spinbox.delete(0, tk.END)
+        gamma_correction_spinbox.insert(0, "0.1")  # Reset if input is completely invalid
+
+
 def multiprocessing_init():
     global num_threads
     global frame_encoding_queue, subprocess_event_queue
@@ -5639,6 +5676,9 @@ def build_ui():
     menu_bar = tk.Menu(win)
     win.config(menu=menu_bar)
     
+    # Register max length validation function
+    vcmd = (win.register(validate_entry_length), "%P", "%W")  # Pass widget name (%W)
+
     # File menu
     file_menu = tk.Menu(menu_bar, tearoff=0)
     menu_bar.add_cascade(label="File", menu=file_menu)
@@ -6000,7 +6040,9 @@ def build_ui():
     gamma_correction_spinbox = tk.Spinbox(postprocessing_frame, width=3,
         textvariable=gamma_correction_str, from_=0.1, to=4, format="%.1f", increment=0.1, font=("Arial", FontSize))
     gamma_correction_spinbox.grid(row=postprocessing_row, column=2, sticky=E)
-    as_tooltips.add(gamma_correction_spinbox, "Gamma correction value (default is 2.2)")
+    as_tooltips.add(gamma_correction_spinbox, "Gamma correction value (default is 2.2, has to be greater than zero)")
+    # Bind focus-out event to enforce the minimum value
+    gamma_correction_spinbox.bind("<FocusOut>", gamma_enforce_min_value)
 
     postprocessing_row += 1
 
@@ -6081,7 +6123,9 @@ def build_ui():
     video_filename_str = StringVar()
     video_filename_label = Label(video_frame, text='Video filename:', font=("Arial", FontSize))
     video_filename_label.grid(row=video_row, column=0, sticky=W, padx=5)
-    video_filename_name = Entry(video_frame, textvariable=video_filename_str, width=26 if BigSize else 26, borderwidth=1, font=("Arial", FontSize))
+    video_filename_name = Entry(video_frame, textvariable=video_filename_str, name="video_filename", 
+                                validate="key", validatecommand=vcmd,
+                                width=26 if BigSize else 26, borderwidth=1, font=("Arial", FontSize))
     video_filename_name.grid(row=video_row, column=1, columnspan=2, sticky=W, padx=5)
     video_filename_name.bind('<<Paste>>', lambda event, entry=video_filename_name: on_paste_all_entries(event, entry))
     as_tooltips.add(video_filename_name, "Filename of video to be created")
@@ -6092,7 +6136,9 @@ def build_ui():
     video_title_str = StringVar()
     video_title_label = Label(video_frame, text='Video title:', font=("Arial", FontSize))
     video_title_label.grid(row=video_row, column=0, sticky=W, padx=5)
-    video_title_name = Entry(video_frame, textvariable=video_title_str, width=26 if BigSize else 26, borderwidth=1, font=("Arial", FontSize))
+    video_title_name = Entry(video_frame, textvariable=video_title_str, name="video_title", 
+                             validate="key", validatecommand=vcmd,
+                             width=26 if BigSize else 26, borderwidth=1, font=("Arial", FontSize))
     video_title_name.grid(row=video_row, column=1, columnspan=2, sticky=W, padx=5)
     video_title_name.bind('<<Paste>>', lambda event, entry=video_title_name: on_paste_all_entries(event, entry))
     as_tooltips.add(video_title_name, "Video title. If entered, a simple title sequence will be generated at the start of the video, using a sequence randomly selected from the same video, running at half speed")
