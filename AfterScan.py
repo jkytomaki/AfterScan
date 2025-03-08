@@ -20,9 +20,9 @@ __copyright__ = "Copyright 2024, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
 __module__ = "AfterScan"
-__version__ = "1.20.14"
+__version__ = "1.20.15"
 __data_version__ = "1.0"
-__date__ = "2025-03-07"
+__date__ = "2025-03-08"
 __version_highlight__ = "Replace Listbox with ttk Treeview"
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
@@ -1152,10 +1152,13 @@ def job_list_add_current():
             description = description + ", Low Q. video"
         else:
             description = description + ", medium Q. video"
+        if skip_frame_regeneration.get():
+            description = description + ", skip FG"
+        description = description + f", {VideoFps} FPS"
+        if resolution_dropdown_selected.get():
+            description = description + ", " + resolution_dropdown_selected.get()
     else:
         description = description + ", no video"
-    if resolution_dropdown_selected.get():
-        description = description + ", " + resolution_dropdown_selected.get()
 
     save_project = True
     item_id = None
