@@ -20,10 +20,10 @@ __copyright__ = "Copyright 2024, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
 __module__ = "AfterScan"
-__version__ = "1.20.15"
+__version__ = "1.20.16"
 __data_version__ = "1.0"
-__date__ = "2025-03-08"
-__version_highlight__ = "Replace Listbox with ttk Treeview"
+__date__ = "2025-03-12"
+__version_highlight__ = "Add stabilization shift, to compensate for films not vertically simmetrically aligned"
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
 __status__ = "Development"
@@ -257,6 +257,7 @@ CropBottomRight = (0, 0)
 ## TemplateTopLeft = (0, 0)
 ## TemplateBottomRight = (0, 0)
 max_loop_count = 0
+StabilizationShift = 0
 
 Force43 = False
 Force169 = False
@@ -579,6 +580,8 @@ def set_project_defaults():
     project_config["VideoTitle"] = ""
     video_title_str.set(project_config["VideoTitle"])
     project_config["FillBorders"] = False
+    project_config["StabilizationShift"] = 0
+    stabilization_shift_value.set(0)
 
 
 def sort_nested_json(data):
@@ -773,6 +776,7 @@ def save_project_config():
     project_config["CurrentBadFrameIndex"] = current_bad_frame_index
     if StabilizeAreaDefined:
         project_config["PerformStabilization"] = perform_stabilization.get()
+        project_config["StabilizationShift"] = stabilization_shift_value.get()
         if not encode_all_frames.get():
             project_config["HolePos"] = template_list.get_active_position()
             project_config["HoleScale"] = template_list.get_active_scale()
@@ -854,6 +858,7 @@ def decode_project_config():
     global perform_denoise, perform_sharpness, perform_gamma_correction, gamma_correction_str
     global high_sensitive_bad_frame_detection, current_bad_frame_index
     global precise_template_match
+    global StabilizationShift
 
     if SourceDir != "" and len(bad_frame_list) > 0:     # This function will load a new bad frame list, save current if it exists
         save_bad_frame_list()
@@ -1032,6 +1037,12 @@ def decode_project_config():
         perform_stabilization.set(project_config["PerformStabilization"])
     else:
         perform_stabilization.set(False)
+
+    if 'StabilizationShift' in project_config:
+        stabilization_shift_value.set(project_config["StabilizationShift"])
+        StabilizationShift = stabilization_shift_value.get()
+    else:
+        stabilization_shift_value.set(0)
 
     if 'PerformRotation' in project_config:
         perform_rotation.set(project_config["PerformRotation"])
@@ -1835,6 +1846,9 @@ def widget_status_update(widget_state=0, button_action=0):
         perform_fill_dumb_rb.config(state=widget_state if not is_demo else NORMAL)
         extended_stabilization_checkbox.config(state=widget_state if perform_stabilization.get() else DISABLED)
         custom_stabilization_btn.config(state=widget_state)
+        stabilization_threshold_match_label.config(state=widget_state if perform_stabilization.get() else DISABLED)
+        stabilization_shift_label.config(state=widget_state if perform_stabilization.get() else DISABLED)
+        stabilization_shift_spinbox.config(state=widget_state if perform_stabilization.get() else DISABLED)
         low_contrast_custom_template_checkbox.config(state=widget_state)
         if ExpertMode:
             stabilization_threshold_spinbox.config(state=widget_state)
@@ -1987,6 +2001,14 @@ def extended_stabilization_selection():
     hole_search_area_adjustment_pending = True
     win.after(5, scale_display_update)
     widget_status_update(NORMAL)
+    FrameSync_Viewer_popup_update_widgets(NORMAL)
+
+
+def select_stabilization_shift():
+    global StabilizationShift
+    StabilizationShift = stabilization_shift_value.get()
+    project_config["StabilizationShift"] = StabilizationShift
+    win.after(5, scale_display_update)
     FrameSync_Viewer_popup_update_widgets(NORMAL)
 
 
@@ -4296,8 +4318,8 @@ def stabilize_image(frame_idx, img, img_ref, offset_x = 0, offset_y = 0, img_ref
                 missing_fragment = translated_image[CropBottomRight[1]-missing_rows:CropBottomRight[1],0:width]
             elif missing_bottom < 0:
                 missing_fragment = translated_image[CropTopLeft[1]:CropTopLeft[1]+missing_rows, 0:width]
-
-        translated_image = shift_image(img, width, height, move_x, move_y)
+        # Add vertical offset as decided by user, to compensate for vertically assimmetrical films
+        translated_image = shift_image(img, width, height, move_x, move_y + StabilizationShift)
         # Check if frame fill is enabled, and required: Add missing fragment
         # Check if there is a gap in the frame, if so, and one of the 'fill' functions is enabled, fill accordingly
         if missing_rows > 0 and (ConvertLoopRunning or CorrectLoopRunning):
@@ -5701,6 +5723,7 @@ def build_ui():
     global template_list
     global low_contrast_custom_template
     global display_template_popup_btn
+    global stabilization_shift_value, stabilization_shift_label, stabilization_shift_spinbox
 
     # Menu bar
     menu_bar = tk.Menu(win)
@@ -5997,10 +6020,21 @@ def build_ui():
         postprocessing_frame, text='Extend',
         variable=extended_stabilization, onvalue=True, offvalue=False, width=6,
         command=extended_stabilization_selection, font=("Arial", FontSize))
-    extended_stabilization_checkbox.grid(row=postprocessing_row, column=1, columnspan=1, sticky=W)
-    #extended_stabilization_checkbox.forget()
+    #extended_stabilization_checkbox.grid(row=postprocessing_row, column=1, columnspan=1, sticky=W)
+    extended_stabilization_checkbox.forget()
     as_tooltips.add(extended_stabilization_checkbox, "Extend the area where AfterScan looks for sprocket holes. In some cases this might help")
 
+    # Stabilization shift: Since film might not be centered aroudn hole(s) this gives the option to move it up/down
+    # Spinbox for gamma correction
+    stabilization_shift_label = tk.Label(postprocessing_frame, text='Stabilization shift:',
+                                        width=14, font=("Arial", FontSize))
+    stabilization_shift_label.grid(row=postprocessing_row, column=1, columnspan=1, sticky=E)
+    stabilization_shift_value = tk.IntVar(value=0)
+    stabilization_shift_spinbox = tk.Spinbox(postprocessing_frame, width=4, command=select_stabilization_shift,
+        textvariable=stabilization_shift_value, from_=-150, to=150, increment=-5, font=("Arial", FontSize))
+    stabilization_shift_spinbox.grid(row=postprocessing_row, column=2, sticky=W)
+    as_tooltips.add(stabilization_shift_spinbox, "Allows to move the frame upo or down after stabilization "
+                                "(to compensate for films where the frame is not centered aroudn the hole/holes)")
     postprocessing_row += 1
 
     ### Cropping controls
@@ -6548,6 +6582,7 @@ def main(argv):
     
     LoggingMode = "INFO"
     go_disable_tooptips = False
+    goanyway = False
 
     # Create job dictionary
     # Dictionary fields
@@ -6567,7 +6602,7 @@ def main(argv):
     template_list.add("WB", hole_template_filename_wb, "aux", (0, 0))
     template_list.add("Corner", hole_template_filename_corner, "aux", (0, 0))
 
-    opts, args = getopt.getopt(argv, "hiel:dcst:12nag")
+    opts, args = getopt.getopt(argv, "hiel:dcst:12nabg")
 
     for opt, arg in opts:
         if opt == '-l':
@@ -6593,8 +6628,10 @@ def main(argv):
         elif opt == '-a':
             use_simple_stabilization = True
             print("Old stabilization")
-        elif opt == '-g':
+        elif opt == '-b':
             dev_debug_enabled = True
+        elif opt == '-g':
+            goanyway = True
         elif opt == '-h':
             print("AfterScan")
             print("  -l <log mode>  Set log level:")
@@ -6608,6 +6645,10 @@ def main(argv):
             print("  -1             Initiate on 'small screen' mode (resolution lower than than Full HD)")
             print("  -a             Use simple stabilization algorithm, not requiring templates (but slightly less precise)")
             exit()
+
+    if not goanyway:
+        print("Work in progress, version not usable yet.")
+        return
 
     # Set our CWD to the same folder where the script is. 
     # Otherwise webbrowser failt to launch (cannot open path of the current working directory: Permission denied)
