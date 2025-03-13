@@ -20,10 +20,10 @@ __copyright__ = "Copyright 2024, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
 __module__ = "AfterScan"
-__version__ = "1.20.17"
+__version__ = "1.20.18"
 __data_version__ = "1.0"
 __date__ = "2025-03-13"
-__version_highlight__ = "Update preview with filters (denoise, sharpen, gamma correction) when changing values"
+__version_highlight__ = "Correct canvas size, adjust fonts in small mode (-1)"
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
 __status__ = "Development"
@@ -1293,7 +1293,7 @@ def job_list_rerun_selected():
             entry = normalize_job_name(values[0])  # Get the first element
             job_list[entry]['done'] = not job_list[entry]['done']
             job_list[entry]['attempted'] = job_list[entry]['done']
-            job_list_treeview.item(item_id, tags=("done",) if job_list[entry]['done'] else ("pending",))
+            job_list_treeview.item(item_id, tags=("done","joblist_font",) if job_list[entry]['done'] else ("pending","joblist_font",))
             rerun_job_btn.config(text='Rerun job' if job_list[entry]['done'] else 'Mark as run')
 
 
@@ -1447,7 +1447,7 @@ def load_job_list(filename = None):
         for entry in job_list:
             item_id = search_job_name_in_job_treeview(entry)
             if item_id is not None:
-                job_list_treeview.item(item_id, tags=("done",) if job_list[entry]['done'] else ("pending",))
+                job_list_treeview.item(item_id, tags=("done","joblist_font",) if job_list[entry]['done'] else ("pending","joblist_font",))
 
         job_list_hash = generate_dict_hash(job_list)
     else:   # No job list file. Set empty config to force defaults
@@ -1489,7 +1489,7 @@ def job_processing_loop():
                 job_list_treeview.selection_remove(item_id)  # Unselect each selected item
             item_id = search_job_name_in_job_treeview(entry)
             if item_id is not None:
-                job_list_treeview.item(item_id, tags=("ongoing",))
+                job_list_treeview.item(item_id, tags=("ongoing","joblist_font",))
             CurrentJobEntry = entry
             if 'FrameFrom' in job_list[entry]['project']:
                 CurrentFrame = job_list[entry]['project']['FrameFrom']
@@ -1588,7 +1588,7 @@ def job_list_move_up(event):
                 item = values[0]  # Get the first element
                 if item in job_list:
                     if job_list[item]['done'] == True:
-                        job_list_treeview.item(item_id, tags=("pending",) if job_list[item]['done'] == False else ("done",))
+                        job_list_treeview.item(item_id, tags=("pending","joblist_font",) if job_list[item]['done'] == False else ("done","joblist_font",))
                 sync_job_list_with_treeview()
 
 
@@ -1611,7 +1611,7 @@ def job_list_move_down(event):
                 item = values[0]  # Get the first element
                 if item in job_list:
                     if job_list[item]['done'] == True:
-                        job_list_treeview.item(item_id, tags=("pending",) if job_list[item]['done'] == False else ("done",))
+                        job_list_treeview.item(item_id, tags=("pending","joblist_font",) if job_list[item]['done'] == False else ("done","joblist_font",))
                 sync_job_list_with_treeview()
 
 
@@ -2004,7 +2004,7 @@ def extended_stabilization_selection():
     FrameSync_Viewer_popup_update_widgets(NORMAL)
 
 
-def select_stabilization_shift():
+def select_stabilization_shift(even=None):
     global StabilizationShift
     StabilizationShift = stabilization_shift_value.get()
     project_config["StabilizationShift"] = StabilizationShift
@@ -3188,6 +3188,16 @@ def debug_template_display_frame(canvas, img, x, y, width, height, color):
             logging.error(f"Exception {e} when updating canvas")
 
 
+def load_current_frame_image():
+    # If HDR mode, pick the lightest frame to select rectangle
+    file3 = os.path.join(SourceDir, FrameHdrInputFilenamePattern % (CurrentFrame + 1, 2, file_type))
+    if os.path.isfile(file3):  # If hdr frames exist, add them
+        file = file3
+    else:
+        file = SourceDirFileList[CurrentFrame]
+    return cv2.imread(file, cv2.IMREAD_UNCHANGED)
+
+
 def scale_display_update(offset_x = 0, offset_y = 0, update_filters=True):
     global win
     global frame_scale_refresh_done, frame_scale_refresh_pending
@@ -3197,20 +3207,13 @@ def scale_display_update(offset_x = 0, offset_y = 0, update_filters=True):
     global SourceDirFileList
     global FrameSync_Viewer_opened
 
-    frame_to_display = CurrentFrame
-    if frame_to_display >= len(SourceDirFileList):
+    if CurrentFrame >= len(SourceDirFileList):
         return
-    # If HDR mode, pick the lightest frame to select rectangle
-    file3 = os.path.join(SourceDir, FrameHdrInputFilenamePattern % (frame_to_display + 1, 2, file_type))
-    if os.path.isfile(file3):  # If hdr frames exist, add them
-        file = file3
-    else:
-        file = SourceDirFileList[frame_to_display]
-    img = cv2.imread(file, cv2.IMREAD_UNCHANGED)
+    img = load_current_frame_image()
     if img is None:
         frame_scale_refresh_done = True
         logging.error(
-            "Error reading frame %i, skipping", frame_to_display)
+            "Error reading frame %i, skipping", CurrentFrame)
     else:
         if hole_search_area_adjustment_pending:
             hole_search_area_adjustment_pending = False
@@ -3999,6 +4002,7 @@ def display_image(img):
 
     draw_capture_canvas.create_image(padding_x, padding_y, anchor=NW, image=DisplayableImage)
     draw_capture_canvas.image = DisplayableImage
+
 
 # Display frames while video encoding is ongoing
 # No need to care about sequencing since video encoding process in AfterScan is single threaded
@@ -4840,17 +4844,17 @@ def generation_exit(success = True):
             if (CurrentJobEntry != -1):
                 item_id = search_job_name_in_job_treeview(CurrentJobEntry)
                 if item_id != -1:
-                    job_list_treeview.item(item_id, tags=("pending",))
+                    job_list_treeview.item(item_id, tags=("pending","joblist_font",))
         else:
             if success:
                 job_list[CurrentJobEntry]['done'] = True    # Flag as done
                 item_id = search_job_name_in_job_treeview(CurrentJobEntry)
                 if item_id != -1:
-                    job_list_treeview.item(item_id, tags=("done",))
+                    job_list_treeview.item(item_id, tags=("done","joblist_font",))
             else:
                 item_id = search_job_name_in_job_treeview(CurrentJobEntry)
                 if item_id != -1:
-                    job_list_treeview.item(item_id, tags=("pending",))
+                    job_list_treeview.item(item_id, tags=("pending","joblist_font",))
             if suspend_on_completion.get() == 'job_completion':
                 stop_batch = True # Exit convert loop before suspend
                 go_suspend = True
@@ -5624,14 +5628,14 @@ def afterscan_init():
         BigSize = True
         FontSize = 11
         PreviewWidth = 700
-        PreviewHeight = 540
+        PreviewHeight = 525
         app_width = PreviewWidth + 420
         app_height = PreviewHeight + 330
     else:
         BigSize = False
         FontSize = 8
         PreviewWidth = 500
-        PreviewHeight = 380
+        PreviewHeight = 375
         app_width = PreviewWidth + 380
         app_height = PreviewHeight + 330
 
@@ -5756,21 +5760,26 @@ def build_ui():
 
     # File menu
     file_menu = tk.Menu(menu_bar, tearoff=0)
-    menu_bar.add_cascade(label="File", menu=file_menu)
-    file_menu.add_command(label="Save job list", command=save_named_job_list)
-    file_menu.add_command(label="Load job list", command=load_named_job_list)
+    menu_bar.add_cascade(label="File", menu=file_menu, font=("Arial", FontSize))
+    file_menu.add_command(label="Save job list", command=save_named_job_list, font=("Arial", FontSize))
+    file_menu.add_command(label="Load job list", command=load_named_job_list, font=("Arial", FontSize))
     file_menu.add_separator()  # Optional divider
-    file_menu.add_command(label="Exit", command=exit_app)
+    file_menu.add_command(label="Exit", command=exit_app, font=("Arial", FontSize))
 
     # Help Menu
     help_menu = tk.Menu(menu_bar, tearoff=0)
-    menu_bar.add_cascade(label="Help", menu=help_menu)
-    help_menu.add_command(label="User Guide", command=lambda: webbrowser.open("https://github.com/jareff-g/AfterScan/wiki/AfterScan-user-interface-description"))
-    help_menu.add_command(label="Discord Server", command=lambda: webbrowser.open("https://discord.gg/r2UGkH7qg2"))
-    help_menu.add_command(label="AfterScan Wiki", command=lambda: webbrowser.open("https://github.com/jareff-g/AfterScan/wiki"))
+    menu_bar.add_cascade(label="Help", menu=help_menu, font=("Arial", FontSize))
+    help_menu.add_command(label="User Guide", font=("Arial", FontSize), 
+                          command=lambda: webbrowser.open("https://github.com/jareff-g/AfterScan/wiki/AfterScan-user-interface-description"))
+    help_menu.add_command(label="Discord Server", font=("Arial", FontSize), 
+                          command=lambda: webbrowser.open("https://discord.gg/r2UGkH7qg2"))
+    help_menu.add_command(label="AfterScan Wiki", font=("Arial", FontSize), 
+                          command=lambda: webbrowser.open("https://github.com/jareff-g/AfterScan/wiki"))
     if UserConsent == "no":
-        help_menu.add_command(label="Report AfterScan usage", command=lambda: get_consent(True))
-    help_menu.add_command(label="About AfterScan", command=lambda: webbrowser.open("https://github.com/jareff-g/AfterScan/wiki/AfterScan:-8mm,-Super-8-film-post-scan-utility"))
+        help_menu.add_command(label="Report AfterScan usage", font=("Arial", FontSize), 
+                              command=lambda: get_consent(True))
+    help_menu.add_command(label="About AfterScan", font=("Arial", FontSize), 
+                          command=lambda: webbrowser.open("https://github.com/jareff-g/AfterScan/wiki/AfterScan:-8mm,-Super-8-film-post-scan-utility"))
 
     # Create a frame to add a border to the preview
     left_area_frame = Frame(win)
@@ -6048,15 +6057,16 @@ def build_ui():
 
     # Stabilization shift: Since film might not be centered around hole(s) this gives the option to move it up/down
     # Spinbox for gamma correction
-    stabilization_shift_label = tk.Label(postprocessing_frame, text='Stabilization shift:',
+    stabilization_shift_label = tk.Label(postprocessing_frame, text='Compensation:',
                                         width=14, font=("Arial", FontSize))
     stabilization_shift_label.grid(row=postprocessing_row, column=1, columnspan=1, sticky=E)
     stabilization_shift_value = tk.IntVar(value=0)
     stabilization_shift_spinbox = tk.Spinbox(postprocessing_frame, width=4, command=select_stabilization_shift,
         textvariable=stabilization_shift_value, from_=-150, to=150, increment=-5, font=("Arial", FontSize))
     stabilization_shift_spinbox.grid(row=postprocessing_row, column=2, sticky=W)
-    as_tooltips.add(stabilization_shift_spinbox, "Allows to move the frame upo or down after stabilization "
+    as_tooltips.add(stabilization_shift_spinbox, "Allows to move the frame up or down after stabilization "
                                 "(to compensate for films where the frame is not centered around the hole/holes)")
+    stabilization_shift_spinbox.bind("<FocusOut>", select_stabilization_shift)
     postprocessing_row += 1
 
     ### Cropping controls
@@ -6368,20 +6378,28 @@ def build_ui():
 
     # Define job list area ***************************************************
     # Replace listbox with treeview
+    # Define style for labelframe
+    style = ttk.Style()
+    style.configure("TLabelframe.Label", font=("Arial", FontSize-2))
     # Create a frame to hold Treeview and scrollbars
     job_list_frame = ttk.LabelFrame(left_area_frame,
                              text='Job List',
-                             width=67, height=8)
+                             width=50, height=8)
     job_list_frame.pack(side=TOP, padx=2, pady=2, anchor=W)
 
     # Create Treeview with a single column
     job_list_treeview = ttk.Treeview(job_list_frame, columns=("name","description",), show="headings")
 
+    # Define style for headings
+    style.configure("Treeview.Heading", font=("Arial", FontSize, "bold")) #Change header font.
+
     # Define the single column
+    name_width = 130 if ForceSmallSize else 200
+    description_width = 250 if ForceSmallSize else 340
     job_list_treeview.heading("name", text="Name")
     job_list_treeview.heading("description", text="Description")
-    job_list_treeview.column("name", anchor="w", width=200, minwidth=200, stretch=False)
-    job_list_treeview.column("description", anchor="w", width=340, minwidth=340, stretch=False)
+    job_list_treeview.column("name", anchor="w", width=name_width, minwidth=name_width, stretch=False)
+    job_list_treeview.column("description", anchor="w", width=description_width, minwidth=description_width, stretch=False)
 
     # job listbox scrollbars
     job_list_listbox_scrollbar_y = ttk.Scrollbar(job_list_frame, orient="vertical", command=job_list_treeview.yview)
@@ -6398,6 +6416,7 @@ def build_ui():
     job_list_treeview.tag_configure("pending", foreground="black")
     job_list_treeview.tag_configure("ongoing", foreground="blue")
     job_list_treeview.tag_configure("done", foreground="green")
+    job_list_treeview.tag_configure("joblist_font", font=("Arial", FontSize))
 
     # Bind the keys to be used alog
     job_list_treeview.bind("<Delete>", job_list_delete_current)
