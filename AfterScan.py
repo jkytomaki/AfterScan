@@ -20,10 +20,10 @@ __copyright__ = "Copyright 2024, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
 __module__ = "AfterScan"
-__version__ = "1.20.16"
+__version__ = "1.20.17"
 __data_version__ = "1.0"
-__date__ = "2025-03-12"
-__version_highlight__ = "Add stabilization shift, to compensate for films not vertically simmetrically aligned"
+__date__ = "2025-03-13"
+__version_highlight__ = "Update preview with filters (denoise, sharpen, gamma correction) when changing values"
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
 __status__ = "Development"
@@ -2055,6 +2055,17 @@ def perform_denoise_selection():
         win.after(5, scale_display_update)
 
 
+def perform_gamma_correction_selection():
+    project_config["PerformGammaCorrection"] = perform_gamma_correction.get()
+    if ui_init_done:
+        win.after(5, scale_display_update)
+
+
+def select_gamma_correction_value():
+    if ui_init_done:
+        win.after(5, scale_display_update)
+
+
 def force_4_3_selection():
     global perform_cropping
     global generate_video_checkbox
@@ -2417,7 +2428,7 @@ def FrameSync_Viewer_popup_refresh():
     refresh_current_frame_ui_info(CurrentFrame, first_absolute_frame)
     frame_selected.set(CurrentFrame)
     frame_slider.set(CurrentFrame)
-    scale_display_update(x, y)
+    scale_display_update(x, y, False)
     if FrameSync_Viewer_opened:
         bad_frame_text.set(f"Misaligned frames: {len(bad_frame_list)}")
         corrected_bad_frame_text.set(f"Corrected frames: {count_corrected_bad_frames()}")
@@ -3177,7 +3188,7 @@ def debug_template_display_frame(canvas, img, x, y, width, height, color):
             logging.error(f"Exception {e} when updating canvas")
 
 
-def scale_display_update(offset_x = 0, offset_y = 0):
+def scale_display_update(offset_x = 0, offset_y = 0, update_filters=True):
     global win
     global frame_scale_refresh_done, frame_scale_refresh_pending
     global CurrentFrame
@@ -3209,6 +3220,18 @@ def scale_display_update(offset_x = 0, offset_y = 0):
                 img = rotate_image(img)
             if perform_stabilization.get() or FrameSync_Viewer_opened:
                 img = stabilize_image(CurrentFrame, img, img, offset_x, offset_y)
+            if update_filters:  # Only when changing values in UI, not when moving from frame to frame
+                if perform_denoise.get():
+                    img = denoise_image(img)
+                if perform_sharpness.get():
+                    # Sharpness code taken from https://www.educative.io/answers/how-to-sharpen-a-blurred-image-using-opencv
+                    sharpen_filter = np.array([[-1, -1, -1],
+                                            [-1, 9, -1],
+                                            [-1, -1, -1]])
+                    # applying kernels to the input image to get the sharpened image
+                    img = cv2.filter2D(img, -1, sharpen_filter)
+                if perform_gamma_correction.get():
+                    img = gamma_correct_image(img, float(gamma_correction_str.get()))
         if perform_cropping.get():
             img = crop_image(img, CropTopLeft, CropBottomRight)
         else:
@@ -3217,7 +3240,7 @@ def scale_display_update(offset_x = 0, offset_y = 0):
             display_image(img)
         if frame_scale_refresh_pending:
             frame_scale_refresh_pending = False
-            win.after(100, scale_display_update)
+            win.after(100, scale_display_update, update_filters)
         else:
             frame_scale_refresh_done = True
 
@@ -3241,7 +3264,7 @@ def select_scale_frame(selected_frame):
         if frame_scale_refresh_done:
             frame_scale_refresh_done = False
             frame_scale_refresh_pending = False
-            win.after(5, scale_display_update)
+            win.after(5, scale_display_update, False)
         else:
             frame_scale_refresh_pending = True
 
@@ -3583,7 +3606,6 @@ def select_cropping_area():
     win.update()
 
     RectangleWindowTitle = CropWindowTitle
-
 
     if select_rectangle_area(is_cropping=True):
         CropAreaDefined = True
@@ -6024,7 +6046,7 @@ def build_ui():
     extended_stabilization_checkbox.forget()
     as_tooltips.add(extended_stabilization_checkbox, "Extend the area where AfterScan looks for sprocket holes. In some cases this might help")
 
-    # Stabilization shift: Since film might not be centered aroudn hole(s) this gives the option to move it up/down
+    # Stabilization shift: Since film might not be centered around hole(s) this gives the option to move it up/down
     # Spinbox for gamma correction
     stabilization_shift_label = tk.Label(postprocessing_frame, text='Stabilization shift:',
                                         width=14, font=("Arial", FontSize))
@@ -6034,7 +6056,7 @@ def build_ui():
         textvariable=stabilization_shift_value, from_=-150, to=150, increment=-5, font=("Arial", FontSize))
     stabilization_shift_spinbox.grid(row=postprocessing_row, column=2, sticky=W)
     as_tooltips.add(stabilization_shift_spinbox, "Allows to move the frame upo or down after stabilization "
-                                "(to compensate for films where the frame is not centered aroudn the hole/holes)")
+                                "(to compensate for films where the frame is not centered around the hole/holes)")
     postprocessing_row += 1
 
     ### Cropping controls
@@ -6093,7 +6115,7 @@ def build_ui():
     # Check box to do gamma correction
     perform_gamma_correction = tk.BooleanVar(value=False)
     perform_gamma_correction_checkbox = tk.Checkbutton(
-        postprocessing_frame, text='GC:', variable=perform_gamma_correction,
+        postprocessing_frame, text='GC:', variable=perform_gamma_correction, command=perform_gamma_correction_selection,
         onvalue=True, offvalue=False, font=("Arial", FontSize))
     perform_gamma_correction_checkbox.grid(row=postprocessing_row, column=2, sticky=W)
     perform_gamma_correction_checkbox.config(state=NORMAL)
@@ -6101,7 +6123,7 @@ def build_ui():
 
     # Spinbox for gamma correction
     gamma_correction_str = tk.StringVar(value="2.2")
-    gamma_correction_spinbox = tk.Spinbox(postprocessing_frame, width=3,
+    gamma_correction_spinbox = tk.Spinbox(postprocessing_frame, width=3, command=select_gamma_correction_value,
         textvariable=gamma_correction_str, from_=0.1, to=4, format="%.1f", increment=0.1, font=("Arial", FontSize))
     gamma_correction_spinbox.grid(row=postprocessing_row, column=2, sticky=E)
     as_tooltips.add(gamma_correction_spinbox, "Gamma correction value (default is 2.2, has to be greater than zero)")
