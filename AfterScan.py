@@ -6624,7 +6624,7 @@ def main(argv):
     template_list.add("WB", hole_template_filename_wb, "aux", (0, 0))
     template_list.add("Corner", hole_template_filename_corner, "aux", (0, 0))
 
-    opts, args = getopt.getopt(argv, "hiel:dcst:12nabg")
+    opts, args = getopt.getopt(argv, "hiel:dcst:12nabg", ["goanyway"])
 
     for opt, arg in opts:
         if opt == '-l':
@@ -6652,7 +6652,7 @@ def main(argv):
             print("Old stabilization")
         elif opt == '-b':
             dev_debug_enabled = True
-        elif opt == '-g':
+        elif opt == '--goanyway':
             goanyway = True
         elif opt == '-h':
             print("AfterScan")
@@ -6670,6 +6670,7 @@ def main(argv):
 
     if not goanyway:
         print("Work in progress, version not usable yet.")
+        tk.messagebox.showerror("WIP", "Work in progress, version not usable yet.")
         return
 
     # Set our CWD to the same folder where the script is. 
