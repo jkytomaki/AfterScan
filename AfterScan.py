@@ -20,10 +20,10 @@ __copyright__ = "Copyright 2024, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
 __module__ = "AfterScan"
-__version__ = "1.20.18"
+__version__ = "1.20.19"
 __data_version__ = "1.0"
-__date__ = "2025-03-13"
-__version_highlight__ = "Correct canvas size, adjust fonts in small mode (-1)"
+__date__ = "2025-03-14"
+__version_highlight__ = "Fix misusage of create_image, replace by itemconfig. Fix issues derived from this change."
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
 __status__ = "Development"
@@ -261,6 +261,17 @@ StabilizationShift = 0
 
 Force43 = False
 Force169 = False
+
+# Canvases + image ids to be used globally
+draw_capture_canvas = None
+template_canvas = None
+left_stripe_canvas = None
+left_stripe_stabilized_canvas = None
+draw_capture_canvas_image_id = None
+template_canvas_image_id = None
+left_stripe_canvas_image_id = None
+left_stripe_stabilized_canvas_image_id = None
+
 
 # Video generation vars
 VideoFps = 18
@@ -529,6 +540,7 @@ def empty_queue(q):
     while not q.empty():
         item = q.get()
         logging.debug(f"Emptying queue: Got {item[0]}")
+
 
 """
 ####################################
@@ -2441,7 +2453,6 @@ def FrameSync_Viewer_popup_refresh():
             threshold_value.set(0)
 
 
-
 def display_bad_frame_previous(count, skip_minor = False):
     global current_bad_frame_index, StabilizationThreshold
     if current_bad_frame_index == -1:
@@ -2490,7 +2501,6 @@ def display_bad_frame_next(count, skip_minor = False):
     refresh_current_frame_ui_info(current_bad_frame_index, first_absolute_frame)
     FrameSync_Viewer_popup_refresh()
     debug_template_refresh_template()
-
 
 
 def display_bad_frame_next_1(event = None):
@@ -2696,6 +2706,7 @@ def FrameSync_Viewer_popup():
     global current_frame_text, crop_text, film_type_text
     global search_area_text, template_type_text, hole_pos_text, template_size_text, template_wb_proportion_text, template_threshold_text
     global left_stripe_canvas, left_stripe_stabilized_canvas, template_canvas
+    global left_stripe_canvas_image_id, left_stripe_stabilized_canvas_image_id, template_canvas_image_id
     global SourceDirFileList, CurrentFrame
     global bad_frame_text, corrected_bad_frame_text, bad_frames_on_left_value, bad_frames_on_right_value
     global frame_up_button, frame_left_button, frame_down_button, frame_right_button
@@ -2762,7 +2773,7 @@ def FrameSync_Viewer_popup():
     #label = Label(left_frame, text="Current template:")
     #label.pack(pady=5, padx=10, anchor=W)
 
-    # Frame sync image size factor precalculated when loadign frames
+    # Frame sync image size factor precalculated when loading frames
     active_template = template_list.get_active_template()
     aux = resize_image(active_template, FrameSync_Images_Factor)
     template_canvas_height = int(frame_height*FrameSync_Images_Factor)
@@ -2778,19 +2789,24 @@ def FrameSync_Viewer_popup():
     as_tooltips.add(template_canvas, "Active template used to locate sprocket hole(s)")
 
     DisplayableImage = ImageTk.PhotoImage(Image.fromarray(aux))
-    template_canvas.create_image(0, int(hole_template_pos[1]*FrameSync_Images_Factor), anchor=NW, image=DisplayableImage)
+    template_canvas_image_id = template_canvas.create_image(0, int((hole_template_pos[1] + stabilization_shift_value.get()) *FrameSync_Images_Factor), anchor=NW, image=DisplayableImage)
+    ###template_canvas_image_id = template_canvas.create_image(0, 0, anchor=NW, image=DisplayableImage)
     template_canvas.image = DisplayableImage
 
     # Create Canvas to display image left stripe (stabilized)
     left_stripe_stabilized_canvas = Canvas(center_left_frame, bg='dark grey',
                                  width=debug_template_width, height=debug_template_height)
     left_stripe_stabilized_canvas.pack(side=TOP, anchor=N)
+    left_stripe_stabilized_canvas.image = ImageTk.PhotoImage(Image.new("RGBA", (1, 1), (0, 0, 0, 0))) #create a transparent 1x1 image.
+    left_stripe_stabilized_canvas_image_id = left_stripe_stabilized_canvas.create_image(0, 0, anchor=tk.NW, image=left_stripe_stabilized_canvas.image)
     as_tooltips.add(left_stripe_stabilized_canvas, "Current frame after stabilization, with detected template highlighted in green, orange or red depending on the quality of the match")
 
     # Create Canvas to display image left stripe (non stabilized)
     left_stripe_canvas = Canvas(center_right_frame, bg='dark grey',
                                  width=debug_template_width, height=debug_template_height)
     left_stripe_canvas.pack(side=TOP, anchor=N)
+    left_stripe_canvas.image = ImageTk.PhotoImage(Image.new("RGBA", (1, 1), (0, 0, 0, 0))) #create a transparent 1x1 image.
+    left_stripe_canvas_image_id = left_stripe_canvas.create_image(0, 0, anchor=tk.NW, image=left_stripe_canvas.image)
     as_tooltips.add(left_stripe_canvas, "Template search area for current frame before stabilization, used to find template")
 
     # Add a label with the film type
@@ -3130,7 +3146,7 @@ def debug_template_display_frame_raw(img, x, y, width, height, color):
 
     if FrameSync_Viewer_opened:
         img = np.stack((img,) * 3, axis=-1)
-        debug_template_display_frame(left_stripe_canvas, img, x, y, width, height, color)
+        debug_template_display_frame(left_stripe_canvas, left_stripe_canvas_image_id, img, x, y, width, height, color)
 
 
 def debug_template_display_frame_stabilized(img, x, y, width, height, color):
@@ -3139,7 +3155,7 @@ def debug_template_display_frame_stabilized(img, x, y, width, height, color):
     if FrameSync_Viewer_opened:
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         left_stripe_stabilized_canvas.config(width=img.shape[1]*FrameSync_Images_Factor)
-        debug_template_display_frame(left_stripe_stabilized_canvas, img, x, y, width, height, color)
+        debug_template_display_frame(left_stripe_stabilized_canvas, left_stripe_stabilized_canvas_image_id, img, x, y, width, height, color)
 
 
 def debug_template_refresh_template():
@@ -3152,20 +3168,22 @@ def debug_template_refresh_template():
         aux = resize_image(template_list.get_active_template(), FrameSync_Images_Factor)
         _, top, bottom = get_target_position(0, aux, 'v')  # get positions to draw template limits
         template_canvas.config(width=int(template_list.get_active_size()[0]*FrameSync_Images_Factor))
-        template_canvas.delete('all')
         DisplayableImage = ImageTk.PhotoImage(Image.fromarray(aux))
-        template_canvas.create_image(0, int(hole_template_pos[1] * FrameSync_Images_Factor), anchor=NW, image=DisplayableImage)
-        template_canvas.image = DisplayableImage
+        template_canvas.image = DisplayableImage #keep reference
+        template_canvas.itemconfig(template_canvas_image_id, image=template_canvas.image)
+
         # Draw a line (start x1, y1, end x2, y2)
-        template_canvas.create_line(0, int(hole_template_pos[1] * FrameSync_Images_Factor) + top, aux.shape[1], int(hole_template_pos[1] * FrameSync_Images_Factor) + top, fill="green", width=2)
-        template_canvas.create_line(0, int(hole_template_pos[1] * FrameSync_Images_Factor) + bottom, aux.shape[1], int(hole_template_pos[1] * FrameSync_Images_Factor) + bottom, fill="green", width=2)
+        y = int((hole_template_pos[1] + stabilization_shift_value.get()) * FrameSync_Images_Factor)
+        template_canvas.create_line(0, y + top, aux.shape[1], y + top, fill="green", width=2)
+        template_canvas.create_line(0, y + bottom, aux.shape[1], y + bottom, fill="green", width=2)
         hole_pos_text.set(f"Expected template pos: {hole_template_pos}")
         template_type_text.set(f"Template type: {template_list.get_active_type()}")
         template_size_text.set(f"Template Size: {template_list.get_active_size()}")
         # template_wb_proportion_text.set(f"WoB proportion: {template_list.get_active_wb_proportion()*100:2.1f}%")
         film_type_text.set(f"Film type: {film_type.get()}")
 
-def debug_template_display_frame(canvas, img, x, y, width, height, color):
+
+def debug_template_display_frame(canvas, canvas_image_id, img, x, y, width, height, color):
     global debug_template_width, debug_template_height
 
     if FrameSync_Viewer_opened:
@@ -3175,15 +3193,15 @@ def debug_template_display_frame(canvas, img, x, y, width, height, color):
             resized_image = cv2.resize(img, (int(img_width*FrameSync_Images_Factor), int(img_height*FrameSync_Images_Factor)))
             # After resize, recalculate coordinates and draw rectangle
             x = int(x*FrameSync_Images_Factor)
-            y = int(y*FrameSync_Images_Factor)
+            y = int((y + stabilization_shift_value.get())*FrameSync_Images_Factor)
             width = int(width*FrameSync_Images_Factor)
             height = int(height*FrameSync_Images_Factor)
             cv2.rectangle(resized_image, (x, y), (x + width, y + height), color, 1)
             pil_image = Image.fromarray(resized_image)
             photo_image = ImageTk.PhotoImage(image=pil_image)
             canvas.config(height=int(img_height*FrameSync_Images_Factor), width=int(img_width*FrameSync_Images_Factor))
-            canvas.create_image(0, 0, anchor=NW, image=photo_image)
             canvas.image = photo_image
+            canvas.itemconfig(canvas_image_id, image=canvas.image)
         except Exception as e:
             logging.error(f"Exception {e} when updating canvas")
 
@@ -3966,11 +3984,15 @@ Support functions for core business
 """
 
 
-def debug_display_image(window_name, img):
+def debug_display_image(window_name, img, factor=1):
     if dev_debug_enabled:
+        if isinstance(img, ImageTk.PhotoImage):
+            img = ImageTk.getimage(img)
+        if isinstance(img, Image.Image):
+            img = np.array(img)
         cv2.namedWindow(window_name)
-        if img.shape[0] >= 2 and img.shape[1] >= 2:
-            img_s = resize_image(img, 0.5)
+        if factor != 1 and img.shape[0] >= 2 and img.shape[1] >= 2:
+            img_s = resize_image(img, factor)
         else:
             img_s = img
         cv2.imshow(window_name, img_s)
@@ -4000,8 +4022,8 @@ def display_image(img):
         if PreviewHeight > image_height:
             padding_y = round((PreviewHeight - image_height) / 2)
 
-    draw_capture_canvas.create_image(padding_x, padding_y, anchor=NW, image=DisplayableImage)
     draw_capture_canvas.image = DisplayableImage
+    draw_capture_canvas.itemconfig(draw_capture_canvas_image_id, image=draw_capture_canvas.image)
 
 
 # Display frames while video encoding is ongoing
@@ -4015,11 +4037,6 @@ def display_output_frame_by_number(frame_number):
     if TargetFile in TargetDirFileList:
         img = cv2.imread(TargetFile, cv2.IMREAD_UNCHANGED)
         display_image(img)
-
-
-def clear_image():
-    global draw_capture_canvas
-    draw_capture_canvas.delete('all')
 
 
 def resize_image(img, ratio):
@@ -4255,7 +4272,7 @@ def calculate_frame_displacement_with_templates(frame_idx, img_ref, img_ref_alt 
         move_y = 0
     log_line = f"T{id} - " if id != -1 else ""
     logging.debug(log_line+f"Frame {frame_idx:5d}: threshold: {frame_treshold:3d}, template: ({hole_template_pos[0]:4d},{hole_template_pos[1]:4d}), top left: ({top_left[0]:4d},{top_left[1]:4d}), move_x:{move_x:4d}, move_y:{move_y:4d}")
-    debug_template_display_frame_raw(img_matched, top_left[0], top_left[1], film_hole_template.shape[1], film_hole_template.shape[0], match_level_color_bgr(match_level))
+    debug_template_display_frame_raw(img_matched, top_left[0], top_left[1] - stabilization_shift_value.get(), film_hole_template.shape[1], film_hole_template.shape[0], match_level_color_bgr(match_level))
     debug_template_display_info(frame_idx, frame_treshold, top_left, move_x, move_y)
 
     return move_x, move_y, top_left, match_level, frame_treshold
@@ -4542,7 +4559,6 @@ def get_source_dir_file_list():
         tk.messagebox.showerror("Error!",
                                 "No files match pattern name. "
                                 "Please specify new one and try again")
-        clear_image()
         frames_target_dir.delete(0, 'end')
         return
     else:
@@ -4803,7 +4819,6 @@ def start_convert():
                     CsvPathName = os.getcwd()
                 CsvPathName = os.path.join(CsvPathName, CsvFilename)
                 CsvFile = open(CsvPathName, "w")
-            clear_image()
             match_level_average.clear()
             horizontal_offset_average.clear()
             # Disable manual stabilize popup widgets
@@ -4823,7 +4838,6 @@ def start_convert():
             else:
                 ffmpeg_success = False
                 ffmpeg_encoding_status = ffmpeg_state.Pending
-                clear_image()
                 win.after(1000, video_generation_loop)
 
 
@@ -5733,6 +5747,7 @@ def build_ui():
     global PreviewWidth, PreviewHeight
     global left_area_frame
     global draw_capture_canvas
+    global draw_capture_canvas_image_id
     global custom_ffmpeg_path
     global project_config
     global start_batch_btn, add_job_btn, delete_job_btn, rerun_job_btn
@@ -5789,9 +5804,13 @@ def build_ui():
     border_frame = tk.LabelFrame(left_area_frame, bd=2, relief=tk.GROOVE)
     border_frame.pack(expand=True, fill="both", padx=5, pady=5)
     # Create the canvas
-    draw_capture_canvas = Canvas(border_frame, bg='dark grey',
-                                 width=PreviewWidth, height=PreviewHeight)
+    draw_capture_canvas = Canvas(border_frame, bg='dark grey', width=PreviewWidth, height=PreviewHeight)
     draw_capture_canvas.pack(side=TOP, anchor=N)
+    # Initialize canvas image (to avoid multiple use of create_image)
+    #Create an empty photoimage
+    draw_capture_canvas.image = ImageTk.PhotoImage(Image.new("RGBA", (1, 1), (0, 0, 0, 0))) #create a transparent 1x1 image.
+    draw_capture_canvas_image_id = draw_capture_canvas.create_image(0, 0, anchor=tk.NW, image=draw_capture_canvas.image)
+
 
     # New scale under canvas 
     frame_selected = IntVar()
@@ -6643,7 +6662,7 @@ def main(argv):
     template_list.add("WB", hole_template_filename_wb, "aux", (0, 0))
     template_list.add("Corner", hole_template_filename_corner, "aux", (0, 0))
 
-    opts, args = getopt.getopt(argv, "hiel:dcst:12nabg", ["goanyway"])
+    opts, args = getopt.getopt(argv, "hiel:dcst:12nab", ["goanyway"])
 
     for opt, arg in opts:
         if opt == '-l':
