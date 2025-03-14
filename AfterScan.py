@@ -16,7 +16,7 @@ More info in README.md file
 """
 
 __author__ = 'Juan Remirez de Esparza'
-__copyright__ = "Copyright 2024, Juan Remirez de Esparza"
+__copyright__ = "Copyright 2022-25, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
 __module__ = "AfterScan"
