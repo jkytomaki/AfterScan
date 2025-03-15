@@ -20,10 +20,10 @@ __copyright__ = "Copyright 2022-25, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
 __module__ = "AfterScan"
-__version__ = "1.20.19"
+__version__ = "1.20.20"
 __data_version__ = "1.0"
-__date__ = "2025-03-14"
-__version_highlight__ = "Fix misusage of create_image, replace by itemconfig. Fix issues derived from this change."
+__date__ = "2025-03-15"
+__version_highlight__ = "Fix cropper canvas position, Treeview wrong font, better job description, double preview when switching job"
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
 __status__ = "Development"
@@ -885,6 +885,9 @@ def decode_project_config():
         frames_source_dir.delete(0, 'end')
         frames_source_dir.insert('end', SourceDir)
         frames_source_dir.after(100, frames_source_dir.xview_moveto, 1)
+        # Need to retrieve source file list at this point, since win.update at the end of thi sfunction will force a refresh of the preview
+        # If we don't do it here, an oimage from the previou ssource folder will be displayed instead
+        get_source_dir_file_list()
     if 'TargetDir' in project_config:
         TargetDir = project_config["TargetDir"]
         # If directory in configuration does not exist, set current working dir
@@ -1168,13 +1171,27 @@ def job_list_add_current():
     description = description + " ("
     description = description + str(frames_to_encode)
     description = description + " frames)"
+    if perform_rotation.get():
+        description = description + ", rotate"
+    if perform_stabilization.get():
+        description = description + ", stabilize"
+    if perform_cropping.get():
+        description = description + ", crop"
+    if perform_denoise.get():
+        description = description + ", denoise"
+    if perform_sharpness.get():
+        description = description + ", sharpen"
+    if perform_gamma_correction.get():
+        description = description + f", GC:{gamma_correction_str.get()}"
+    description = description + f", fill: {frame_fill_type.get()}"
     if project_config["GenerateVideo"]:
+        description = description + ", "
         if ffmpeg_preset.get() == 'veryslow':
-            description = description + ", HQ video"
+            description = description + "HQ video"
         elif ffmpeg_preset.get() == 'veryfast':
-            description = description + ", Low Q. video"
+            description = description + "Low Q. video"
         else:
-            description = description + ", medium Q. video"
+            description = description + "medium Q. video"
         if skip_frame_regeneration.get():
             description = description + ", skip FG"
         description = description + f", {VideoFps} FPS"
@@ -1208,9 +1225,11 @@ def job_list_add_current():
             if 'CustomTemplateFilename' in project_config:
                 del project_config['CustomTemplateFilename']
         if item_id is None:
-            item_id = job_list_treeview.insert('', 'end', values=(entry_name, description))
+            item_id = job_list_treeview.insert('', 'end', values=(entry_name, description), 
+                                               tags=("pending","joblist_font",))
         else:   # Update existing
-            job_list_treeview.item(item_id, values=(entry_name, description))
+            job_list_treeview.item(item_id, values=(entry_name, description), 
+                                   tags=("pending","joblist_font",) if job_list[entry_name]['done'] == False else ("done","joblist_font",))
 
         job_list_treeview.selection_set(item_id)  # Select the row
         job_list_treeview.see(item_id)
@@ -1248,12 +1267,14 @@ def job_list_load_selected():
                 # Copy job settings as current project settings
                 project_config = job_list[entry_name]['project']
                 decode_project_config()
-                # Load matching file list from newly selected dir
-                get_source_dir_file_list()  # first_absolute_frame is set here
+
                 general_config["SourceDir"] = SourceDir
 
-                # Set CurrentFrame in the middle of the project frame range
-                CurrentFrame = int(project_config["FrameFrom"]) + (int(project_config["FrameTo"]) - int(project_config["FrameFrom"])) // 2
+                if encode_all_frames:
+                    CurrentFrame = first_absolute_frame + (last_absolute_frame - first_absolute_frame) // 2
+                else:
+                    # Set CurrentFrame in the middle of the project frame range
+                    CurrentFrame = int(project_config["FrameFrom"]) + (int(project_config["FrameTo"]) - int(project_config["FrameFrom"])) // 2
 
                 # Enable Start and Crop buttons, plus slider, once we have files to handle
                 cropping_btn.config(state=NORMAL)
@@ -1451,9 +1472,9 @@ def load_job_list(filename = None):
                 new_key = entry.replace(entry, new_entry_name)
                 job_list[new_key] = job_list.pop(entry)
                 entry = new_key
-            # Use string formatting to align "columns"
-            entry_formatted = f"{entry:<{JOB_LIST_NAME_LENGTH}} {job_list[entry]["description"]:<{JOB_LIST_DESCRIPTION_LENGTH}}"
-            job_list_treeview.insert('', 'end', values=(entry,job_list[entry]["description"]))   # Add to listbox
+            # Add to listbox
+            job_list_treeview.insert('', 'end', values=(entry, job_list[entry]["description"]),
+                                     tags=("pending","joblist_font",) if job_list[entry]['done'] == False else ("done","joblist_font",))
             job_list[entry]['attempted'] = job_list[entry]['done']  # Add default value for new json field
         f.close()
         for entry in job_list:
@@ -1513,8 +1534,7 @@ def job_processing_loop():
             project_config = job_list[entry]['project'].copy()
             decode_project_config()
 
-            # Load matching file list from newly selected dir
-            get_source_dir_file_list()  # first_absolute_frame is set here
+            # Load matching file list from target dir (source dir list retrieved in decode_project_config)
             get_target_dir_file_list()
 
             logging.debug(f"Processing batch loop: Loaded {SourceDir} folder")
@@ -1721,9 +1741,6 @@ def set_source_folder():
     load_project_config()  # Needs SourceDir defined
 
     decode_project_config()  # Needs first_absolute_frame defined
-
-    # Load matching file list from newly selected dir
-    get_source_dir_file_list()  # first_absolute_frame is set here
 
     template_list.set_scale(frame_width)    # frame_width set by get_source_dir_file_list
 
@@ -4024,6 +4041,7 @@ def display_image(img):
 
     draw_capture_canvas.image = DisplayableImage
     draw_capture_canvas.itemconfig(draw_capture_canvas_image_id, image=draw_capture_canvas.image)
+    draw_capture_canvas.coords(draw_capture_canvas_image_id, padding_x, padding_y)
 
 
 # Display frames while video encoding is ongoing
@@ -6788,7 +6806,6 @@ def main(argv):
 
     load_job_list()
 
-    get_source_dir_file_list()
     get_target_dir_file_list()
 
     adjust_last_column()
@@ -6810,7 +6827,6 @@ def main(argv):
         Go_btn.config(state=NORMAL)
         cropping_btn.config(state=NORMAL)
         frame_slider.config(state=NORMAL)
-        frame_slider.set(CurrentFrame)
 
     init_display()
 
