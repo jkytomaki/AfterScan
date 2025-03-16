@@ -16,14 +16,14 @@ More info in README.md file
 """
 
 __author__ = 'Juan Remirez de Esparza'
-__copyright__ = "Copyright 2024, Juan Remirez de Esparza"
+__copyright__ = "Copyright 2022-25, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
 __module__ = "AfterScan"
-__version__ = "1.20.14"
+__version__ = "1.30.00"
 __data_version__ = "1.0"
-__date__ = "2025-03-07"
-__version_highlight__ = "Replace Listbox with ttk Treeview"
+__date__ = "2025-03-16"
+__version_highlight__ = "AfterScan 1.30: Stabilize compensation, preview with filters"
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
 __status__ = "Development"
@@ -257,9 +257,21 @@ CropBottomRight = (0, 0)
 ## TemplateTopLeft = (0, 0)
 ## TemplateBottomRight = (0, 0)
 max_loop_count = 0
+StabilizationShift = 0
 
 Force43 = False
 Force169 = False
+
+# Canvases + image ids to be used globally
+draw_capture_canvas = None
+template_canvas = None
+left_stripe_canvas = None
+left_stripe_stabilized_canvas = None
+draw_capture_canvas_image_id = None
+template_canvas_image_id = None
+left_stripe_canvas_image_id = None
+left_stripe_stabilized_canvas_image_id = None
+
 
 # Video generation vars
 VideoFps = 18
@@ -529,6 +541,7 @@ def empty_queue(q):
         item = q.get()
         logging.debug(f"Emptying queue: Got {item[0]}")
 
+
 """
 ####################################
 Configuration file support functions
@@ -579,6 +592,8 @@ def set_project_defaults():
     project_config["VideoTitle"] = ""
     video_title_str.set(project_config["VideoTitle"])
     project_config["FillBorders"] = False
+    project_config["StabilizationShift"] = 0
+    stabilization_shift_value.set(0)
 
 
 def sort_nested_json(data):
@@ -773,6 +788,7 @@ def save_project_config():
     project_config["CurrentBadFrameIndex"] = current_bad_frame_index
     if StabilizeAreaDefined:
         project_config["PerformStabilization"] = perform_stabilization.get()
+        project_config["StabilizationShift"] = stabilization_shift_value.get()
         if not encode_all_frames.get():
             project_config["HolePos"] = template_list.get_active_position()
             project_config["HoleScale"] = template_list.get_active_scale()
@@ -854,6 +870,7 @@ def decode_project_config():
     global perform_denoise, perform_sharpness, perform_gamma_correction, gamma_correction_str
     global high_sensitive_bad_frame_detection, current_bad_frame_index
     global precise_template_match
+    global StabilizationShift
 
     if SourceDir != "" and len(bad_frame_list) > 0:     # This function will load a new bad frame list, save current if it exists
         save_bad_frame_list()
@@ -868,6 +885,9 @@ def decode_project_config():
         frames_source_dir.delete(0, 'end')
         frames_source_dir.insert('end', SourceDir)
         frames_source_dir.after(100, frames_source_dir.xview_moveto, 1)
+        # Need to retrieve source file list at this point, since win.update at the end of thi sfunction will force a refresh of the preview
+        # If we don't do it here, an oimage from the previou ssource folder will be displayed instead
+        get_source_dir_file_list()
     if 'TargetDir' in project_config:
         TargetDir = project_config["TargetDir"]
         # If directory in configuration does not exist, set current working dir
@@ -1033,6 +1053,12 @@ def decode_project_config():
     else:
         perform_stabilization.set(False)
 
+    if 'StabilizationShift' in project_config:
+        stabilization_shift_value.set(project_config["StabilizationShift"])
+        StabilizationShift = stabilization_shift_value.get()
+    else:
+        stabilization_shift_value.set(0)
+
     if 'PerformRotation' in project_config:
         perform_rotation.set(project_config["PerformRotation"])
     else:
@@ -1145,17 +1171,34 @@ def job_list_add_current():
     description = description + " ("
     description = description + str(frames_to_encode)
     description = description + " frames)"
+    if perform_rotation.get():
+        description = description + ", rotate"
+    if perform_stabilization.get():
+        description = description + ", stabilize"
+    if perform_cropping.get():
+        description = description + ", crop"
+    if perform_denoise.get():
+        description = description + ", denoise"
+    if perform_sharpness.get():
+        description = description + ", sharpen"
+    if perform_gamma_correction.get():
+        description = description + f", GC:{gamma_correction_str.get()}"
+    description = description + f", fill: {frame_fill_type.get()}"
     if project_config["GenerateVideo"]:
+        description = description + ", "
         if ffmpeg_preset.get() == 'veryslow':
-            description = description + ", HQ video"
+            description = description + "HQ video"
         elif ffmpeg_preset.get() == 'veryfast':
-            description = description + ", Low Q. video"
+            description = description + "Low Q. video"
         else:
-            description = description + ", medium Q. video"
+            description = description + "medium Q. video"
+        if skip_frame_regeneration.get():
+            description = description + ", skip FG"
+        description = description + f", {VideoFps} FPS"
+        if resolution_dropdown_selected.get():
+            description = description + ", " + resolution_dropdown_selected.get()
     else:
         description = description + ", no video"
-    if resolution_dropdown_selected.get():
-        description = description + ", " + resolution_dropdown_selected.get()
 
     save_project = True
     item_id = None
@@ -1182,9 +1225,11 @@ def job_list_add_current():
             if 'CustomTemplateFilename' in project_config:
                 del project_config['CustomTemplateFilename']
         if item_id is None:
-            item_id = job_list_treeview.insert('', 'end', values=(entry_name, description))
+            item_id = job_list_treeview.insert('', 'end', values=(entry_name, description), 
+                                               tags=("pending","joblist_font",))
         else:   # Update existing
-            job_list_treeview.item(item_id, values=(entry_name, description))
+            job_list_treeview.item(item_id, values=(entry_name, description), 
+                                   tags=("pending","joblist_font",) if job_list[entry_name]['done'] == False else ("done","joblist_font",))
 
         job_list_treeview.selection_set(item_id)  # Select the row
         job_list_treeview.see(item_id)
@@ -1222,12 +1267,14 @@ def job_list_load_selected():
                 # Copy job settings as current project settings
                 project_config = job_list[entry_name]['project']
                 decode_project_config()
-                # Load matching file list from newly selected dir
-                get_source_dir_file_list()  # first_absolute_frame is set here
+
                 general_config["SourceDir"] = SourceDir
 
-                # Set CurrentFrame in the middle of the project frame range
-                CurrentFrame = int(project_config["FrameFrom"]) + (int(project_config["FrameTo"]) - int(project_config["FrameFrom"])) // 2
+                if encode_all_frames:
+                    CurrentFrame = first_absolute_frame + (last_absolute_frame - first_absolute_frame) // 2
+                else:
+                    # Set CurrentFrame in the middle of the project frame range
+                    CurrentFrame = int(project_config["FrameFrom"]) + (int(project_config["FrameTo"]) - int(project_config["FrameFrom"])) // 2
 
                 # Enable Start and Crop buttons, plus slider, once we have files to handle
                 cropping_btn.config(state=NORMAL)
@@ -1279,7 +1326,7 @@ def job_list_rerun_selected():
             entry = normalize_job_name(values[0])  # Get the first element
             job_list[entry]['done'] = not job_list[entry]['done']
             job_list[entry]['attempted'] = job_list[entry]['done']
-            job_list_treeview.item(item_id, tags=("done",) if job_list[entry]['done'] else ("pending",))
+            job_list_treeview.item(item_id, tags=("done","joblist_font",) if job_list[entry]['done'] else ("pending","joblist_font",))
             rerun_job_btn.config(text='Rerun job' if job_list[entry]['done'] else 'Mark as run')
 
 
@@ -1425,15 +1472,15 @@ def load_job_list(filename = None):
                 new_key = entry.replace(entry, new_entry_name)
                 job_list[new_key] = job_list.pop(entry)
                 entry = new_key
-            # Use string formatting to align "columns"
-            entry_formatted = f"{entry:<{JOB_LIST_NAME_LENGTH}} {job_list[entry]["description"]:<{JOB_LIST_DESCRIPTION_LENGTH}}"
-            job_list_treeview.insert('', 'end', values=(entry,job_list[entry]["description"]))   # Add to listbox
+            # Add to listbox
+            job_list_treeview.insert('', 'end', values=(entry, job_list[entry]["description"]),
+                                     tags=("pending","joblist_font",) if job_list[entry]['done'] == False else ("done","joblist_font",))
             job_list[entry]['attempted'] = job_list[entry]['done']  # Add default value for new json field
         f.close()
         for entry in job_list:
             item_id = search_job_name_in_job_treeview(entry)
             if item_id is not None:
-                job_list_treeview.item(item_id, tags=("done",) if job_list[entry]['done'] else ("pending",))
+                job_list_treeview.item(item_id, tags=("done","joblist_font",) if job_list[entry]['done'] else ("pending","joblist_font",))
 
         job_list_hash = generate_dict_hash(job_list)
     else:   # No job list file. Set empty config to force defaults
@@ -1475,7 +1522,7 @@ def job_processing_loop():
                 job_list_treeview.selection_remove(item_id)  # Unselect each selected item
             item_id = search_job_name_in_job_treeview(entry)
             if item_id is not None:
-                job_list_treeview.item(item_id, tags=("ongoing",))
+                job_list_treeview.item(item_id, tags=("ongoing","joblist_font",))
             CurrentJobEntry = entry
             if 'FrameFrom' in job_list[entry]['project']:
                 CurrentFrame = job_list[entry]['project']['FrameFrom']
@@ -1487,8 +1534,7 @@ def job_processing_loop():
             project_config = job_list[entry]['project'].copy()
             decode_project_config()
 
-            # Load matching file list from newly selected dir
-            get_source_dir_file_list()  # first_absolute_frame is set here
+            # Load matching file list from target dir (source dir list retrieved in decode_project_config)
             get_target_dir_file_list()
 
             logging.debug(f"Processing batch loop: Loaded {SourceDir} folder")
@@ -1574,7 +1620,7 @@ def job_list_move_up(event):
                 item = values[0]  # Get the first element
                 if item in job_list:
                     if job_list[item]['done'] == True:
-                        job_list_treeview.item(item_id, tags=("pending",) if job_list[item]['done'] == False else ("done",))
+                        job_list_treeview.item(item_id, tags=("pending","joblist_font",) if job_list[item]['done'] == False else ("done","joblist_font",))
                 sync_job_list_with_treeview()
 
 
@@ -1597,7 +1643,7 @@ def job_list_move_down(event):
                 item = values[0]  # Get the first element
                 if item in job_list:
                     if job_list[item]['done'] == True:
-                        job_list_treeview.item(item_id, tags=("pending",) if job_list[item]['done'] == False else ("done",))
+                        job_list_treeview.item(item_id, tags=("pending","joblist_font",) if job_list[item]['done'] == False else ("done","joblist_font",))
                 sync_job_list_with_treeview()
 
 
@@ -1695,9 +1741,6 @@ def set_source_folder():
     load_project_config()  # Needs SourceDir defined
 
     decode_project_config()  # Needs first_absolute_frame defined
-
-    # Load matching file list from newly selected dir
-    get_source_dir_file_list()  # first_absolute_frame is set here
 
     template_list.set_scale(frame_width)    # frame_width set by get_source_dir_file_list
 
@@ -1832,6 +1875,9 @@ def widget_status_update(widget_state=0, button_action=0):
         perform_fill_dumb_rb.config(state=widget_state if not is_demo else NORMAL)
         extended_stabilization_checkbox.config(state=widget_state if perform_stabilization.get() else DISABLED)
         custom_stabilization_btn.config(state=widget_state)
+        stabilization_threshold_match_label.config(state=widget_state if perform_stabilization.get() else DISABLED)
+        stabilization_shift_label.config(state=widget_state if perform_stabilization.get() else DISABLED)
+        stabilization_shift_spinbox.config(state=widget_state if perform_stabilization.get() else DISABLED)
         low_contrast_custom_template_checkbox.config(state=widget_state)
         if ExpertMode:
             stabilization_threshold_spinbox.config(state=widget_state)
@@ -1987,6 +2033,14 @@ def extended_stabilization_selection():
     FrameSync_Viewer_popup_update_widgets(NORMAL)
 
 
+def select_stabilization_shift(even=None):
+    global StabilizationShift
+    StabilizationShift = stabilization_shift_value.get()
+    project_config["StabilizationShift"] = StabilizationShift
+    win.after(5, scale_display_update)
+    FrameSync_Viewer_popup_update_widgets(NORMAL)
+
+
 def stabilization_threshold_selection(updown):
     global stabilization_threshold_spinbox, stabilization_threshold_str
     global StabilizationThreshold
@@ -2026,6 +2080,17 @@ def perform_denoise_selection():
     global perform_denoise
 
     project_config["PerformDenoise"] = perform_denoise.get()
+    if ui_init_done:
+        win.after(5, scale_display_update)
+
+
+def perform_gamma_correction_selection():
+    project_config["PerformGammaCorrection"] = perform_gamma_correction.get()
+    if ui_init_done:
+        win.after(5, scale_display_update)
+
+
+def select_gamma_correction_value():
     if ui_init_done:
         win.after(5, scale_display_update)
 
@@ -2392,7 +2457,7 @@ def FrameSync_Viewer_popup_refresh():
     refresh_current_frame_ui_info(CurrentFrame, first_absolute_frame)
     frame_selected.set(CurrentFrame)
     frame_slider.set(CurrentFrame)
-    scale_display_update(x, y)
+    scale_display_update(x, y, False)
     if FrameSync_Viewer_opened:
         bad_frame_text.set(f"Misaligned frames: {len(bad_frame_list)}")
         corrected_bad_frame_text.set(f"Corrected frames: {count_corrected_bad_frames()}")
@@ -2403,7 +2468,6 @@ def FrameSync_Viewer_popup_refresh():
         else:
             bad_frames_on_right_value.set(0)
             threshold_value.set(0)
-
 
 
 def display_bad_frame_previous(count, skip_minor = False):
@@ -2454,7 +2518,6 @@ def display_bad_frame_next(count, skip_minor = False):
     refresh_current_frame_ui_info(current_bad_frame_index, first_absolute_frame)
     FrameSync_Viewer_popup_refresh()
     debug_template_refresh_template()
-
 
 
 def display_bad_frame_next_1(event = None):
@@ -2660,6 +2723,7 @@ def FrameSync_Viewer_popup():
     global current_frame_text, crop_text, film_type_text
     global search_area_text, template_type_text, hole_pos_text, template_size_text, template_wb_proportion_text, template_threshold_text
     global left_stripe_canvas, left_stripe_stabilized_canvas, template_canvas
+    global left_stripe_canvas_image_id, left_stripe_stabilized_canvas_image_id, template_canvas_image_id
     global SourceDirFileList, CurrentFrame
     global bad_frame_text, corrected_bad_frame_text, bad_frames_on_left_value, bad_frames_on_right_value
     global frame_up_button, frame_left_button, frame_down_button, frame_right_button
@@ -2726,7 +2790,7 @@ def FrameSync_Viewer_popup():
     #label = Label(left_frame, text="Current template:")
     #label.pack(pady=5, padx=10, anchor=W)
 
-    # Frame sync image size factor precalculated when loadign frames
+    # Frame sync image size factor precalculated when loading frames
     active_template = template_list.get_active_template()
     aux = resize_image(active_template, FrameSync_Images_Factor)
     template_canvas_height = int(frame_height*FrameSync_Images_Factor)
@@ -2742,19 +2806,24 @@ def FrameSync_Viewer_popup():
     as_tooltips.add(template_canvas, "Active template used to locate sprocket hole(s)")
 
     DisplayableImage = ImageTk.PhotoImage(Image.fromarray(aux))
-    template_canvas.create_image(0, int(hole_template_pos[1]*FrameSync_Images_Factor), anchor=NW, image=DisplayableImage)
+    template_canvas_image_id = template_canvas.create_image(0, int((hole_template_pos[1] + stabilization_shift_value.get()) *FrameSync_Images_Factor), anchor=NW, image=DisplayableImage)
+    ###template_canvas_image_id = template_canvas.create_image(0, 0, anchor=NW, image=DisplayableImage)
     template_canvas.image = DisplayableImage
 
     # Create Canvas to display image left stripe (stabilized)
     left_stripe_stabilized_canvas = Canvas(center_left_frame, bg='dark grey',
                                  width=debug_template_width, height=debug_template_height)
     left_stripe_stabilized_canvas.pack(side=TOP, anchor=N)
+    left_stripe_stabilized_canvas.image = ImageTk.PhotoImage(Image.new("RGBA", (1, 1), (0, 0, 0, 0))) #create a transparent 1x1 image.
+    left_stripe_stabilized_canvas_image_id = left_stripe_stabilized_canvas.create_image(0, 0, anchor=tk.NW, image=left_stripe_stabilized_canvas.image)
     as_tooltips.add(left_stripe_stabilized_canvas, "Current frame after stabilization, with detected template highlighted in green, orange or red depending on the quality of the match")
 
     # Create Canvas to display image left stripe (non stabilized)
     left_stripe_canvas = Canvas(center_right_frame, bg='dark grey',
                                  width=debug_template_width, height=debug_template_height)
     left_stripe_canvas.pack(side=TOP, anchor=N)
+    left_stripe_canvas.image = ImageTk.PhotoImage(Image.new("RGBA", (1, 1), (0, 0, 0, 0))) #create a transparent 1x1 image.
+    left_stripe_canvas_image_id = left_stripe_canvas.create_image(0, 0, anchor=tk.NW, image=left_stripe_canvas.image)
     as_tooltips.add(left_stripe_canvas, "Template search area for current frame before stabilization, used to find template")
 
     # Add a label with the film type
@@ -3094,7 +3163,7 @@ def debug_template_display_frame_raw(img, x, y, width, height, color):
 
     if FrameSync_Viewer_opened:
         img = np.stack((img,) * 3, axis=-1)
-        debug_template_display_frame(left_stripe_canvas, img, x, y, width, height, color)
+        debug_template_display_frame(left_stripe_canvas, left_stripe_canvas_image_id, img, x, y, width, height, color)
 
 
 def debug_template_display_frame_stabilized(img, x, y, width, height, color):
@@ -3103,7 +3172,7 @@ def debug_template_display_frame_stabilized(img, x, y, width, height, color):
     if FrameSync_Viewer_opened:
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         left_stripe_stabilized_canvas.config(width=img.shape[1]*FrameSync_Images_Factor)
-        debug_template_display_frame(left_stripe_stabilized_canvas, img, x, y, width, height, color)
+        debug_template_display_frame(left_stripe_stabilized_canvas, left_stripe_stabilized_canvas_image_id, img, x, y, width, height, color)
 
 
 def debug_template_refresh_template():
@@ -3116,20 +3185,22 @@ def debug_template_refresh_template():
         aux = resize_image(template_list.get_active_template(), FrameSync_Images_Factor)
         _, top, bottom = get_target_position(0, aux, 'v')  # get positions to draw template limits
         template_canvas.config(width=int(template_list.get_active_size()[0]*FrameSync_Images_Factor))
-        template_canvas.delete('all')
         DisplayableImage = ImageTk.PhotoImage(Image.fromarray(aux))
-        template_canvas.create_image(0, int(hole_template_pos[1] * FrameSync_Images_Factor), anchor=NW, image=DisplayableImage)
-        template_canvas.image = DisplayableImage
+        template_canvas.image = DisplayableImage #keep reference
+        template_canvas.itemconfig(template_canvas_image_id, image=template_canvas.image)
+
         # Draw a line (start x1, y1, end x2, y2)
-        template_canvas.create_line(0, int(hole_template_pos[1] * FrameSync_Images_Factor) + top, aux.shape[1], int(hole_template_pos[1] * FrameSync_Images_Factor) + top, fill="green", width=2)
-        template_canvas.create_line(0, int(hole_template_pos[1] * FrameSync_Images_Factor) + bottom, aux.shape[1], int(hole_template_pos[1] * FrameSync_Images_Factor) + bottom, fill="green", width=2)
+        y = int((hole_template_pos[1] + stabilization_shift_value.get()) * FrameSync_Images_Factor)
+        template_canvas.create_line(0, y + top, aux.shape[1], y + top, fill="green", width=2)
+        template_canvas.create_line(0, y + bottom, aux.shape[1], y + bottom, fill="green", width=2)
         hole_pos_text.set(f"Expected template pos: {hole_template_pos}")
         template_type_text.set(f"Template type: {template_list.get_active_type()}")
         template_size_text.set(f"Template Size: {template_list.get_active_size()}")
         # template_wb_proportion_text.set(f"WoB proportion: {template_list.get_active_wb_proportion()*100:2.1f}%")
         film_type_text.set(f"Film type: {film_type.get()}")
 
-def debug_template_display_frame(canvas, img, x, y, width, height, color):
+
+def debug_template_display_frame(canvas, canvas_image_id, img, x, y, width, height, color):
     global debug_template_width, debug_template_height
 
     if FrameSync_Viewer_opened:
@@ -3139,20 +3210,30 @@ def debug_template_display_frame(canvas, img, x, y, width, height, color):
             resized_image = cv2.resize(img, (int(img_width*FrameSync_Images_Factor), int(img_height*FrameSync_Images_Factor)))
             # After resize, recalculate coordinates and draw rectangle
             x = int(x*FrameSync_Images_Factor)
-            y = int(y*FrameSync_Images_Factor)
+            y = int((y + stabilization_shift_value.get())*FrameSync_Images_Factor)
             width = int(width*FrameSync_Images_Factor)
             height = int(height*FrameSync_Images_Factor)
             cv2.rectangle(resized_image, (x, y), (x + width, y + height), color, 1)
             pil_image = Image.fromarray(resized_image)
             photo_image = ImageTk.PhotoImage(image=pil_image)
             canvas.config(height=int(img_height*FrameSync_Images_Factor), width=int(img_width*FrameSync_Images_Factor))
-            canvas.create_image(0, 0, anchor=NW, image=photo_image)
             canvas.image = photo_image
+            canvas.itemconfig(canvas_image_id, image=canvas.image)
         except Exception as e:
             logging.error(f"Exception {e} when updating canvas")
 
 
-def scale_display_update(offset_x = 0, offset_y = 0):
+def load_current_frame_image():
+    # If HDR mode, pick the lightest frame to select rectangle
+    file3 = os.path.join(SourceDir, FrameHdrInputFilenamePattern % (CurrentFrame + 1, 2, file_type))
+    if os.path.isfile(file3):  # If hdr frames exist, add them
+        file = file3
+    else:
+        file = SourceDirFileList[CurrentFrame]
+    return cv2.imread(file, cv2.IMREAD_UNCHANGED)
+
+
+def scale_display_update(offset_x = 0, offset_y = 0, update_filters=True):
     global win
     global frame_scale_refresh_done, frame_scale_refresh_pending
     global CurrentFrame
@@ -3161,20 +3242,13 @@ def scale_display_update(offset_x = 0, offset_y = 0):
     global SourceDirFileList
     global FrameSync_Viewer_opened
 
-    frame_to_display = CurrentFrame
-    if frame_to_display >= len(SourceDirFileList):
+    if CurrentFrame >= len(SourceDirFileList):
         return
-    # If HDR mode, pick the lightest frame to select rectangle
-    file3 = os.path.join(SourceDir, FrameHdrInputFilenamePattern % (frame_to_display + 1, 2, file_type))
-    if os.path.isfile(file3):  # If hdr frames exist, add them
-        file = file3
-    else:
-        file = SourceDirFileList[frame_to_display]
-    img = cv2.imread(file, cv2.IMREAD_UNCHANGED)
+    img = load_current_frame_image()
     if img is None:
         frame_scale_refresh_done = True
         logging.error(
-            "Error reading frame %i, skipping", frame_to_display)
+            "Error reading frame %i, skipping", CurrentFrame)
     else:
         if hole_search_area_adjustment_pending:
             hole_search_area_adjustment_pending = False
@@ -3184,6 +3258,18 @@ def scale_display_update(offset_x = 0, offset_y = 0):
                 img = rotate_image(img)
             if perform_stabilization.get() or FrameSync_Viewer_opened:
                 img = stabilize_image(CurrentFrame, img, img, offset_x, offset_y)
+            if update_filters:  # Only when changing values in UI, not when moving from frame to frame
+                if perform_denoise.get():
+                    img = denoise_image(img)
+                if perform_sharpness.get():
+                    # Sharpness code taken from https://www.educative.io/answers/how-to-sharpen-a-blurred-image-using-opencv
+                    sharpen_filter = np.array([[-1, -1, -1],
+                                            [-1, 9, -1],
+                                            [-1, -1, -1]])
+                    # applying kernels to the input image to get the sharpened image
+                    img = cv2.filter2D(img, -1, sharpen_filter)
+                if perform_gamma_correction.get():
+                    img = gamma_correct_image(img, float(gamma_correction_str.get()))
         if perform_cropping.get():
             img = crop_image(img, CropTopLeft, CropBottomRight)
         else:
@@ -3192,7 +3278,7 @@ def scale_display_update(offset_x = 0, offset_y = 0):
             display_image(img)
         if frame_scale_refresh_pending:
             frame_scale_refresh_pending = False
-            win.after(100, scale_display_update)
+            win.after(100, scale_display_update, update_filters)
         else:
             frame_scale_refresh_done = True
 
@@ -3216,7 +3302,7 @@ def select_scale_frame(selected_frame):
         if frame_scale_refresh_done:
             frame_scale_refresh_done = False
             frame_scale_refresh_pending = False
-            win.after(5, scale_display_update)
+            win.after(5, scale_display_update, False)
         else:
             frame_scale_refresh_pending = True
 
@@ -3558,7 +3644,6 @@ def select_cropping_area():
     win.update()
 
     RectangleWindowTitle = CropWindowTitle
-
 
     if select_rectangle_area(is_cropping=True):
         CropAreaDefined = True
@@ -3916,11 +4001,15 @@ Support functions for core business
 """
 
 
-def debug_display_image(window_name, img):
+def debug_display_image(window_name, img, factor=1):
     if dev_debug_enabled:
+        if isinstance(img, ImageTk.PhotoImage):
+            img = ImageTk.getimage(img)
+        if isinstance(img, Image.Image):
+            img = np.array(img)
         cv2.namedWindow(window_name)
-        if img.shape[0] >= 2 and img.shape[1] >= 2:
-            img_s = resize_image(img, 0.5)
+        if factor != 1 and img.shape[0] >= 2 and img.shape[1] >= 2:
+            img_s = resize_image(img, factor)
         else:
             img_s = img
         cv2.imshow(window_name, img_s)
@@ -3950,8 +4039,10 @@ def display_image(img):
         if PreviewHeight > image_height:
             padding_y = round((PreviewHeight - image_height) / 2)
 
-    draw_capture_canvas.create_image(padding_x, padding_y, anchor=NW, image=DisplayableImage)
     draw_capture_canvas.image = DisplayableImage
+    draw_capture_canvas.itemconfig(draw_capture_canvas_image_id, image=draw_capture_canvas.image)
+    draw_capture_canvas.coords(draw_capture_canvas_image_id, padding_x, padding_y)
+
 
 # Display frames while video encoding is ongoing
 # No need to care about sequencing since video encoding process in AfterScan is single threaded
@@ -3964,11 +4055,6 @@ def display_output_frame_by_number(frame_number):
     if TargetFile in TargetDirFileList:
         img = cv2.imread(TargetFile, cv2.IMREAD_UNCHANGED)
         display_image(img)
-
-
-def clear_image():
-    global draw_capture_canvas
-    draw_capture_canvas.delete('all')
 
 
 def resize_image(img, ratio):
@@ -4204,7 +4290,7 @@ def calculate_frame_displacement_with_templates(frame_idx, img_ref, img_ref_alt 
         move_y = 0
     log_line = f"T{id} - " if id != -1 else ""
     logging.debug(log_line+f"Frame {frame_idx:5d}: threshold: {frame_treshold:3d}, template: ({hole_template_pos[0]:4d},{hole_template_pos[1]:4d}), top left: ({top_left[0]:4d},{top_left[1]:4d}), move_x:{move_x:4d}, move_y:{move_y:4d}")
-    debug_template_display_frame_raw(img_matched, top_left[0], top_left[1], film_hole_template.shape[1], film_hole_template.shape[0], match_level_color_bgr(match_level))
+    debug_template_display_frame_raw(img_matched, top_left[0], top_left[1] - stabilization_shift_value.get(), film_hole_template.shape[1], film_hole_template.shape[0], match_level_color_bgr(match_level))
     debug_template_display_info(frame_idx, frame_treshold, top_left, move_x, move_y)
 
     return move_x, move_y, top_left, match_level, frame_treshold
@@ -4293,8 +4379,8 @@ def stabilize_image(frame_idx, img, img_ref, offset_x = 0, offset_y = 0, img_ref
                 missing_fragment = translated_image[CropBottomRight[1]-missing_rows:CropBottomRight[1],0:width]
             elif missing_bottom < 0:
                 missing_fragment = translated_image[CropTopLeft[1]:CropTopLeft[1]+missing_rows, 0:width]
-
-        translated_image = shift_image(img, width, height, move_x, move_y)
+        # Add vertical offset as decided by user, to compensate for vertically assimmetrical films
+        translated_image = shift_image(img, width, height, move_x, move_y + StabilizationShift)
         # Check if frame fill is enabled, and required: Add missing fragment
         # Check if there is a gap in the frame, if so, and one of the 'fill' functions is enabled, fill accordingly
         if missing_rows > 0 and (ConvertLoopRunning or CorrectLoopRunning):
@@ -4491,7 +4577,6 @@ def get_source_dir_file_list():
         tk.messagebox.showerror("Error!",
                                 "No files match pattern name. "
                                 "Please specify new one and try again")
-        clear_image()
         frames_target_dir.delete(0, 'end')
         return
     else:
@@ -4752,7 +4837,6 @@ def start_convert():
                     CsvPathName = os.getcwd()
                 CsvPathName = os.path.join(CsvPathName, CsvFilename)
                 CsvFile = open(CsvPathName, "w")
-            clear_image()
             match_level_average.clear()
             horizontal_offset_average.clear()
             # Disable manual stabilize popup widgets
@@ -4772,7 +4856,6 @@ def start_convert():
             else:
                 ffmpeg_success = False
                 ffmpeg_encoding_status = ffmpeg_state.Pending
-                clear_image()
                 win.after(1000, video_generation_loop)
 
 
@@ -4793,17 +4876,17 @@ def generation_exit(success = True):
             if (CurrentJobEntry != -1):
                 item_id = search_job_name_in_job_treeview(CurrentJobEntry)
                 if item_id != -1:
-                    job_list_treeview.item(item_id, tags=("pending",))
+                    job_list_treeview.item(item_id, tags=("pending","joblist_font",))
         else:
             if success:
                 job_list[CurrentJobEntry]['done'] = True    # Flag as done
                 item_id = search_job_name_in_job_treeview(CurrentJobEntry)
                 if item_id != -1:
-                    job_list_treeview.item(item_id, tags=("done",))
+                    job_list_treeview.item(item_id, tags=("done","joblist_font",))
             else:
                 item_id = search_job_name_in_job_treeview(CurrentJobEntry)
                 if item_id != -1:
-                    job_list_treeview.item(item_id, tags=("pending",))
+                    job_list_treeview.item(item_id, tags=("pending","joblist_font",))
             if suspend_on_completion.get() == 'job_completion':
                 stop_batch = True # Exit convert loop before suspend
                 go_suspend = True
@@ -5577,14 +5660,14 @@ def afterscan_init():
         BigSize = True
         FontSize = 11
         PreviewWidth = 700
-        PreviewHeight = 540
+        PreviewHeight = 525
         app_width = PreviewWidth + 420
         app_height = PreviewHeight + 330
     else:
         BigSize = False
         FontSize = 8
         PreviewWidth = 500
-        PreviewHeight = 380
+        PreviewHeight = 375
         app_width = PreviewWidth + 380
         app_height = PreviewHeight + 330
 
@@ -5682,6 +5765,7 @@ def build_ui():
     global PreviewWidth, PreviewHeight
     global left_area_frame
     global draw_capture_canvas
+    global draw_capture_canvas_image_id
     global custom_ffmpeg_path
     global project_config
     global start_batch_btn, add_job_btn, delete_job_btn, rerun_job_btn
@@ -5698,6 +5782,7 @@ def build_ui():
     global template_list
     global low_contrast_custom_template
     global display_template_popup_btn
+    global stabilization_shift_value, stabilization_shift_label, stabilization_shift_spinbox
 
     # Menu bar
     menu_bar = tk.Menu(win)
@@ -5708,21 +5793,26 @@ def build_ui():
 
     # File menu
     file_menu = tk.Menu(menu_bar, tearoff=0)
-    menu_bar.add_cascade(label="File", menu=file_menu)
-    file_menu.add_command(label="Save job list", command=save_named_job_list)
-    file_menu.add_command(label="Load job list", command=load_named_job_list)
+    menu_bar.add_cascade(label="File", menu=file_menu, font=("Arial", FontSize))
+    file_menu.add_command(label="Save job list", command=save_named_job_list, font=("Arial", FontSize))
+    file_menu.add_command(label="Load job list", command=load_named_job_list, font=("Arial", FontSize))
     file_menu.add_separator()  # Optional divider
-    file_menu.add_command(label="Exit", command=exit_app)
+    file_menu.add_command(label="Exit", command=exit_app, font=("Arial", FontSize))
 
     # Help Menu
     help_menu = tk.Menu(menu_bar, tearoff=0)
-    menu_bar.add_cascade(label="Help", menu=help_menu)
-    help_menu.add_command(label="User Guide", command=lambda: webbrowser.open("https://github.com/jareff-g/AfterScan/wiki/AfterScan-user-interface-description"))
-    help_menu.add_command(label="Discord Server", command=lambda: webbrowser.open("https://discord.gg/r2UGkH7qg2"))
-    help_menu.add_command(label="AfterScan Wiki", command=lambda: webbrowser.open("https://github.com/jareff-g/AfterScan/wiki"))
+    menu_bar.add_cascade(label="Help", menu=help_menu, font=("Arial", FontSize))
+    help_menu.add_command(label="User Guide", font=("Arial", FontSize), 
+                          command=lambda: webbrowser.open("https://github.com/jareff-g/AfterScan/wiki/AfterScan-user-interface-description"))
+    help_menu.add_command(label="Discord Server", font=("Arial", FontSize), 
+                          command=lambda: webbrowser.open("https://discord.gg/r2UGkH7qg2"))
+    help_menu.add_command(label="AfterScan Wiki", font=("Arial", FontSize), 
+                          command=lambda: webbrowser.open("https://github.com/jareff-g/AfterScan/wiki"))
     if UserConsent == "no":
-        help_menu.add_command(label="Report AfterScan usage", command=lambda: get_consent(True))
-    help_menu.add_command(label="About AfterScan", command=lambda: webbrowser.open("https://github.com/jareff-g/AfterScan/wiki/AfterScan:-8mm,-Super-8-film-post-scan-utility"))
+        help_menu.add_command(label="Report AfterScan usage", font=("Arial", FontSize), 
+                              command=lambda: get_consent(True))
+    help_menu.add_command(label="About AfterScan", font=("Arial", FontSize), 
+                          command=lambda: webbrowser.open("https://github.com/jareff-g/AfterScan/wiki/AfterScan:-8mm,-Super-8-film-post-scan-utility"))
 
     # Create a frame to add a border to the preview
     left_area_frame = Frame(win)
@@ -5732,9 +5822,13 @@ def build_ui():
     border_frame = tk.LabelFrame(left_area_frame, bd=2, relief=tk.GROOVE)
     border_frame.pack(expand=True, fill="both", padx=5, pady=5)
     # Create the canvas
-    draw_capture_canvas = Canvas(border_frame, bg='dark grey',
-                                 width=PreviewWidth, height=PreviewHeight)
+    draw_capture_canvas = Canvas(border_frame, bg='dark grey', width=PreviewWidth, height=PreviewHeight)
     draw_capture_canvas.pack(side=TOP, anchor=N)
+    # Initialize canvas image (to avoid multiple use of create_image)
+    #Create an empty photoimage
+    draw_capture_canvas.image = ImageTk.PhotoImage(Image.new("RGBA", (1, 1), (0, 0, 0, 0))) #create a transparent 1x1 image.
+    draw_capture_canvas_image_id = draw_capture_canvas.create_image(0, 0, anchor=tk.NW, image=draw_capture_canvas.image)
+
 
     # New scale under canvas 
     frame_selected = IntVar()
@@ -5994,10 +6088,22 @@ def build_ui():
         postprocessing_frame, text='Extend',
         variable=extended_stabilization, onvalue=True, offvalue=False, width=6,
         command=extended_stabilization_selection, font=("Arial", FontSize))
-    extended_stabilization_checkbox.grid(row=postprocessing_row, column=1, columnspan=1, sticky=W)
-    #extended_stabilization_checkbox.forget()
+    #extended_stabilization_checkbox.grid(row=postprocessing_row, column=1, columnspan=1, sticky=W)
+    extended_stabilization_checkbox.forget()
     as_tooltips.add(extended_stabilization_checkbox, "Extend the area where AfterScan looks for sprocket holes. In some cases this might help")
 
+    # Stabilization shift: Since film might not be centered around hole(s) this gives the option to move it up/down
+    # Spinbox for gamma correction
+    stabilization_shift_label = tk.Label(postprocessing_frame, text='Compensation:',
+                                        width=14, font=("Arial", FontSize))
+    stabilization_shift_label.grid(row=postprocessing_row, column=1, columnspan=1, sticky=E)
+    stabilization_shift_value = tk.IntVar(value=0)
+    stabilization_shift_spinbox = tk.Spinbox(postprocessing_frame, width=4, command=select_stabilization_shift,
+        textvariable=stabilization_shift_value, from_=-150, to=150, increment=-5, font=("Arial", FontSize))
+    stabilization_shift_spinbox.grid(row=postprocessing_row, column=2, sticky=W)
+    as_tooltips.add(stabilization_shift_spinbox, "Allows to move the frame up or down after stabilization "
+                                "(to compensate for films where the frame is not centered around the hole/holes)")
+    stabilization_shift_spinbox.bind("<FocusOut>", select_stabilization_shift)
     postprocessing_row += 1
 
     ### Cropping controls
@@ -6056,7 +6162,7 @@ def build_ui():
     # Check box to do gamma correction
     perform_gamma_correction = tk.BooleanVar(value=False)
     perform_gamma_correction_checkbox = tk.Checkbutton(
-        postprocessing_frame, text='GC:', variable=perform_gamma_correction,
+        postprocessing_frame, text='GC:', variable=perform_gamma_correction, command=perform_gamma_correction_selection,
         onvalue=True, offvalue=False, font=("Arial", FontSize))
     perform_gamma_correction_checkbox.grid(row=postprocessing_row, column=2, sticky=W)
     perform_gamma_correction_checkbox.config(state=NORMAL)
@@ -6064,7 +6170,7 @@ def build_ui():
 
     # Spinbox for gamma correction
     gamma_correction_str = tk.StringVar(value="2.2")
-    gamma_correction_spinbox = tk.Spinbox(postprocessing_frame, width=3,
+    gamma_correction_spinbox = tk.Spinbox(postprocessing_frame, width=3, command=select_gamma_correction_value,
         textvariable=gamma_correction_str, from_=0.1, to=4, format="%.1f", increment=0.1, font=("Arial", FontSize))
     gamma_correction_spinbox.grid(row=postprocessing_row, column=2, sticky=E)
     as_tooltips.add(gamma_correction_spinbox, "Gamma correction value (default is 2.2, has to be greater than zero)")
@@ -6309,20 +6415,28 @@ def build_ui():
 
     # Define job list area ***************************************************
     # Replace listbox with treeview
+    # Define style for labelframe
+    style = ttk.Style()
+    style.configure("TLabelframe.Label", font=("Arial", FontSize-2))
     # Create a frame to hold Treeview and scrollbars
     job_list_frame = ttk.LabelFrame(left_area_frame,
                              text='Job List',
-                             width=67, height=8)
+                             width=50, height=8)
     job_list_frame.pack(side=TOP, padx=2, pady=2, anchor=W)
 
     # Create Treeview with a single column
     job_list_treeview = ttk.Treeview(job_list_frame, columns=("name","description",), show="headings")
 
+    # Define style for headings
+    style.configure("Treeview.Heading", font=("Arial", FontSize, "bold")) #Change header font.
+
     # Define the single column
+    name_width = 130 if ForceSmallSize else 200
+    description_width = 250 if ForceSmallSize else 340
     job_list_treeview.heading("name", text="Name")
     job_list_treeview.heading("description", text="Description")
-    job_list_treeview.column("name", anchor="w", width=200, minwidth=200, stretch=False)
-    job_list_treeview.column("description", anchor="w", width=340, minwidth=340, stretch=False)
+    job_list_treeview.column("name", anchor="w", width=name_width, minwidth=name_width, stretch=False)
+    job_list_treeview.column("description", anchor="w", width=description_width, minwidth=description_width, stretch=False)
 
     # job listbox scrollbars
     job_list_listbox_scrollbar_y = ttk.Scrollbar(job_list_frame, orient="vertical", command=job_list_treeview.yview)
@@ -6339,6 +6453,7 @@ def build_ui():
     job_list_treeview.tag_configure("pending", foreground="black")
     job_list_treeview.tag_configure("ongoing", foreground="blue")
     job_list_treeview.tag_configure("done", foreground="green")
+    job_list_treeview.tag_configure("joblist_font", font=("Arial", FontSize))
 
     # Bind the keys to be used alog
     job_list_treeview.bind("<Delete>", job_list_delete_current)
@@ -6545,6 +6660,7 @@ def main(argv):
     
     LoggingMode = "INFO"
     go_disable_tooptips = False
+    goanyway = False
 
     # Create job dictionary
     # Dictionary fields
@@ -6564,7 +6680,7 @@ def main(argv):
     template_list.add("WB", hole_template_filename_wb, "aux", (0, 0))
     template_list.add("Corner", hole_template_filename_corner, "aux", (0, 0))
 
-    opts, args = getopt.getopt(argv, "hiel:dcst:12nag")
+    opts, args = getopt.getopt(argv, "hiel:dcst:12nab", ["goanyway"])
 
     for opt, arg in opts:
         if opt == '-l':
@@ -6590,8 +6706,10 @@ def main(argv):
         elif opt == '-a':
             use_simple_stabilization = True
             print("Old stabilization")
-        elif opt == '-g':
+        elif opt == '-b':
             dev_debug_enabled = True
+        elif opt == '--goanyway':
+            goanyway = True
         elif opt == '-h':
             print("AfterScan")
             print("  -l <log mode>  Set log level:")
@@ -6605,6 +6723,11 @@ def main(argv):
             print("  -1             Initiate on 'small screen' mode (resolution lower than than Full HD)")
             print("  -a             Use simple stabilization algorithm, not requiring templates (but slightly less precise)")
             exit()
+
+    if goanyway:
+        print("Work in progress, version not usable yet.")
+        tk.messagebox.showerror("WIP", "Work in progress, version not usable yet.")
+        return
 
     # Set our CWD to the same folder where the script is. 
     # Otherwise webbrowser failt to launch (cannot open path of the current working directory: Permission denied)
@@ -6683,7 +6806,6 @@ def main(argv):
 
     load_job_list()
 
-    get_source_dir_file_list()
     get_target_dir_file_list()
 
     adjust_last_column()
@@ -6705,7 +6827,6 @@ def main(argv):
         Go_btn.config(state=NORMAL)
         cropping_btn.config(state=NORMAL)
         frame_slider.config(state=NORMAL)
-        frame_slider.set(CurrentFrame)
 
     init_display()
 
