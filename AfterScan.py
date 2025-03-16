@@ -20,10 +20,10 @@ __copyright__ = "Copyright 2022-25, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
 __module__ = "AfterScan"
-__version__ = "1.20.20"
+__version__ = "1.30.00"
 __data_version__ = "1.0"
-__date__ = "2025-03-15"
-__version_highlight__ = "Fix cropper canvas position, Treeview wrong font, better job description, double preview when switching job"
+__date__ = "2025-03-16"
+__version_highlight__ = "AfterScan 1.30: Stabilize compensation, preview with filters"
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
 __status__ = "Development"
@@ -6724,7 +6724,7 @@ def main(argv):
             print("  -a             Use simple stabilization algorithm, not requiring templates (but slightly less precise)")
             exit()
 
-    if not goanyway:
+    if goanyway:
         print("Work in progress, version not usable yet.")
         tk.messagebox.showerror("WIP", "Work in progress, version not usable yet.")
         return
