@@ -3919,7 +3919,7 @@ def match_template(frame_idx, template, img):
 
     if best_maxVal == None:
         logging.error(f"Match level not determined: frame_idx {frame_idx}, best_thres: {best_thres}, best_top_left: {best_top_left}, "
-                        "best_maxVal: {best_maxVal}, step_threshold: {step_threshold}, local_threshold: {local_threshold}, limit_threshold: {limit_threshold}")
+                        f"best_maxVal: {best_maxVal}, step_threshold: {step_threshold}, local_threshold: {local_threshold}, limit_threshold: {limit_threshold}")
         best_maxVal = 0.0
 
     return int(best_thres), best_top_left, round(best_maxVal,2), best_img_final
@@ -4277,7 +4277,7 @@ def calculate_frame_displacement_with_templates(frame_idx, img_ref, img_ref_alt 
             img_matched = best_img_matched
             break
 
-    if top_left[1] != -1 and match_level > 0.1:
+    if top_left is not None and top_left[1] != -1 and match_level > 0.1:
         move_x = hole_template_pos[0] - top_left[0]
         move_y = hole_template_pos[1] - top_left[1]
         if abs(move_x) > 200 or abs(move_y) > 600:  # if shift too big, ignore it, probably for the better
@@ -4289,8 +4289,11 @@ def calculate_frame_displacement_with_templates(frame_idx, img_ref, img_ref_alt 
         move_x = 0
         move_y = 0
     log_line = f"T{id} - " if id != -1 else ""
-    logging.debug(log_line+f"Frame {frame_idx:5d}: threshold: {frame_treshold:3d}, template: ({hole_template_pos[0]:4d},{hole_template_pos[1]:4d}), top left: ({top_left[0]:4d},{top_left[1]:4d}), move_x:{move_x:4d}, move_y:{move_y:4d}")
-    debug_template_display_frame_raw(img_matched, top_left[0], top_left[1] - stabilization_shift_value.get(), film_hole_template.shape[1], film_hole_template.shape[0], match_level_color_bgr(match_level))
+    if top_left is not None:
+        logging.debug(log_line+f"Frame {frame_idx:5d}: threshold: {frame_treshold:3d}, template: ({hole_template_pos[0]:4d},{hole_template_pos[1]:4d}), top left: ({top_left[0]:4d},{top_left[1]:4d}), move_x:{move_x:4d}, move_y:{move_y:4d}")
+        debug_template_display_frame_raw(img_matched, top_left[0], top_left[1] - stabilization_shift_value.get(), film_hole_template.shape[1], film_hole_template.shape[0], match_level_color_bgr(match_level))
+    else:
+        logging.debug(log_line+f"Frame {frame_idx:5d}: threshold: {frame_treshold:3d}, template: ({hole_template_pos[0]:4d},{hole_template_pos[1]:4d}), top left: None, move_x:{move_x:4d}, move_y:{move_y:4d}")
     debug_template_display_info(frame_idx, frame_treshold, top_left, move_x, move_y)
 
     return move_x, move_y, top_left, match_level, frame_treshold
