@@ -14,6 +14,8 @@ Originally created for the T-Scann 8 project (Torulf Holmström, http://tscann8.
 
 Actions that can be performed by AfterScan include:
 - Stabilization (taking the film sprocket hole as reference)
+  - Template matching (OpenCV-based, default)
+  - **NEW:** AI-powered YOLO detection (optional, more robust)
 - Cropping
 - Image sharpening
 - Noise removal
@@ -28,6 +30,35 @@ This tool relies in the following open source projects to achieve its objectives
 * [NumPy](https://numpy.org/)
 * [FFmpeg](https://ffmpeg.org/)
 * [Pillow](https://python-pillow.org/)
+
+### Optional: YOLO-based Stabilization (Experimental)
+
+AfterScan now supports AI-powered sprocket hole detection using YOLO v8 as an alternative to traditional template matching. This provides more robust detection in challenging conditions.
+
+**To enable YOLO stabilization:**
+
+1. Create and activate a virtual environment (recommended):
+   ```bash
+   python3 -m venv venv
+   source venv/bin/activate
+   ```
+
+2. Install the ultralytics package:
+   ```bash
+   pip install ultralytics
+   ```
+
+3. The YOLO model is included in `Resources/yolo_sprocket_detector.pt`
+
+4. YOLO detection will automatically be used when enabled (currently enabled by default in the `yolo-integration` branch)
+
+**Benefits of YOLO detection:**
+- More robust to lighting and contrast variations
+- Better handling of damaged or dirty sprocket holes
+- Works across different film types without template adjustment
+- Automatic fallback to template matching if confidence is low
+
+**Note:** YOLO detection requires PyTorch (~500MB-2GB) and is slower than template matching, but provides superior robustness. GPU acceleration is recommended for better performance.
 
 ## How it works:
 Sprocket holes in 8mm films are expected to be in a very precise location for each film type (S8/R8). What this tool does is to detect, thanks to OpenCV, the hole(s) in each frame, and then shift the frame as required so that the holes fall in the expected position. This process is individual for each frame, so the length of the scanned film should have no effect on the result. A couple of points to highlight:
