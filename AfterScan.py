@@ -366,6 +366,7 @@ yolo_model_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Reso
 yolo_model = None                   # Cached YOLO model instance (lazy loaded)
 yolo_confidence_threshold = 0.25    # Minimum confidence for YOLO detections (0.0-1.0)
 yolo_fallback_to_template = True    # Fallback to template matching if YOLO fails or has low confidence
+yolo_check_shift_sanity = False     # Enable sanity check for shift size (reject if too big)
 
 # Info required for usage counter
 UserConsent = None
@@ -4362,7 +4363,7 @@ def calculate_frame_displacement_with_yolo(frame_idx, img_ref, yolo_model):
         match_level: Detection confidence (0.0-1.0)
         frame_threshold: Threshold used (0 for YOLO)
     """
-    global yolo_confidence_threshold
+    global yolo_confidence_threshold, yolo_check_shift_sanity
 
     # Convert OpenCV BGR to RGB for YOLO
     img_rgb = cv2.cvtColor(img_ref, cv2.COLOR_BGR2RGB)
@@ -4414,8 +4415,8 @@ def calculate_frame_displacement_with_yolo(frame_idx, img_ref, yolo_model):
     move_x = hole_template_pos[0] - detected_x
     move_y = hole_template_pos[1] - detected_y
 
-    # Sanity check (same as template method)
-    if abs(move_x) > 200 or abs(move_y) > 600:
+    # Sanity check (same as template method) - optional
+    if yolo_check_shift_sanity and (abs(move_x) > 200 or abs(move_y) > 600):
         logging.warning(f"Frame {frame_idx}: YOLO shift too big ({move_x}, {move_y}), ignoring. "
                        f"YOLO confidence was: {match_level:.2f}, detected at: ({detected_x}, {detected_y}), "
                        f"template pos: ({hole_template_pos[0]}, {hole_template_pos[1]})")
