@@ -351,6 +351,13 @@ SavedWithVersion = None # Used to retrieve version from config file (with wich v
 use_simple_stabilization = False    # Stabilize using simpler (and slightier less precise) algorithm, no templates required
 precise_template_match = False
 
+# YOLO-based stabilization configuration
+use_yolo_stabilization = False      # Enable YOLO-based sprocket hole detection
+yolo_model_path = ""                # Path to YOLO model (.pt file)
+yolo_model = None                   # Cached YOLO model instance (lazy loaded)
+yolo_confidence_threshold = 0.25    # Minimum confidence for YOLO detections (0.0-1.0)
+yolo_fallback_to_template = True    # Fallback to template matching if YOLO fails or has low confidence
+
 # Info required for usage counter
 UserConsent = None
 AnonymousUuid = None
