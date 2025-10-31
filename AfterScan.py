@@ -4444,11 +4444,34 @@ def stabilize_image(frame_idx, img, img_ref, offset_x = 0, offset_y = 0, img_ref
     width = img_ref.shape[1]
     height = img_ref.shape[0]
 
-    if use_simple_stabilization:  # Standard stabilization using templates
+    if use_simple_stabilization:  # Simple stabilization without templates
         move_x, move_y = calculate_frame_displacement_simple(frame_idx, img_ref)
         match_level = 1
         frame_threshold = get_stabilization_threshold()
-    else:
+        top_left = [0, 0]
+    elif use_yolo_stabilization:  # YOLO-based sprocket hole detection
+        # Load model if not already loaded
+        if yolo_model is None:
+            loaded_model = load_yolo_model()
+        else:
+            loaded_model = yolo_model
+
+        if loaded_model is not None:
+            move_x, move_y, top_left, match_level, frame_threshold = \
+                calculate_frame_displacement_with_yolo(frame_idx, img_ref, loaded_model)
+
+            # Fallback to template matching if YOLO fails and fallback enabled
+            if yolo_fallback_to_template and match_level < 0.3:
+                logging.warning(f"Frame {frame_idx}: YOLO confidence too low ({match_level:.2f}), "
+                              f"falling back to template matching")
+                move_x, move_y, top_left, match_level, frame_threshold = \
+                    calculate_frame_displacement_with_templates(frame_idx, img_ref, img_ref_alt, id)
+        else:
+            # YOLO model failed to load, use template matching
+            logging.error("YOLO model not available, using template matching")
+            move_x, move_y, top_left, match_level, frame_threshold = \
+                calculate_frame_displacement_with_templates(frame_idx, img_ref, img_ref_alt, id)
+    else:  # Default: template matching
         move_x, move_y, top_left, match_level, frame_threshold  = calculate_frame_displacement_with_templates(frame_idx, img_ref, img_ref_alt, id)
         
     # Try to figure out if there will be a part missing
