@@ -4394,15 +4394,27 @@ def calculate_frame_displacement_with_yolo(frame_idx, img_ref, yolo_model):
         bbox_center_x = (box[0] + box[2]) / 2
         bbox_center_y = (box[1] + box[3]) / 2
 
-        logging.debug(f"Frame {frame_idx}: Detection at ({bbox_center_x:.0f}, {bbox_center_y:.0f}), conf: {conf:.2f}")
+        # Determine which quadrant
+        in_left = bbox_center_x < (img_width // 2)
+        in_bottom = bbox_center_y >= (img_height // 2)
+        quadrant = ""
+        if in_left and in_bottom:
+            quadrant = "bottom-left"
+        elif in_left and not in_bottom:
+            quadrant = "top-left"
+        elif not in_left and in_bottom:
+            quadrant = "bottom-right"
+        else:
+            quadrant = "top-right"
+
+        logging.warning(f"Frame {frame_idx}: YOLO detection at ({bbox_center_x:.0f}, {bbox_center_y:.0f}), conf: {conf:.2f}, quadrant: {quadrant}")
 
         # Bottom-left quadrant: left half AND bottom half
         if bbox_center_x < (img_width // 2) and bbox_center_y >= (img_height // 2):
             bottom_left_boxes.append(box)
             bottom_left_confs.append(conf)
-            logging.debug(f"  -> Accepted (bottom-left quadrant)")
         else:
-            logging.debug(f"  -> Rejected (not in bottom-left quadrant)")
+            logging.warning(f"  -> Rejected: not in bottom-left quadrant")
 
     if len(bottom_left_boxes) == 0:
         logging.warning(f"Frame {frame_idx}: YOLO found {len(boxes)} sprocket(s) but none in bottom-left quadrant")
