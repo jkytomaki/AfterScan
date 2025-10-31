@@ -77,6 +77,14 @@ try:
 except ImportError:
     requests_loaded = False
 
+# Check for YOLO availability at startup
+try:
+    from ultralytics import YOLO
+    YOLO_AVAILABLE = True
+except ImportError:
+    YOLO_AVAILABLE = False
+    # Warning will be logged when user attempts to use YOLO
+
 # Check for temporalDenoise in OpenCV at startup
 HAS_TEMPORAL_DENOISE = hasattr(cv2, 'temporalDenoising')
 
@@ -4319,19 +4327,19 @@ def load_yolo_model():
     if yolo_model is not None:
         return yolo_model
 
+    if not YOLO_AVAILABLE:
+        logging.error("ultralytics package not installed. Install with: pip install ultralytics")
+        return None
+
     if not yolo_model_path or not os.path.exists(yolo_model_path):
         logging.error(f"YOLO model not found at: {yolo_model_path}")
         return None
 
     try:
-        from ultralytics import YOLO
         logging.info(f"Loading YOLO model from: {yolo_model_path}")
         yolo_model = YOLO(yolo_model_path)
         logging.info("YOLO model loaded successfully")
         return yolo_model
-    except ImportError:
-        logging.error("ultralytics package not installed. Install with: pip install ultralytics")
-        return None
     except Exception as e:
         logging.error(f"Failed to load YOLO model: {e}")
         return None
