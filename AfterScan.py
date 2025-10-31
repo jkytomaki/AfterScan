@@ -4382,8 +4382,11 @@ def calculate_frame_displacement_with_yolo(frame_idx, img_ref, yolo_model):
     boxes = results[0].boxes.xyxy.cpu().numpy()
     confidences = results[0].boxes.conf.cpu().numpy()
 
-    # Filter for bottom-left quadrant (following YOLO script strategy)
+    # Log all detections for debugging
     img_width, img_height = img_ref.shape[1], img_ref.shape[0]
+    logging.debug(f"Frame {frame_idx}: YOLO found {len(boxes)} detections, image size: {img_width}x{img_height}")
+
+    # Filter for bottom-left quadrant (following YOLO script strategy)
     bottom_left_boxes = []
     bottom_left_confs = []
 
@@ -4391,13 +4394,18 @@ def calculate_frame_displacement_with_yolo(frame_idx, img_ref, yolo_model):
         bbox_center_x = (box[0] + box[2]) / 2
         bbox_center_y = (box[1] + box[3]) / 2
 
+        logging.debug(f"Frame {frame_idx}: Detection at ({bbox_center_x:.0f}, {bbox_center_y:.0f}), conf: {conf:.2f}")
+
         # Bottom-left quadrant: left half AND bottom half
         if bbox_center_x < (img_width // 2) and bbox_center_y >= (img_height // 2):
             bottom_left_boxes.append(box)
             bottom_left_confs.append(conf)
+            logging.debug(f"  -> Accepted (bottom-left quadrant)")
+        else:
+            logging.debug(f"  -> Rejected (not in bottom-left quadrant)")
 
     if len(bottom_left_boxes) == 0:
-        logging.debug(f"Frame {frame_idx}: No sprocket in bottom-left quadrant")
+        logging.warning(f"Frame {frame_idx}: YOLO found {len(boxes)} sprocket(s) but none in bottom-left quadrant")
         return 0, 0, [0, 0], 0.0, 0
 
     # Select highest confidence detection
