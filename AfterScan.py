@@ -4306,6 +4306,37 @@ def calculate_frame_displacement_with_templates(frame_idx, img_ref, img_ref_alt 
     return move_x, move_y, top_left, match_level, frame_treshold
 
 
+def load_yolo_model():
+    """
+    Load YOLO model for sprocket hole detection.
+    Uses lazy loading - only loads when needed.
+
+    Returns:
+        YOLO model instance if successful, None otherwise
+    """
+    global yolo_model, yolo_model_path
+
+    if yolo_model is not None:
+        return yolo_model
+
+    if not yolo_model_path or not os.path.exists(yolo_model_path):
+        logging.error(f"YOLO model not found at: {yolo_model_path}")
+        return None
+
+    try:
+        from ultralytics import YOLO
+        logging.info(f"Loading YOLO model from: {yolo_model_path}")
+        yolo_model = YOLO(yolo_model_path)
+        logging.info("YOLO model loaded successfully")
+        return yolo_model
+    except ImportError:
+        logging.error("ultralytics package not installed. Install with: pip install ultralytics")
+        return None
+    except Exception as e:
+        logging.error(f"Failed to load YOLO model: {e}")
+        return None
+
+
 def calculate_frame_displacement_with_yolo(frame_idx, img_ref, yolo_model):
     """
     Calculate frame displacement using YOLO sprocket hole detection.
