@@ -4306,6 +4306,87 @@ def calculate_frame_displacement_with_templates(frame_idx, img_ref, img_ref_alt 
     return move_x, move_y, top_left, match_level, frame_treshold
 
 
+def calculate_frame_displacement_with_yolo(frame_idx, img_ref, yolo_model):
+    """
+    Calculate frame displacement using YOLO sprocket hole detection.
+
+    Args:
+        frame_idx: Current frame index
+        img_ref: Input image (OpenCV BGR format)
+        yolo_model: Loaded YOLO model instance
+
+    Returns:
+        move_x: Horizontal displacement
+        move_y: Vertical displacement
+        top_left: Detected sprocket position [x, y]
+        match_level: Detection confidence (0.0-1.0)
+        frame_threshold: Threshold used (0 for YOLO)
+    """
+    global yolo_confidence_threshold
+
+    # Convert OpenCV BGR to RGB for YOLO
+    img_rgb = cv2.cvtColor(img_ref, cv2.COLOR_BGR2RGB)
+
+    # Run YOLO detection
+    try:
+        results = yolo_model.predict(img_rgb, conf=yolo_confidence_threshold, verbose=False)
+    except Exception as e:
+        logging.error(f"Frame {frame_idx}: YOLO prediction failed: {e}")
+        return 0, 0, [0, 0], 0.0, 0
+
+    if len(results) == 0 or len(results[0].boxes) == 0:
+        logging.debug(f"Frame {frame_idx}: No sprocket holes detected by YOLO")
+        return 0, 0, [0, 0], 0.0, 0
+
+    boxes = results[0].boxes.xyxy.cpu().numpy()
+    confidences = results[0].boxes.conf.cpu().numpy()
+
+    # Filter for bottom-left quadrant (following YOLO script strategy)
+    img_width, img_height = img_ref.shape[1], img_ref.shape[0]
+    bottom_left_boxes = []
+    bottom_left_confs = []
+
+    for box, conf in zip(boxes, confidences):
+        bbox_center_x = (box[0] + box[2]) / 2
+        bbox_center_y = (box[1] + box[3]) / 2
+
+        # Bottom-left quadrant: left half AND bottom half
+        if bbox_center_x < (img_width // 2) and bbox_center_y >= (img_height // 2):
+            bottom_left_boxes.append(box)
+            bottom_left_confs.append(conf)
+
+    if len(bottom_left_boxes) == 0:
+        logging.debug(f"Frame {frame_idx}: No sprocket in bottom-left quadrant")
+        return 0, 0, [0, 0], 0.0, 0
+
+    # Select highest confidence detection
+    best_idx = np.argmax(bottom_left_confs)
+    sprocket_hole = bottom_left_boxes[best_idx]
+    match_level = float(bottom_left_confs[best_idx])
+
+    # Use top-right corner as reference point (like YOLO script)
+    detected_x = int(sprocket_hole[2])
+    detected_y = int(sprocket_hole[1])
+    top_left = [detected_x, detected_y]
+
+    # Calculate displacement relative to expected position
+    hole_template_pos = template_list.get_active_position()
+    move_x = hole_template_pos[0] - detected_x
+    move_y = hole_template_pos[1] - detected_y
+
+    # Sanity check (same as template method)
+    if abs(move_x) > 200 or abs(move_y) > 600:
+        logging.warning(f"Frame {frame_idx}: YOLO shift too big ({move_x}, {move_y}), ignoring")
+        move_x = 0
+        move_y = 0
+        match_level = 0.0
+
+    logging.debug(f"Frame {frame_idx}: YOLO detected at ({detected_x}, {detected_y}), "
+                  f"confidence: {match_level:.2f}, move: ({move_x}, {move_y})")
+
+    return move_x, move_y, top_left, match_level, 0
+
+
 def shift_image(img, width, height, move_x, move_y):
     translation_matrix = np.array([
         [1, 0, move_x],
