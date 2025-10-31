@@ -4416,13 +4416,15 @@ def calculate_frame_displacement_with_yolo(frame_idx, img_ref, yolo_model):
 
     # Sanity check (same as template method)
     if abs(move_x) > 200 or abs(move_y) > 600:
-        logging.warning(f"Frame {frame_idx}: YOLO shift too big ({move_x}, {move_y}), ignoring")
+        logging.warning(f"Frame {frame_idx}: YOLO shift too big ({move_x}, {move_y}), ignoring. "
+                       f"YOLO confidence was: {match_level:.2f}, detected at: ({detected_x}, {detected_y}), "
+                       f"template pos: ({hole_template_pos[0]}, {hole_template_pos[1]})")
         move_x = 0
         move_y = 0
         match_level = 0.0
-
-    logging.debug(f"Frame {frame_idx}: YOLO detected at ({detected_x}, {detected_y}), "
-                  f"confidence: {match_level:.2f}, move: ({move_x}, {move_y})")
+    else:
+        logging.debug(f"Frame {frame_idx}: YOLO detected at ({detected_x}, {detected_y}), "
+                      f"confidence: {match_level:.2f}, move: ({move_x}, {move_y})")
 
     return move_x, move_y, top_left, match_level, 0
 
