@@ -362,7 +362,7 @@ precise_template_match = False
 # YOLO-based stabilization configuration
 # NOTE: Set use_yolo_stabilization = True to test YOLO detection
 use_yolo_stabilization = True       # Enable YOLO-based sprocket hole detection [TESTING MODE]
-yolo_model_path = "Resources/yolo_sprocket_detector.pt"  # Path to YOLO model (.pt file)
+yolo_model_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Resources", "yolo_sprocket_detector.pt")  # Path to YOLO model (.pt file)
 yolo_model = None                   # Cached YOLO model instance (lazy loaded)
 yolo_confidence_threshold = 0.25    # Minimum confidence for YOLO detections (0.0-1.0)
 yolo_fallback_to_template = True    # Fallback to template matching if YOLO fails or has low confidence
