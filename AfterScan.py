@@ -813,6 +813,12 @@ def save_project_config():
             project_config["HolePos"] = template_list.get_active_position()
             project_config["HoleScale"] = template_list.get_active_scale()
 
+    # Save YOLO configuration
+    project_config["StabilizationMethod"] = stabilization_method.get()
+    project_config["YoloModelPath"] = yolo_model_path
+    project_config["YoloConfidenceThreshold"] = yolo_confidence_threshold
+    project_config["YoloFallbackToTemplate"] = yolo_fallback_to_template
+
     # remove deprecated items from config
     if "CustomHolePos" in project_config:
         del project_config["CustomHolePos"]
@@ -1078,6 +1084,29 @@ def decode_project_config():
         StabilizationShift = stabilization_shift_value.get()
     else:
         stabilization_shift_value.set(0)
+
+    # Load YOLO configuration
+    if 'StabilizationMethod' in project_config:
+        stabilization_method.set(project_config["StabilizationMethod"])
+        stabilization_method_changed()
+    else:
+        stabilization_method.set("template")
+
+    if 'YoloModelPath' in project_config:
+        global yolo_model_path
+        yolo_model_path = project_config["YoloModelPath"]
+        yolo_model_entry.delete(0, tk.END)
+        yolo_model_entry.insert(0, yolo_model_path)
+
+    if 'YoloConfidenceThreshold' in project_config:
+        yolo_confidence_var.set(project_config["YoloConfidenceThreshold"])
+        global yolo_confidence_threshold
+        yolo_confidence_threshold = project_config["YoloConfidenceThreshold"]
+
+    if 'YoloFallbackToTemplate' in project_config:
+        yolo_fallback_var.set(project_config["YoloFallbackToTemplate"])
+        global yolo_fallback_to_template
+        yolo_fallback_to_template = project_config["YoloFallbackToTemplate"]
 
     if 'PerformRotation' in project_config:
         perform_rotation.set(project_config["PerformRotation"])
@@ -6446,6 +6475,156 @@ def build_ui():
     as_tooltips.add(stabilization_shift_spinbox, "Allows to move the frame up or down after stabilization "
                                 "(to compensate for films where the frame is not centered around the hole/holes)")
     stabilization_shift_spinbox.bind("<FocusOut>", select_stabilization_shift)
+    postprocessing_row += 1
+
+    # Stabilization method selection
+    stabilization_method_label = tk.Label(postprocessing_frame, text='Method:',
+                                         width=14, font=("Arial", FontSize))
+    stabilization_method_label.grid(row=postprocessing_row, column=0, columnspan=1, sticky=E)
+
+    stabilization_method = tk.StringVar(value="template")
+
+    def stabilization_method_changed():
+        """Handle stabilization method radio button changes."""
+        global use_simple_stabilization, use_yolo_stabilization
+        method = stabilization_method.get()
+
+        # Update global flags
+        use_simple_stabilization = (method == "simple")
+        use_yolo_stabilization = (method == "yolo")
+
+        # Enable/disable YOLO controls
+        if method == "yolo":
+            yolo_model_entry.config(state=NORMAL)
+            yolo_model_browse_btn.config(state=NORMAL)
+            yolo_confidence_spinbox.config(state='readonly')
+            yolo_fallback_checkbox.config(state=NORMAL)
+        else:
+            yolo_model_entry.config(state=DISABLED)
+            yolo_model_browse_btn.config(state=DISABLED)
+            yolo_confidence_spinbox.config(state=DISABLED)
+            yolo_fallback_checkbox.config(state=DISABLED)
+
+        # Save to project config
+        project_config["StabilizationMethod"] = method
+
+        # Refresh display if not in a loop
+        if not ConvertLoopRunning and not BatchJobRunning:
+            scale_display_update()
+
+    template_radio = tk.Radiobutton(
+        postprocessing_frame,
+        text="Template",
+        variable=stabilization_method,
+        value="template",
+        command=stabilization_method_changed,
+        font=("Arial", FontSize)
+    )
+    template_radio.grid(row=postprocessing_row, column=1, sticky='w', padx=2)
+    as_tooltips.add(template_radio, "Template matching using OpenCV. Fast and works well with good templates")
+
+    yolo_radio = tk.Radiobutton(
+        postprocessing_frame,
+        text="YOLO",
+        variable=stabilization_method,
+        value="yolo",
+        command=stabilization_method_changed,
+        font=("Arial", FontSize)
+    )
+    yolo_radio.grid(row=postprocessing_row, column=2, sticky='w', padx=2)
+    as_tooltips.add(yolo_radio, "AI-powered detection using YOLO v8. More robust but slower")
+
+    postprocessing_row += 1
+
+    # YOLO Configuration
+    yolo_model_label = tk.Label(postprocessing_frame, text='YOLO Model:',
+                                width=14, font=("Arial", FontSize))
+    yolo_model_label.grid(row=postprocessing_row, column=0, columnspan=1, sticky=E)
+
+    yolo_model_entry = tk.Entry(postprocessing_frame, width=30, state=DISABLED, font=("Arial", FontSize))
+    yolo_model_entry.grid(row=postprocessing_row, column=1, columnspan=2, sticky='ew', padx=2)
+    yolo_model_entry.insert(0, yolo_model_path)
+    as_tooltips.add(yolo_model_entry, "Path to YOLO model file (.pt)")
+
+    def browse_yolo_model():
+        """Browse for YOLO model file."""
+        global yolo_model_path, yolo_model
+        filename = filedialog.askopenfilename(
+            title="Select YOLO Model",
+            filetypes=[("PyTorch Model", "*.pt"), ("All Files", "*.*")]
+        )
+        if filename:
+            yolo_model_path = filename
+            yolo_model_entry.delete(0, tk.END)
+            yolo_model_entry.insert(0, yolo_model_path)
+            project_config["YoloModelPath"] = yolo_model_path
+            # Clear cached model to force reload
+            yolo_model = None
+
+    yolo_model_browse_btn = tk.Button(
+        postprocessing_frame,
+        text="...",
+        command=browse_yolo_model,
+        state=DISABLED,
+        width=3,
+        font=("Arial", FontSize)
+    )
+    yolo_model_browse_btn.grid(row=postprocessing_row, column=2, sticky='e', padx=2)
+    as_tooltips.add(yolo_model_browse_btn, "Browse for YOLO model file")
+
+    postprocessing_row += 1
+
+    # YOLO Confidence threshold
+    yolo_confidence_label = tk.Label(postprocessing_frame, text='YOLO Conf:',
+                                     width=14, font=("Arial", FontSize))
+    yolo_confidence_label.grid(row=postprocessing_row, column=0, columnspan=1, sticky=E)
+
+    yolo_confidence_var = tk.DoubleVar(value=yolo_confidence_threshold)
+
+    def yolo_confidence_changed():
+        """Handle YOLO confidence threshold changes."""
+        global yolo_confidence_threshold
+        yolo_confidence_threshold = yolo_confidence_var.get()
+        project_config["YoloConfidenceThreshold"] = yolo_confidence_threshold
+        # Refresh display if not in a loop
+        if not ConvertLoopRunning and not BatchJobRunning:
+            scale_display_update()
+
+    yolo_confidence_spinbox = tk.Spinbox(
+        postprocessing_frame,
+        from_=0.1,
+        to=0.9,
+        increment=0.05,
+        textvariable=yolo_confidence_var,
+        width=6,
+        state=DISABLED,
+        command=yolo_confidence_changed,
+        font=("Arial", FontSize)
+    )
+    yolo_confidence_spinbox.grid(row=postprocessing_row, column=1, sticky='w', padx=2)
+    yolo_confidence_spinbox.bind("<FocusOut>", lambda e: yolo_confidence_changed())
+    as_tooltips.add(yolo_confidence_spinbox, "Minimum confidence threshold for YOLO detections (0.1-0.9)")
+
+    # YOLO Fallback option
+    yolo_fallback_var = tk.BooleanVar(value=yolo_fallback_to_template)
+
+    def yolo_fallback_changed():
+        """Handle YOLO fallback checkbox changes."""
+        global yolo_fallback_to_template
+        yolo_fallback_to_template = yolo_fallback_var.get()
+        project_config["YoloFallbackToTemplate"] = yolo_fallback_to_template
+
+    yolo_fallback_checkbox = tk.Checkbutton(
+        postprocessing_frame,
+        text="Fallback",
+        variable=yolo_fallback_var,
+        command=yolo_fallback_changed,
+        state=DISABLED,
+        font=("Arial", FontSize)
+    )
+    yolo_fallback_checkbox.grid(row=postprocessing_row, column=2, sticky='w', padx=2)
+    as_tooltips.add(yolo_fallback_checkbox, "Use template matching if YOLO confidence is below 0.3")
+
     postprocessing_row += 1
 
     ### Cropping controls
