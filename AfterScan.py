@@ -3261,6 +3261,7 @@ def scale_display_update(offset_x = 0, offset_y = 0, update_filters=True):
     global CropTopLeft, CropBottomRight
     global SourceDirFileList
     global FrameSync_Viewer_opened
+    global use_yolo_stabilization, yolo_model, latest_yolo_detection
 
     if CurrentFrame >= len(SourceDirFileList):
         return
@@ -3276,8 +3277,28 @@ def scale_display_update(offset_x = 0, offset_y = 0, update_filters=True):
         if not frame_scale_refresh_pending:
             if perform_rotation.get():
                 img = rotate_image(img)
+
+            # Stabilization (YOLO detection happens inside if enabled)
+            shift_x, shift_y = 0, 0
             if perform_stabilization.get() or FrameSync_Viewer_opened:
                 img = stabilize_image(CurrentFrame, img, img, offset_x, offset_y)
+                # Get shift values for drawing detection boxes
+                if use_yolo_stabilization and latest_yolo_detection is not None:
+                    shift_x, shift_y = latest_yolo_detection.get('shift', (0, 0))
+            elif use_yolo_stabilization:
+                # YOLO detection when stabilization is disabled but YOLO visualization is desired
+                # Load model if not already loaded
+                if yolo_model is None:
+                    loaded_model = load_yolo_model()
+                else:
+                    loaded_model = yolo_model
+
+                if loaded_model is not None:
+                    # Run detection (stores result in latest_yolo_detection)
+                    detection = detect_yolo_sprocket(CurrentFrame, img, loaded_model)
+                    if detection is not None:
+                        latest_yolo_detection = detection
+
             if update_filters:  # Only when changing values in UI, not when moving from frame to frame
                 if perform_denoise.get():
                     img = denoise_image(img)
@@ -3290,6 +3311,11 @@ def scale_display_update(offset_x = 0, offset_y = 0, update_filters=True):
                     img = cv2.filter2D(img, -1, sharpen_filter)
                 if perform_gamma_correction.get():
                     img = gamma_correct_image(img, float(gamma_correction_str.get()))
+
+            # Draw YOLO detection boxes (after all image processing but before cropping/resizing)
+            if use_yolo_stabilization and latest_yolo_detection is not None:
+                img = draw_yolo_detections_on_bgr_image(img, shift_x, shift_y)
+
         if perform_cropping.get():
             img = crop_image(img, CropTopLeft, CropBottomRight)
         else:
@@ -4039,105 +4065,16 @@ def debug_display_image(window_name, img, factor=1):
             cv2.destroyWindow(window_name)
 
 
-def draw_yolo_detections_on_image(img, original_img_size):
-    """
-    Draw YOLO detection bounding boxes on the preview image.
-
-    Args:
-        img: Preview image (already resized and converted to RGB)
-        original_img_size: (width, height) of the original image before resize
-
-    Returns:
-        Image with detections drawn on it
-    """
-    global latest_yolo_detection
-
-    if latest_yolo_detection is None:
-        return img
-
-    # Make a copy to draw on
-    img_with_detections = img.copy()
-
-    # Calculate scale factor from original to preview size
-    orig_width, orig_height = original_img_size
-    preview_height, preview_width = img.shape[0], img.shape[1]
-    scale_x = preview_width / orig_width
-    scale_y = preview_height / orig_height
-
-    boxes = latest_yolo_detection['boxes']
-    confidences = latest_yolo_detection['confidences']
-    selected_box = latest_yolo_detection['selected_box']
-    selected_conf = latest_yolo_detection['selected_conf']
-
-    # Draw all detected boxes in yellow
-    for box, conf in zip(boxes, confidences):
-        x1, y1, x2, y2 = box
-        # Scale coordinates to preview size
-        x1_scaled = int(x1 * scale_x)
-        y1_scaled = int(y1 * scale_y)
-        x2_scaled = int(x2 * scale_x)
-        y2_scaled = int(y2 * scale_y)
-
-        # Check if this is the selected box (compare coordinates with small tolerance)
-        is_selected = (abs(box[0] - selected_box[0]) < 0.1 and
-                      abs(box[1] - selected_box[1]) < 0.1 and
-                      abs(box[2] - selected_box[2]) < 0.1 and
-                      abs(box[3] - selected_box[3]) < 0.1)
-
-        if is_selected:
-            # Draw selected box in green with thicker line
-            color = (0, 255, 0)  # Green in RGB
-            thickness = 3
-        else:
-            # Draw other boxes in yellow with thinner line
-            color = (255, 255, 0)  # Yellow in RGB
-            thickness = 2
-
-        # Draw rectangle
-        cv2.rectangle(img_with_detections, (x1_scaled, y1_scaled), (x2_scaled, y2_scaled), color, thickness)
-
-        # Draw center point
-        center_x = (x1_scaled + x2_scaled) // 2
-        center_y = (y1_scaled + y2_scaled) // 2
-        cv2.circle(img_with_detections, (center_x, center_y), 5, color, -1)
-
-        # Add confidence label
-        label = f"{conf:.2f}"
-        label_size, _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
-        label_y = y1_scaled - 10 if y1_scaled - 10 > 10 else y1_scaled + 20
-
-        # Draw background for text
-        cv2.rectangle(img_with_detections,
-                     (x1_scaled, label_y - label_size[1] - 5),
-                     (x1_scaled + label_size[0] + 5, label_y + 5),
-                     color, -1)
-
-        # Draw text
-        cv2.putText(img_with_detections, label, (x1_scaled + 2, label_y),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1, cv2.LINE_AA)
-
-    # Add "YOLO" indicator in top-right corner
-    cv2.putText(img_with_detections, "YOLO", (preview_width - 80, 30),
-               cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2, cv2.LINE_AA)
-
-    return img_with_detections
-
-
 def display_image(img):
     global PreviewWidth, PreviewHeight
     global draw_capture_canvas, left_area_frame
     global perform_cropping
-    global use_yolo_stabilization, latest_yolo_detection
 
-    # Store original image size before resize
-    original_img_size = (img.shape[1], img.shape[0])  # (width, height)
+    # Note: YOLO detections are now drawn on the BGR image before it reaches this function
+    # (in scale_display_update), so they automatically go through cropping/rotation/resizing
 
     img = resize_image(img, PreviewRatio)
     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-
-    # Draw YOLO detections if available and YOLO is enabled
-    if use_yolo_stabilization and latest_yolo_detection is not None:
-        img = draw_yolo_detections_on_image(img, original_img_size)
 
     DisplayableImage = ImageTk.PhotoImage(Image.fromarray(img))
 
@@ -4443,9 +4380,9 @@ def load_yolo_model():
         return None
 
 
-def calculate_frame_displacement_with_yolo(frame_idx, img_ref, yolo_model):
+def detect_yolo_sprocket(frame_idx, img_ref, yolo_model):
     """
-    Calculate frame displacement using YOLO sprocket hole detection.
+    Detect sprocket hole using YOLO (independent of stabilization).
 
     Args:
         frame_idx: Current frame index
@@ -4453,28 +4390,29 @@ def calculate_frame_displacement_with_yolo(frame_idx, img_ref, yolo_model):
         yolo_model: Loaded YOLO model instance
 
     Returns:
-        move_x: Horizontal displacement
-        move_y: Vertical displacement
-        top_left: Detected sprocket position [x, y]
-        match_level: Detection confidence (0.0-1.0)
-        frame_threshold: Threshold used (0 for YOLO)
+        dict with detection data, or None if no detection:
+        {
+            'boxes': All detected boxes (x1, y1, x2, y2),
+            'confidences': All confidence scores,
+            'selected_box': The selected box in bottom-left quadrant,
+            'selected_conf': The selected confidence,
+            'img_size': (width, height),
+            'detected_pos': (x, y) of top-right corner of selected box
+        }
     """
-    global yolo_confidence_threshold, yolo_check_shift_sanity, latest_yolo_detection
+    global yolo_confidence_threshold, latest_yolo_detection
 
     # IMPORTANT: YOLO expects BGR format when passing numpy arrays (same as OpenCV)
-    # Do NOT convert to RGB - that was causing the color channel swap issue!
-    # When YOLO loads from file path, it handles color space internally.
-
     # Run YOLO detection
     try:
         results = yolo_model.predict(img_ref, conf=yolo_confidence_threshold, verbose=False)
     except Exception as e:
         logging.error(f"Frame {frame_idx}: YOLO prediction failed: {e}")
-        return 0, 0, [0, 0], 0.0, 0
+        return None
 
     if len(results) == 0 or len(results[0].boxes) == 0:
         logging.debug(f"Frame {frame_idx}: No sprocket holes detected by YOLO")
-        return 0, 0, [0, 0], 0.0, 0
+        return None
 
     boxes = results[0].boxes.xyxy.cpu().numpy()
     confidences = results[0].boxes.conf.cpu().numpy()
@@ -4513,7 +4451,7 @@ def calculate_frame_displacement_with_yolo(frame_idx, img_ref, yolo_model):
 
     if len(bottom_left_boxes) == 0:
         logging.debug(f"Frame {frame_idx}: YOLO found {len(boxes)} sprocket(s) but none in bottom-left quadrant")
-        return 0, 0, [0, 0], 0.0, 0
+        return None
 
     # Select highest confidence detection
     best_idx = np.argmax(bottom_left_confs)
@@ -4523,6 +4461,134 @@ def calculate_frame_displacement_with_yolo(frame_idx, img_ref, yolo_model):
     # Use top-right corner as reference point (like YOLO script)
     detected_x = int(sprocket_hole[2])
     detected_y = int(sprocket_hole[1])
+
+    logging.debug(f"Frame {frame_idx}: YOLO selected sprocket at ({detected_x}, {detected_y}), confidence: {match_level:.2f}")
+
+    return {
+        'boxes': boxes.tolist(),
+        'confidences': confidences.tolist(),
+        'selected_box': sprocket_hole.tolist(),
+        'selected_conf': match_level,
+        'img_size': (img_width, img_height),
+        'detected_pos': (detected_x, detected_y)
+    }
+
+
+def draw_yolo_detections_on_bgr_image(img_bgr, shift_x=0, shift_y=0):
+    """
+    Draw YOLO detection bounding boxes directly on a BGR image.
+    This should be called on the image AFTER rotation/stabilization but BEFORE
+    cropping/resizing so boxes go through remaining transformations automatically.
+
+    Args:
+        img_bgr: Image in BGR format (OpenCV format) - MODIFIED IN PLACE
+        shift_x: Horizontal shift applied to image (for stabilization)
+        shift_y: Vertical shift applied to image (for stabilization)
+
+    Returns:
+        Same image with detections drawn on it (BGR format)
+    """
+    global latest_yolo_detection
+
+    if latest_yolo_detection is None:
+        return img_bgr
+
+    # Draw directly on the input image (no copy needed - saves 500-1000ms for large images!)
+    boxes = latest_yolo_detection['boxes']
+    confidences = latest_yolo_detection['confidences']
+    selected_box = latest_yolo_detection['selected_box']
+
+    # Performance check - log if we're drawing too many boxes
+    if len(boxes) > 10:
+        logging.warning(f"Drawing {len(boxes)} detection boxes - this may be slow!")
+
+    # Draw all detected boxes
+    for box, conf in zip(boxes, confidences):
+        x1, y1, x2, y2 = box
+        # Apply shift to coordinates
+        x1_shifted = int(x1 + shift_x)
+        y1_shifted = int(y1 + shift_y)
+        x2_shifted = int(x2 + shift_x)
+        y2_shifted = int(y2 + shift_y)
+
+        # Check if this is the selected box
+        is_selected = (abs(box[0] - selected_box[0]) < 0.1 and
+                      abs(box[1] - selected_box[1]) < 0.1 and
+                      abs(box[2] - selected_box[2]) < 0.1 and
+                      abs(box[3] - selected_box[3]) < 0.1)
+
+        if is_selected:
+            color = (0, 255, 0)  # Green in BGR
+            thickness = 3
+        else:
+            color = (0, 255, 255)  # Yellow in BGR
+            thickness = 2
+
+        # Draw rectangle
+        cv2.rectangle(img_bgr, (x1_shifted, y1_shifted), (x2_shifted, y2_shifted), color, thickness)
+
+        # Draw center point
+        center_x = (x1_shifted + x2_shifted) // 2
+        center_y = (y1_shifted + y2_shifted) // 2
+        cv2.circle(img_bgr, (center_x, center_y), 5, color, -1)
+
+        # Draw top-right anchor point (the actual reference point used for stabilization)
+        cv2.circle(img_bgr, (x2_shifted, y1_shifted), 7, (255, 0, 0), -1)  # Blue dot
+
+        # Add confidence label
+        label = f"{conf:.2f}"
+        label_size, _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+        label_y = y1_shifted - 10 if y1_shifted - 10 > 10 else y1_shifted + 20
+
+        # Draw background for text
+        cv2.rectangle(img_bgr,
+                     (x1_shifted, label_y - label_size[1] - 5),
+                     (x1_shifted + label_size[0] + 5, label_y + 5),
+                     color, -1)
+
+        # Draw text in white
+        cv2.putText(img_bgr, label, (x1_shifted + 2, label_y),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+
+    # Add "YOLO" indicator in top-left corner
+    cv2.putText(img_bgr, "YOLO", (10, 30),
+               cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2, cv2.LINE_AA)
+
+    return img_bgr
+
+
+def calculate_frame_displacement_with_yolo(frame_idx, img_ref, yolo_model):
+    """
+    Calculate frame displacement using YOLO sprocket hole detection.
+    This now uses the standalone detect_yolo_sprocket() function.
+
+    Args:
+        frame_idx: Current frame index
+        img_ref: Input image (OpenCV BGR format)
+        yolo_model: Loaded YOLO model instance
+
+    Returns:
+        move_x: Horizontal displacement
+        move_y: Vertical displacement
+        top_left: Detected sprocket position [x, y]
+        match_level: Detection confidence (0.0-1.0)
+        frame_threshold: Threshold used (0 for YOLO)
+    """
+    global yolo_check_shift_sanity, latest_yolo_detection
+
+    # Use the standalone detection function
+    detection = detect_yolo_sprocket(frame_idx, img_ref, yolo_model)
+
+    if detection is None:
+        # No detection found
+        return 0, 0, [0, 0], 0.0, 0
+
+    # Store detection data globally for visualization (will be updated with shift later)
+    latest_yolo_detection = detection
+
+    # Extract detection data
+    detected_x, detected_y = detection['detected_pos']
+    match_level = detection['selected_conf']
     top_left = [detected_x, detected_y]
 
     # Calculate displacement relative to expected position
@@ -4530,7 +4596,7 @@ def calculate_frame_displacement_with_yolo(frame_idx, img_ref, yolo_model):
     move_x = hole_template_pos[0] - detected_x
     move_y = hole_template_pos[1] - detected_y
 
-    # Sanity check (same as template method) - optional
+    # Sanity check (optional)
     if yolo_check_shift_sanity and (abs(move_x) > 200 or abs(move_y) > 600):
         logging.warning(f"Frame {frame_idx}: YOLO shift too big ({move_x}, {move_y}), ignoring. "
                        f"YOLO confidence was: {match_level:.2f}, detected at: ({detected_x}, {detected_y}), "
@@ -4539,17 +4605,10 @@ def calculate_frame_displacement_with_yolo(frame_idx, img_ref, yolo_model):
         move_y = 0
         match_level = 0.0
     else:
-        logging.debug(f"Frame {frame_idx}: YOLO detected at ({detected_x}, {detected_y}), "
-                      f"confidence: {match_level:.2f}, move: ({move_x}, {move_y})")
+        logging.debug(f"Frame {frame_idx}: YOLO shift: ({move_x}, {move_y})")
 
-    # Store detection data globally for visualization
-    latest_yolo_detection = {
-        'boxes': boxes.tolist(),  # All detected boxes (x1, y1, x2, y2)
-        'confidences': confidences.tolist(),  # All confidence scores
-        'selected_box': sprocket_hole.tolist(),  # The selected box
-        'selected_conf': match_level,  # The selected confidence
-        'img_size': (img_width, img_height)  # Original image size
-    }
+    # Update detection with shift values
+    latest_yolo_detection['shift'] = (move_x, move_y)
 
     return move_x, move_y, top_left, match_level, 0
 
@@ -4638,9 +4697,9 @@ def stabilize_image(frame_idx, img, img_ref, offset_x = 0, offset_y = 0, img_ref
         if missing_rows > 0 or match_level < 0.9:
             if match_level < 0.7 if not high_sensitive_bad_frame_detection else 0.9:   # Only add really bad matches
                 if FrameSync_Viewer_opened:  # Generate bad frame list only if popup opened
-                    insert_or_replace_sorted(bad_frame_list, {'frame_idx': frame_idx, 'x': 0, 'y': 0, 
+                    insert_or_replace_sorted(bad_frame_list, {'frame_idx': frame_idx, 'x': 0, 'y': 0,
                                                               'original_x' : top_left[0], 'original_y': top_left[1],
-                                                              'threshold': frame_threshold, 'original_threshold': frame_threshold, 
+                                                              'threshold': frame_threshold, 'original_threshold': frame_threshold,
                                                               'is_frame_saved': True})
                     if stabilization_bounds_alert.get():
                         win.bell()
