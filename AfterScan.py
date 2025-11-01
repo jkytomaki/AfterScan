@@ -1100,8 +1100,10 @@ def decode_project_config():
         if 'YoloModelPath' in project_config:
             global yolo_model_path
             yolo_model_path = project_config["YoloModelPath"]
+            yolo_model_entry.config(state=NORMAL)
             yolo_model_entry.delete(0, tk.END)
             yolo_model_entry.insert(0, yolo_model_path)
+            yolo_model_entry.config(state=DISABLED)
 
         if 'YoloConfidenceThreshold' in project_config:
             yolo_confidence_var.set(project_config["YoloConfidenceThreshold"])
@@ -6557,9 +6559,10 @@ def build_ui():
                                 width=14, font=("Arial", FontSize))
     yolo_model_label.grid(row=postprocessing_row, column=0, columnspan=1, sticky=E)
 
-    yolo_model_entry = tk.Entry(postprocessing_frame, width=30, state=DISABLED, font=("Arial", FontSize))
+    yolo_model_entry = tk.Entry(postprocessing_frame, width=30, state=NORMAL, font=("Arial", FontSize))
     yolo_model_entry.grid(row=postprocessing_row, column=1, columnspan=2, sticky='ew', padx=2)
     yolo_model_entry.insert(0, yolo_model_path)
+    yolo_model_entry.config(state=DISABLED)  # Disable after inserting the default value
     as_tooltips.add(yolo_model_entry, "Path to YOLO model file (.pt)")
 
     def browse_yolo_model():
