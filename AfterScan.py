@@ -4460,27 +4460,12 @@ def calculate_frame_displacement_with_yolo(frame_idx, img_ref, yolo_model):
         frame_threshold: Threshold used (0 for YOLO)
     """
     global yolo_confidence_threshold, yolo_check_shift_sanity, latest_yolo_detection
-    global SourceDir, FrameInputFilenamePattern, first_absolute_frame, file_type
-
-    # Very obvious debug message to confirm this function is being called
-    print(f"*** YOLO FUNCTION CALLED FOR FRAME {frame_idx} ***")
-    logging.warning(f"*** YOLO FUNCTION CALLED FOR FRAME {frame_idx} ***")
 
     # IMPORTANT: YOLO expects BGR format when passing numpy arrays (same as OpenCV)
     # Do NOT convert to RGB - that was causing the color channel swap issue!
     # When YOLO loads from file path, it handles color space internally.
 
-    # Debug: Log image properties (using warning level to ensure it shows)
-    logging.warning(f"YOLO DEBUG Frame {frame_idx}: img_ref shape: {img_ref.shape}, dtype: {img_ref.dtype}, "
-                    f"range: [{img_ref.min()}, {img_ref.max()}]")
-
-    # Debug: Save first frame for inspection (check multiple possible starting frames)
-    if frame_idx <= 2:  # Catch first few frames regardless of starting index
-        debug_path = f"/tmp/afterscan_yolo_debug_frame{frame_idx}_bgr.jpg"
-        success = cv2.imwrite(debug_path, img_ref)
-        logging.warning(f"YOLO DEBUG: Saved img_ref (BGR) to {debug_path} - success={success}")
-
-    # Run YOLO detection - METHOD 1: Using numpy array (pass BGR directly)
+    # Run YOLO detection
     try:
         results = yolo_model.predict(img_ref, conf=yolo_confidence_threshold, verbose=False)
     except Exception as e:
@@ -4489,90 +4474,10 @@ def calculate_frame_displacement_with_yolo(frame_idx, img_ref, yolo_model):
 
     if len(results) == 0 or len(results[0].boxes) == 0:
         logging.debug(f"Frame {frame_idx}: No sprocket holes detected by YOLO")
-        boxes_method1 = []
-        confidences_method1 = []
-    else:
-        boxes_method1 = results[0].boxes.xyxy.cpu().numpy()
-        confidences_method1 = results[0].boxes.conf.cpu().numpy()
-
-    # Run YOLO detection - METHOD 2: Using file path (like stabilize_correct.py)
-    # Use the ACTUAL filename pattern that AfterScan uses
-    actual_frame_number = frame_idx + first_absolute_frame
-    img_path = os.path.join(SourceDir, FrameInputFilenamePattern % (actual_frame_number, file_type))
-
-    logging.warning(f"Frame {frame_idx}: Attempting to load from: {img_path}")
-    logging.warning(f"  frame_idx={frame_idx}, first_absolute_frame={first_absolute_frame}, actual_frame_number={actual_frame_number}")
-
-    boxes_method2 = []
-    confidences_method2 = []
-    try:
-        if os.path.exists(img_path):
-            results2 = yolo_model.predict(str(img_path), conf=yolo_confidence_threshold, verbose=False)
-            if len(results2) > 0 and len(results2[0].boxes) > 0:
-                boxes_method2 = results2[0].boxes.xyxy.cpu().numpy()
-                confidences_method2 = results2[0].boxes.conf.cpu().numpy()
-        else:
-            logging.warning(f"Frame {frame_idx}: File not found at {img_path}")
-    except Exception as e:
-        logging.warning(f"Frame {frame_idx}: File-based YOLO prediction failed: {e}")
-
-    # Compare the two methods
-    logging.warning(f"Frame {frame_idx}: Method 1 (numpy array) found {len(boxes_method1)} detections")
-    logging.warning(f"Frame {frame_idx}: Method 2 (file path) found {len(boxes_method2)} detections")
-
-    if len(boxes_method1) != len(boxes_method2):
-        logging.warning(f"Frame {frame_idx}: DIFFERENCE! Methods found different number of detections!")
-        logging.warning(f"  Method 1 detections: {len(boxes_method1)}")
-        logging.warning(f"  Method 2 detections: {len(boxes_method2)}")
-        for i, (box, conf) in enumerate(zip(boxes_method1, confidences_method1)):
-            logging.warning(f"    Method 1 detection {i+1}: bbox={box}, conf={conf:.2f}")
-        for i, (box, conf) in enumerate(zip(boxes_method2, confidences_method2)):
-            logging.warning(f"    Method 2 detection {i+1}: bbox={box}, conf={conf:.2f}")
-
-        # Save comparison images for debugging
-        debug_dir = "/tmp/yolo_debug_comparison"
-        os.makedirs(debug_dir, exist_ok=True)
-
-        # Save the numpy array image (what Method 1 sees - now BGR, as it should be)
-        debug_numpy_path = f"{debug_dir}/frame{frame_idx}_method1_numpy.jpg"
-        cv2.imwrite(debug_numpy_path, img_ref)  # Save as BGR
-        logging.warning(f"  Saved Method 1 image (BGR) to: {debug_numpy_path}")
-
-        # Load and save what Method 2 sees (for comparison)
-        if os.path.exists(img_path):
-            img_from_file = cv2.imread(img_path, cv2.IMREAD_UNCHANGED)
-            debug_file_path = f"{debug_dir}/frame{frame_idx}_method2_fromfile.jpg"
-            cv2.imwrite(debug_file_path, img_from_file)
-            logging.warning(f"  Saved Method 2 image (from file) to: {debug_file_path}")
-
-            # Compare image properties
-            logging.warning(f"  Image comparison:")
-            logging.warning(f"    Method 1 (img_ref): shape={img_ref.shape}, dtype={img_ref.dtype}, range=[{img_ref.min()}, {img_ref.max()}]")
-            logging.warning(f"    Method 2 (from file): shape={img_from_file.shape}, dtype={img_from_file.dtype}, range=[{img_from_file.min()}, {img_from_file.max()}]")
-
-            # Check if images are identical
-            if img_ref.shape == img_from_file.shape:
-                diff = cv2.absdiff(img_ref, img_from_file)
-                max_diff = diff.max()
-                mean_diff = diff.mean()
-                logging.warning(f"    Pixel difference: max={max_diff}, mean={mean_diff:.2f}")
-                if max_diff == 0:
-                    logging.warning(f"    Images are IDENTICAL pixel-by-pixel!")
-                else:
-                    logging.warning(f"    Images are DIFFERENT!")
-                    # Save difference image
-                    diff_path = f"{debug_dir}/frame{frame_idx}_difference.jpg"
-                    cv2.imwrite(diff_path, diff * 10)  # Multiply to make differences visible
-                    logging.warning(f"    Saved difference image to: {diff_path}")
-            else:
-                logging.warning(f"    Images have DIFFERENT shapes!")
-
-    # Use Method 1 results (numpy array) for the rest of the function
-    boxes = boxes_method1
-    confidences = confidences_method1
-
-    if len(boxes) == 0:
         return 0, 0, [0, 0], 0.0, 0
+
+    boxes = results[0].boxes.xyxy.cpu().numpy()
+    confidences = results[0].boxes.conf.cpu().numpy()
 
     # Log all detections for debugging
     img_width, img_height = img_ref.shape[1], img_ref.shape[0]
@@ -4599,23 +4504,15 @@ def calculate_frame_displacement_with_yolo(frame_idx, img_ref, yolo_model):
         else:
             quadrant = "top-right"
 
-        logging.warning(f"Frame {frame_idx}: YOLO detection at ({bbox_center_x:.0f}, {bbox_center_y:.0f}), conf: {conf:.2f}, quadrant: {quadrant}")
+        logging.debug(f"Frame {frame_idx}: YOLO detection at ({bbox_center_x:.0f}, {bbox_center_y:.0f}), conf: {conf:.2f}, quadrant: {quadrant}")
 
         # Bottom-left quadrant: left half AND bottom half
         if bbox_center_x < (img_width // 2) and bbox_center_y >= (img_height // 2):
             bottom_left_boxes.append(box)
             bottom_left_confs.append(conf)
-        else:
-            logging.warning(f"  -> Rejected: not in bottom-left quadrant")
 
     if len(bottom_left_boxes) == 0:
-        logging.warning(f"Frame {frame_idx}: YOLO found {len(boxes)} sprocket(s) but none in bottom-left quadrant")
-        logging.warning(f"Frame {frame_idx}: Image dimensions: {img_width}x{img_height}")
-        for i, (box, conf) in enumerate(zip(boxes, confidences)):
-            bbox_center_x = (box[0] + box[2]) / 2
-            bbox_center_y = (box[1] + box[3]) / 2
-            logging.warning(f"  Detection {i+1}: center=({bbox_center_x:.0f}, {bbox_center_y:.0f}), "
-                          f"bbox=[{box[0]:.0f}, {box[1]:.0f}, {box[2]:.0f}, {box[3]:.0f}], conf={conf:.2f}")
+        logging.debug(f"Frame {frame_idx}: YOLO found {len(boxes)} sprocket(s) but none in bottom-left quadrant")
         return 0, 0, [0, 0], 0.0, 0
 
     # Select highest confidence detection
