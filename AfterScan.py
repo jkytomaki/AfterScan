@@ -1086,27 +1086,31 @@ def decode_project_config():
         stabilization_shift_value.set(0)
 
     # Load YOLO configuration
-    if 'StabilizationMethod' in project_config:
-        stabilization_method.set(project_config["StabilizationMethod"])
-        stabilization_method_changed()
-    else:
-        stabilization_method.set("template")
+    try:
+        if 'StabilizationMethod' in project_config:
+            stabilization_method.set(project_config["StabilizationMethod"])
+            stabilization_method_changed()
+        else:
+            stabilization_method.set("template")
 
-    if 'YoloModelPath' in project_config:
-        global yolo_model_path
-        yolo_model_path = project_config["YoloModelPath"]
-        yolo_model_entry.delete(0, tk.END)
-        yolo_model_entry.insert(0, yolo_model_path)
+        if 'YoloModelPath' in project_config:
+            global yolo_model_path
+            yolo_model_path = project_config["YoloModelPath"]
+            yolo_model_entry.delete(0, tk.END)
+            yolo_model_entry.insert(0, yolo_model_path)
 
-    if 'YoloConfidenceThreshold' in project_config:
-        yolo_confidence_var.set(project_config["YoloConfidenceThreshold"])
-        global yolo_confidence_threshold
-        yolo_confidence_threshold = project_config["YoloConfidenceThreshold"]
+        if 'YoloConfidenceThreshold' in project_config:
+            yolo_confidence_var.set(project_config["YoloConfidenceThreshold"])
+            global yolo_confidence_threshold
+            yolo_confidence_threshold = project_config["YoloConfidenceThreshold"]
 
-    if 'YoloFallbackToTemplate' in project_config:
-        yolo_fallback_var.set(project_config["YoloFallbackToTemplate"])
-        global yolo_fallback_to_template
-        yolo_fallback_to_template = project_config["YoloFallbackToTemplate"]
+        if 'YoloFallbackToTemplate' in project_config:
+            yolo_fallback_var.set(project_config["YoloFallbackToTemplate"])
+            global yolo_fallback_to_template
+            yolo_fallback_to_template = project_config["YoloFallbackToTemplate"]
+    except NameError:
+        # Widgets not created yet, will be set when UI is built
+        pass
 
     if 'PerformRotation' in project_config:
         perform_rotation.set(project_config["PerformRotation"])
