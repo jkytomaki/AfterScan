@@ -368,6 +368,9 @@ yolo_confidence_threshold = 0.25    # Minimum confidence for YOLO detections (0.
 yolo_fallback_to_template = True    # Fallback to template matching if YOLO fails or has low confidence
 yolo_check_shift_sanity = False     # Enable sanity check for shift size (reject if too big)
 
+# Global variable to store latest YOLO detection data for visualization
+latest_yolo_detection = None        # Stores: {'boxes': [], 'confidences': [], 'selected_box': None, 'selected_conf': None}
+
 # Info required for usage counter
 UserConsent = None
 AnonymousUuid = None
@@ -4036,13 +4039,106 @@ def debug_display_image(window_name, img, factor=1):
             cv2.destroyWindow(window_name)
 
 
+def draw_yolo_detections_on_image(img, original_img_size):
+    """
+    Draw YOLO detection bounding boxes on the preview image.
+
+    Args:
+        img: Preview image (already resized and converted to RGB)
+        original_img_size: (width, height) of the original image before resize
+
+    Returns:
+        Image with detections drawn on it
+    """
+    global latest_yolo_detection
+
+    if latest_yolo_detection is None:
+        return img
+
+    # Make a copy to draw on
+    img_with_detections = img.copy()
+
+    # Calculate scale factor from original to preview size
+    orig_width, orig_height = original_img_size
+    preview_height, preview_width = img.shape[0], img.shape[1]
+    scale_x = preview_width / orig_width
+    scale_y = preview_height / orig_height
+
+    boxes = latest_yolo_detection['boxes']
+    confidences = latest_yolo_detection['confidences']
+    selected_box = latest_yolo_detection['selected_box']
+    selected_conf = latest_yolo_detection['selected_conf']
+
+    # Draw all detected boxes in yellow
+    for box, conf in zip(boxes, confidences):
+        x1, y1, x2, y2 = box
+        # Scale coordinates to preview size
+        x1_scaled = int(x1 * scale_x)
+        y1_scaled = int(y1 * scale_y)
+        x2_scaled = int(x2 * scale_x)
+        y2_scaled = int(y2 * scale_y)
+
+        # Check if this is the selected box (compare coordinates with small tolerance)
+        is_selected = (abs(box[0] - selected_box[0]) < 0.1 and
+                      abs(box[1] - selected_box[1]) < 0.1 and
+                      abs(box[2] - selected_box[2]) < 0.1 and
+                      abs(box[3] - selected_box[3]) < 0.1)
+
+        if is_selected:
+            # Draw selected box in green with thicker line
+            color = (0, 255, 0)  # Green in RGB
+            thickness = 3
+        else:
+            # Draw other boxes in yellow with thinner line
+            color = (255, 255, 0)  # Yellow in RGB
+            thickness = 2
+
+        # Draw rectangle
+        cv2.rectangle(img_with_detections, (x1_scaled, y1_scaled), (x2_scaled, y2_scaled), color, thickness)
+
+        # Draw center point
+        center_x = (x1_scaled + x2_scaled) // 2
+        center_y = (y1_scaled + y2_scaled) // 2
+        cv2.circle(img_with_detections, (center_x, center_y), 5, color, -1)
+
+        # Add confidence label
+        label = f"{conf:.2f}"
+        label_size, _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+        label_y = y1_scaled - 10 if y1_scaled - 10 > 10 else y1_scaled + 20
+
+        # Draw background for text
+        cv2.rectangle(img_with_detections,
+                     (x1_scaled, label_y - label_size[1] - 5),
+                     (x1_scaled + label_size[0] + 5, label_y + 5),
+                     color, -1)
+
+        # Draw text
+        cv2.putText(img_with_detections, label, (x1_scaled + 2, label_y),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1, cv2.LINE_AA)
+
+    # Add "YOLO" indicator in top-right corner
+    cv2.putText(img_with_detections, "YOLO", (preview_width - 80, 30),
+               cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2, cv2.LINE_AA)
+
+    return img_with_detections
+
+
 def display_image(img):
     global PreviewWidth, PreviewHeight
     global draw_capture_canvas, left_area_frame
     global perform_cropping
+    global use_yolo_stabilization, latest_yolo_detection
+
+    # Store original image size before resize
+    original_img_size = (img.shape[1], img.shape[0])  # (width, height)
 
     img = resize_image(img, PreviewRatio)
     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+    # Draw YOLO detections if available and YOLO is enabled
+    if use_yolo_stabilization and latest_yolo_detection is not None:
+        img = draw_yolo_detections_on_image(img, original_img_size)
+
     DisplayableImage = ImageTk.PhotoImage(Image.fromarray(img))
 
     image_height = img.shape[0]
@@ -4363,24 +4459,120 @@ def calculate_frame_displacement_with_yolo(frame_idx, img_ref, yolo_model):
         match_level: Detection confidence (0.0-1.0)
         frame_threshold: Threshold used (0 for YOLO)
     """
-    global yolo_confidence_threshold, yolo_check_shift_sanity
+    global yolo_confidence_threshold, yolo_check_shift_sanity, latest_yolo_detection
+    global SourceDir, FrameInputFilenamePattern, first_absolute_frame, file_type
 
-    # Convert OpenCV BGR to RGB for YOLO
-    img_rgb = cv2.cvtColor(img_ref, cv2.COLOR_BGR2RGB)
+    # Very obvious debug message to confirm this function is being called
+    print(f"*** YOLO FUNCTION CALLED FOR FRAME {frame_idx} ***")
+    logging.warning(f"*** YOLO FUNCTION CALLED FOR FRAME {frame_idx} ***")
 
-    # Run YOLO detection
+    # IMPORTANT: YOLO expects BGR format when passing numpy arrays (same as OpenCV)
+    # Do NOT convert to RGB - that was causing the color channel swap issue!
+    # When YOLO loads from file path, it handles color space internally.
+
+    # Debug: Log image properties (using warning level to ensure it shows)
+    logging.warning(f"YOLO DEBUG Frame {frame_idx}: img_ref shape: {img_ref.shape}, dtype: {img_ref.dtype}, "
+                    f"range: [{img_ref.min()}, {img_ref.max()}]")
+
+    # Debug: Save first frame for inspection (check multiple possible starting frames)
+    if frame_idx <= 2:  # Catch first few frames regardless of starting index
+        debug_path = f"/tmp/afterscan_yolo_debug_frame{frame_idx}_bgr.jpg"
+        success = cv2.imwrite(debug_path, img_ref)
+        logging.warning(f"YOLO DEBUG: Saved img_ref (BGR) to {debug_path} - success={success}")
+
+    # Run YOLO detection - METHOD 1: Using numpy array (pass BGR directly)
     try:
-        results = yolo_model.predict(img_rgb, conf=yolo_confidence_threshold, verbose=False)
+        results = yolo_model.predict(img_ref, conf=yolo_confidence_threshold, verbose=False)
     except Exception as e:
         logging.error(f"Frame {frame_idx}: YOLO prediction failed: {e}")
         return 0, 0, [0, 0], 0.0, 0
 
     if len(results) == 0 or len(results[0].boxes) == 0:
         logging.debug(f"Frame {frame_idx}: No sprocket holes detected by YOLO")
-        return 0, 0, [0, 0], 0.0, 0
+        boxes_method1 = []
+        confidences_method1 = []
+    else:
+        boxes_method1 = results[0].boxes.xyxy.cpu().numpy()
+        confidences_method1 = results[0].boxes.conf.cpu().numpy()
 
-    boxes = results[0].boxes.xyxy.cpu().numpy()
-    confidences = results[0].boxes.conf.cpu().numpy()
+    # Run YOLO detection - METHOD 2: Using file path (like stabilize_correct.py)
+    # Use the ACTUAL filename pattern that AfterScan uses
+    actual_frame_number = frame_idx + first_absolute_frame
+    img_path = os.path.join(SourceDir, FrameInputFilenamePattern % (actual_frame_number, file_type))
+
+    logging.warning(f"Frame {frame_idx}: Attempting to load from: {img_path}")
+    logging.warning(f"  frame_idx={frame_idx}, first_absolute_frame={first_absolute_frame}, actual_frame_number={actual_frame_number}")
+
+    boxes_method2 = []
+    confidences_method2 = []
+    try:
+        if os.path.exists(img_path):
+            results2 = yolo_model.predict(str(img_path), conf=yolo_confidence_threshold, verbose=False)
+            if len(results2) > 0 and len(results2[0].boxes) > 0:
+                boxes_method2 = results2[0].boxes.xyxy.cpu().numpy()
+                confidences_method2 = results2[0].boxes.conf.cpu().numpy()
+        else:
+            logging.warning(f"Frame {frame_idx}: File not found at {img_path}")
+    except Exception as e:
+        logging.warning(f"Frame {frame_idx}: File-based YOLO prediction failed: {e}")
+
+    # Compare the two methods
+    logging.warning(f"Frame {frame_idx}: Method 1 (numpy array) found {len(boxes_method1)} detections")
+    logging.warning(f"Frame {frame_idx}: Method 2 (file path) found {len(boxes_method2)} detections")
+
+    if len(boxes_method1) != len(boxes_method2):
+        logging.warning(f"Frame {frame_idx}: DIFFERENCE! Methods found different number of detections!")
+        logging.warning(f"  Method 1 detections: {len(boxes_method1)}")
+        logging.warning(f"  Method 2 detections: {len(boxes_method2)}")
+        for i, (box, conf) in enumerate(zip(boxes_method1, confidences_method1)):
+            logging.warning(f"    Method 1 detection {i+1}: bbox={box}, conf={conf:.2f}")
+        for i, (box, conf) in enumerate(zip(boxes_method2, confidences_method2)):
+            logging.warning(f"    Method 2 detection {i+1}: bbox={box}, conf={conf:.2f}")
+
+        # Save comparison images for debugging
+        debug_dir = "/tmp/yolo_debug_comparison"
+        os.makedirs(debug_dir, exist_ok=True)
+
+        # Save the numpy array image (what Method 1 sees - now BGR, as it should be)
+        debug_numpy_path = f"{debug_dir}/frame{frame_idx}_method1_numpy.jpg"
+        cv2.imwrite(debug_numpy_path, img_ref)  # Save as BGR
+        logging.warning(f"  Saved Method 1 image (BGR) to: {debug_numpy_path}")
+
+        # Load and save what Method 2 sees (for comparison)
+        if os.path.exists(img_path):
+            img_from_file = cv2.imread(img_path, cv2.IMREAD_UNCHANGED)
+            debug_file_path = f"{debug_dir}/frame{frame_idx}_method2_fromfile.jpg"
+            cv2.imwrite(debug_file_path, img_from_file)
+            logging.warning(f"  Saved Method 2 image (from file) to: {debug_file_path}")
+
+            # Compare image properties
+            logging.warning(f"  Image comparison:")
+            logging.warning(f"    Method 1 (img_ref): shape={img_ref.shape}, dtype={img_ref.dtype}, range=[{img_ref.min()}, {img_ref.max()}]")
+            logging.warning(f"    Method 2 (from file): shape={img_from_file.shape}, dtype={img_from_file.dtype}, range=[{img_from_file.min()}, {img_from_file.max()}]")
+
+            # Check if images are identical
+            if img_ref.shape == img_from_file.shape:
+                diff = cv2.absdiff(img_ref, img_from_file)
+                max_diff = diff.max()
+                mean_diff = diff.mean()
+                logging.warning(f"    Pixel difference: max={max_diff}, mean={mean_diff:.2f}")
+                if max_diff == 0:
+                    logging.warning(f"    Images are IDENTICAL pixel-by-pixel!")
+                else:
+                    logging.warning(f"    Images are DIFFERENT!")
+                    # Save difference image
+                    diff_path = f"{debug_dir}/frame{frame_idx}_difference.jpg"
+                    cv2.imwrite(diff_path, diff * 10)  # Multiply to make differences visible
+                    logging.warning(f"    Saved difference image to: {diff_path}")
+            else:
+                logging.warning(f"    Images have DIFFERENT shapes!")
+
+    # Use Method 1 results (numpy array) for the rest of the function
+    boxes = boxes_method1
+    confidences = confidences_method1
+
+    if len(boxes) == 0:
+        return 0, 0, [0, 0], 0.0, 0
 
     # Log all detections for debugging
     img_width, img_height = img_ref.shape[1], img_ref.shape[0]
@@ -4418,6 +4610,12 @@ def calculate_frame_displacement_with_yolo(frame_idx, img_ref, yolo_model):
 
     if len(bottom_left_boxes) == 0:
         logging.warning(f"Frame {frame_idx}: YOLO found {len(boxes)} sprocket(s) but none in bottom-left quadrant")
+        logging.warning(f"Frame {frame_idx}: Image dimensions: {img_width}x{img_height}")
+        for i, (box, conf) in enumerate(zip(boxes, confidences)):
+            bbox_center_x = (box[0] + box[2]) / 2
+            bbox_center_y = (box[1] + box[3]) / 2
+            logging.warning(f"  Detection {i+1}: center=({bbox_center_x:.0f}, {bbox_center_y:.0f}), "
+                          f"bbox=[{box[0]:.0f}, {box[1]:.0f}, {box[2]:.0f}, {box[3]:.0f}], conf={conf:.2f}")
         return 0, 0, [0, 0], 0.0, 0
 
     # Select highest confidence detection
@@ -4447,6 +4645,15 @@ def calculate_frame_displacement_with_yolo(frame_idx, img_ref, yolo_model):
         logging.debug(f"Frame {frame_idx}: YOLO detected at ({detected_x}, {detected_y}), "
                       f"confidence: {match_level:.2f}, move: ({move_x}, {move_y})")
 
+    # Store detection data globally for visualization
+    latest_yolo_detection = {
+        'boxes': boxes.tolist(),  # All detected boxes (x1, y1, x2, y2)
+        'confidences': confidences.tolist(),  # All confidence scores
+        'selected_box': sprocket_hole.tolist(),  # The selected box
+        'selected_conf': match_level,  # The selected confidence
+        'img_size': (img_width, img_height)  # Original image size
+    }
+
     return move_x, move_y, top_left, match_level, 0
 
 
@@ -4471,6 +4678,7 @@ def stabilize_image(frame_idx, img, img_ref, offset_x = 0, offset_y = 0, img_ref
     global FrameSync_Viewer_opened
     global perform_stabilization
     global template_list
+    global use_yolo_stabilization
 
     # Get image dimensions to perform image shift later
     width = img_ref.shape[1]
@@ -4541,7 +4749,8 @@ def stabilize_image(frame_idx, img, img_ref, offset_x = 0, offset_y = 0, img_ref
                         win.bell()
             if GenerateCsv:
                 CsvFile.write('%i, %i, %i\n' % (first_absolute_frame+frame_idx, missing_rows, int(match_level*100)))
-    if match_level < 0.4:   # If match level is too bad, revert to simple algorithm
+    # Only fall back to simple algorithm if not using YOLO (YOLO has its own fallback logic)
+    if match_level < 0.4 and not use_yolo_stabilization:
         move_x, move_y = calculate_frame_displacement_simple(frame_idx, img)
     # Create the translation matrix using move_x and move_y (NumPy array): This is the actual stabilization
     # We double-check the check box since this function might be called just to debug template detection
