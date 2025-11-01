@@ -361,12 +361,13 @@ precise_template_match = False
 
 # YOLO-based stabilization configuration
 # NOTE: Set use_yolo_stabilization = True to test YOLO detection
-use_yolo_stabilization = True       # Enable YOLO-based sprocket hole detection [TESTING MODE]
+use_yolo_stabilization = False      # Enable YOLO-based sprocket hole detection (controlled by UI)
 yolo_model_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Resources", "yolo_sprocket_detector.pt")  # Path to YOLO model (.pt file)
 yolo_model = None                   # Cached YOLO model instance (lazy loaded)
 yolo_confidence_threshold = 0.25    # Minimum confidence for YOLO detections (0.0-1.0)
 yolo_fallback_to_template = True    # Fallback to template matching if YOLO fails or has low confidence
 yolo_check_shift_sanity = False     # Enable sanity check for shift size (reject if too big)
+draw_yolo_detections = False        # Draw YOLO detection bounding boxes on the image
 
 # Global variable to store latest YOLO detection data for visualization
 latest_yolo_detection = None        # Stores: {'boxes': [], 'confidences': [], 'selected_box': None, 'selected_conf': None}
@@ -782,6 +783,7 @@ def save_project_config():
     global video_filename_str, video_title_str
     global frame_from_str, frame_to_str
     global perform_denoise, perform_sharpness, perform_gamma_correction
+    global stabilization_method
 
     # Write project data upon exit
     project_config["SourceDir"] = SourceDir
@@ -818,6 +820,7 @@ def save_project_config():
     project_config["YoloModelPath"] = yolo_model_path
     project_config["YoloConfidenceThreshold"] = yolo_confidence_threshold
     project_config["YoloFallbackToTemplate"] = yolo_fallback_to_template
+    project_config["DrawYoloDetections"] = draw_yolo_detections
 
     # remove deprecated items from config
     if "CustomHolePos" in project_config:
@@ -872,7 +875,7 @@ def load_project_config():
     widget_status_update(NORMAL)
     FrameSync_Viewer_popup_update_widgets(NORMAL)
 
-def decode_project_config():        
+def decode_project_config():
     global SourceDir, TargetDir
     global project_config
     global template_list
@@ -897,6 +900,7 @@ def decode_project_config():
     global high_sensitive_bad_frame_detection, current_bad_frame_index
     global precise_template_match
     global StabilizationShift
+    global stabilization_method
 
     if SourceDir != "" and len(bad_frame_list) > 0:     # This function will load a new bad frame list, save current if it exists
         save_bad_frame_list()
@@ -1108,6 +1112,11 @@ def decode_project_config():
             yolo_fallback_var.set(project_config["YoloFallbackToTemplate"])
             global yolo_fallback_to_template
             yolo_fallback_to_template = project_config["YoloFallbackToTemplate"]
+
+        if 'DrawYoloDetections' in project_config:
+            yolo_draw_detections_var.set(project_config["DrawYoloDetections"])
+            global draw_yolo_detections
+            draw_yolo_detections = project_config["DrawYoloDetections"]
     except NameError:
         # Widgets not created yet, will be set when UI is built
         pass
@@ -3294,7 +3303,7 @@ def scale_display_update(offset_x = 0, offset_y = 0, update_filters=True):
     global CropTopLeft, CropBottomRight
     global SourceDirFileList
     global FrameSync_Viewer_opened
-    global use_yolo_stabilization, yolo_model, latest_yolo_detection
+    global use_yolo_stabilization, yolo_model, latest_yolo_detection, draw_yolo_detections
 
     if CurrentFrame >= len(SourceDirFileList):
         return
@@ -3346,7 +3355,7 @@ def scale_display_update(offset_x = 0, offset_y = 0, update_filters=True):
                     img = gamma_correct_image(img, float(gamma_correction_str.get()))
 
             # Draw YOLO detection boxes (after all image processing but before cropping/resizing)
-            if use_yolo_stabilization and latest_yolo_detection is not None:
+            if use_yolo_stabilization and draw_yolo_detections and latest_yolo_detection is not None:
                 img = draw_yolo_detections_on_bgr_image(img, shift_x, shift_y)
 
         if perform_cropping.get():
@@ -6158,6 +6167,7 @@ def build_ui():
     global low_contrast_custom_template
     global display_template_popup_btn
     global stabilization_shift_value, stabilization_shift_label, stabilization_shift_spinbox
+    global stabilization_method
 
     # Menu bar
     menu_bar = tk.Menu(win)
@@ -6503,11 +6513,13 @@ def build_ui():
             yolo_model_browse_btn.config(state=NORMAL)
             yolo_confidence_spinbox.config(state='readonly')
             yolo_fallback_checkbox.config(state=NORMAL)
+            yolo_draw_detections_checkbox.config(state=NORMAL)
         else:
             yolo_model_entry.config(state=DISABLED)
             yolo_model_browse_btn.config(state=DISABLED)
             yolo_confidence_spinbox.config(state=DISABLED)
             yolo_fallback_checkbox.config(state=DISABLED)
+            yolo_draw_detections_checkbox.config(state=DISABLED)
 
         # Save to project config
         project_config["StabilizationMethod"] = method
@@ -6628,6 +6640,29 @@ def build_ui():
     )
     yolo_fallback_checkbox.grid(row=postprocessing_row, column=2, sticky='w', padx=2)
     as_tooltips.add(yolo_fallback_checkbox, "Use template matching if YOLO confidence is below 0.3")
+
+    # YOLO Draw Detections option
+    yolo_draw_detections_var = tk.BooleanVar(value=draw_yolo_detections)
+
+    def yolo_draw_detections_changed():
+        """Handle YOLO draw detections checkbox changes."""
+        global draw_yolo_detections
+        draw_yolo_detections = yolo_draw_detections_var.get()
+        project_config["DrawYoloDetections"] = draw_yolo_detections
+        # Refresh display if not in a loop
+        if not ConvertLoopRunning and not BatchJobRunning:
+            scale_display_update()
+
+    yolo_draw_detections_checkbox = tk.Checkbutton(
+        postprocessing_frame,
+        text="Draw boxes",
+        variable=yolo_draw_detections_var,
+        command=yolo_draw_detections_changed,
+        state=DISABLED,
+        font=("Arial", FontSize)
+    )
+    yolo_draw_detections_checkbox.grid(row=postprocessing_row, column=3, sticky='w', padx=2)
+    as_tooltips.add(yolo_draw_detections_checkbox, "Draw YOLO detection bounding boxes on the image")
 
     postprocessing_row += 1
 
