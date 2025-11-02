@@ -1986,7 +1986,6 @@ def widget_status_update(widget_state=0, button_action=0):
         ffmpeg_preset_rb1.config(state=widget_state if project_config["GenerateVideo"] else DISABLED)
         ffmpeg_preset_rb2.config(state=widget_state if project_config["GenerateVideo"] else DISABLED)
         ffmpeg_preset_rb3.config(state=widget_state if project_config["GenerateVideo"] else DISABLED)
-        custom_ffmpeg_path.config(state=widget_state if project_config["GenerateVideo"] else DISABLED)
         start_batch_btn.config(state=widget_state if button_action != start_batch_btn else NORMAL)
         add_job_btn.config(state=widget_state)
         delete_job_btn.config(state=widget_state)
@@ -6859,6 +6858,12 @@ def build_ui():
     stabilization_shift_label = tk.Label(postprocessing_frame, text='Compensation:',
                                         width=14, font=("Arial", FontSize))
     stabilization_shift_label.grid(row=postprocessing_row, column=1, columnspan=1, sticky=E)
+
+    stabilization_shift_x_value = tk.IntVar(value=0)
+    stabilization_shift_x_spinbox = tk.Spinbox(postprocessing_frame, width=3, command=select_stabilization_shift_x,
+        textvariable=stabilization_shift_x_value, from_=-150, to=150, increment=-5, font=("Arial", FontSize))
+    stabilization_shift_x_spinbox.grid(row=postprocessing_row, column=2, sticky=W)
+    as_tooltips.add(stabilization_shift_x_spinbox, "Allows to move the frame up or down after stabilization "
                                 "(to compensate for films where the frame is not centered around the hole/holes)")
     stabilization_shift_x_spinbox.bind("<FocusOut>", select_stabilization_shift_x)
 
@@ -7304,19 +7309,6 @@ def build_ui():
     resolution_dropdown.pack(side=LEFT, anchor=E, padx=5)
     resolution_dropdown.config(state=DISABLED)
     as_tooltips.add(resolution_dropdown, "Resolution to be used when generating the video")
-
-    video_row += 1
-
-    # Custom ffmpeg path
-    custom_ffmpeg_path_label = Label(video_frame, text='FFMpeg path:', font=("Arial", FontSize))
-    custom_ffmpeg_path_label.grid(row=video_row, column=0, sticky=W, padx=5)
-    custom_ffmpeg_path = Entry(video_frame, width=26 if BigSize else 26, borderwidth=1, font=("Arial", FontSize))
-    custom_ffmpeg_path.grid(row=video_row, column=1, columnspan=2, sticky=W, padx=5)
-    custom_ffmpeg_path.delete(0, 'end')
-    custom_ffmpeg_path.insert('end', FfmpegBinName)
-    custom_ffmpeg_path.bind("<FocusOut>", custom_ffmpeg_path_focus_out)
-    custom_ffmpeg_path.bind('<<Paste>>', lambda event, entry=custom_ffmpeg_path: on_paste_all_entries(event, entry))
-    as_tooltips.add(custom_ffmpeg_path, "Path where the ffmpeg executable is installed in your system")
 
     video_row += 1
 
