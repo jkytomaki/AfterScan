@@ -20,12 +20,47 @@ Actions that can be performed by AfterScan include:
 
 And that's about it. Other post-processing jobs (color correction) can be done, if required, with other tools.
 
-This tool relies in the following open source projects to achieve its objectives. Need to be installed in the system used to run AfterScan:
-* [Python](https://www.python.org/)
-* [OpenCV](https://opencv.org/)
-* [NumPy](https://numpy.org/)
-* [FFmpeg](https://ffmpeg.org/)
-* [Pillow](https://python-pillow.org/)
+## Installation
+
+### Requirements
+This tool relies on the following open source projects:
+* [Python 3](https://www.python.org/) with tkinter support
+* [FFmpeg](https://ffmpeg.org/) (optional, for video generation)
+
+### Setup Instructions
+
+1. **Create a virtual environment (recommended):**
+   ```bash
+   python3 -m venv venv
+   source venv/bin/activate  # On Windows: venv\Scripts\activate
+   ```
+
+2. **Install required Python packages:**
+   ```bash
+   pip install pillow opencv-python matplotlib numpy
+   ```
+
+3. **For YOLO-based stabilization (optional):**
+   ```bash
+   pip install ultralytics
+   ```
+
+4. **Run AfterScan:**
+   ```bash
+   python AfterScan.py
+   ```
+
+### Troubleshooting
+
+**If you get "No module named '_tkinter'":**
+- On macOS with Homebrew: `brew install python-tk`
+- Or use system Python: `/usr/bin/python3 AfterScan.py`
+- On Ubuntu/Debian: `sudo apt-get install python3-tk`
+
+**FFmpeg installation (optional):**
+- macOS: `brew install ffmpeg`
+- Ubuntu/Debian: `sudo apt-get install ffmpeg`
+- Windows: Download from https://ffmpeg.org/
 
 ### Optional: YOLO-based Stabilization (Experimental)
 
