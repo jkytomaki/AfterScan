@@ -5274,10 +5274,9 @@ def stabilize_image(frame_idx, img, img_ref, offset_x = 0, offset_y = 0, img_ref
             move_x, move_y, top_left, match_level, frame_threshold = \
                 calculate_frame_displacement_with_yolo(frame_idx, img_ref, loaded_model, img_original, source_filename)
 
-            # Fallback to template matching if YOLO fails and fallback enabled
-            if yolo_fallback_to_template and match_level < 0.3:
-                logging.warning(f"Frame {frame_idx}: YOLO confidence too low ({match_level:.2f}), "
-                              f"falling back to template matching")
+            # Fallback to template matching if YOLO finds no detection and fallback enabled
+            if yolo_fallback_to_template and match_level == 0.0:
+                logging.warning(f"Frame {frame_idx}: YOLO found no detection, falling back to template matching")
                 move_x, move_y, top_left, match_level, frame_threshold, num_loops = \
                     calculate_frame_displacement_with_templates(frame_idx, img_ref, img_ref_alt, id)
         else:
@@ -5314,7 +5313,8 @@ def stabilize_image(frame_idx, img, img_ref, offset_x = 0, offset_y = 0, img_ref
             if GenerateCsv:
                 with open(CsvPathName, 'a') as csv_file:
                     csv_file.write(f"{first_absolute_frame+frame_idx}, {missing_rows}, {frame_threshold}, {num_loops}, {int(match_level*100)}, {move_x}, {move_y}\n")
-    if match_level < 0.4:   # If match level is too bad, revert to simple algorithm
+    # Fallback to simple algorithm for non-YOLO methods if match level is too low
+    if not use_yolo_stabilization and match_level < 0.4:
         move_x, move_y = calculate_frame_displacement_simple(frame_idx, img)
     # Create the translation matrix using move_x and move_y (NumPy array): This is the actual stabilization
     # We double-check the check box since this function might be called just to debug template detection
@@ -7092,7 +7092,7 @@ def build_ui():
 
     stabilization_shift_x_value = tk.IntVar(value=0)
     stabilization_shift_x_spinbox = tk.Spinbox(postprocessing_frame, width=3, command=select_stabilization_shift_x,
-        textvariable=stabilization_shift_x_value, from_=-500, to=500, increment=-5, font=("Arial", FontSize))
+        textvariable=stabilization_shift_x_value, from_=-1000, to=1000, increment=-5, font=("Arial", FontSize))
     stabilization_shift_x_spinbox.grid(row=postprocessing_row, column=2, sticky=W)
     as_tooltips.add(stabilization_shift_x_spinbox, "Allows to move the frame up or down after stabilization "
                                 "(to compensate for films where the frame is not centered around the hole/holes)")
@@ -7100,7 +7100,7 @@ def build_ui():
 
     stabilization_shift_y_value = tk.IntVar(value=0)
     stabilization_shift_y_spinbox = tk.Spinbox(postprocessing_frame, width=3, command=select_stabilization_shift_y,
-        textvariable=stabilization_shift_y_value, from_=-500, to=500, increment=-5, font=("Arial", FontSize))
+        textvariable=stabilization_shift_y_value, from_=-1000, to=1000, increment=-5, font=("Arial", FontSize))
     stabilization_shift_y_spinbox.grid(row=postprocessing_row, column=2, sticky=E)
     as_tooltips.add(stabilization_shift_y_spinbox, "Allows to move the frame up or down after stabilization "
                                 "(to compensate for films where the frame is not centered around the hole/holes)")
