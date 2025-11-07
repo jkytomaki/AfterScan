@@ -288,6 +288,9 @@ template_canvas = None
 left_stripe_canvas = None
 left_stripe_stabilized_canvas = None
 
+# UI control variables (StringVar, IntVar, etc.)
+stabilization_method = None
+
 
 # Video generation vars
 VideoFps = 18
@@ -376,6 +379,8 @@ yolo_confidence_threshold = 0.10    # Minimum confidence for YOLO detections (0.
 yolo_fallback_to_template = True    # Fallback to template matching if YOLO fails or has low confidence
 yolo_check_shift_sanity = False     # Enable sanity check for shift size (reject if too big)
 draw_yolo_detections = False        # Draw YOLO detection bounding boxes on the image
+save_yolo_undetected = False        # Save frames with undetected sprocket holes for training
+yolo_subpixel_refinement = False    # Enable sub-pixel Y-axis refinement for YOLO detections
 
 # Global variable to store latest YOLO detection data for visualization
 latest_yolo_detection = None        # Stores: {'boxes': [], 'confidences': [], 'selected_box': None, 'selected_conf': None}
@@ -834,11 +839,14 @@ def save_project_config():
             project_config["HoleScale"] = template_list.get_active_scale()
 
     # Save YOLO configuration
-    project_config["StabilizationMethod"] = stabilization_method.get()
+    if stabilization_method is not None:
+        project_config["StabilizationMethod"] = stabilization_method.get()
     project_config["YoloModelPath"] = yolo_model_path
     project_config["YoloConfidenceThreshold"] = yolo_confidence_threshold
     project_config["YoloFallbackToTemplate"] = yolo_fallback_to_template
     project_config["DrawYoloDetections"] = draw_yolo_detections
+    project_config["SaveYoloUndetected"] = save_yolo_undetected
+    project_config["YoloSubpixelRefinement"] = yolo_subpixel_refinement
 
     # remove deprecated items from config
     if "CustomHolePos" in project_config:
@@ -951,6 +959,9 @@ def decode_project_config():
     if 'CurrentFrame' in project_config and not BatchJobRunning: # only if project loaded by user, otherwise it alters start encoding frame in batch mode
         CurrentFrame = project_config["CurrentFrame"]
         CurrentFrame = max(CurrentFrame, 0)
+        # Ensure CurrentFrame is within valid bounds for the current source directory
+        if len(SourceDirFileList) > 0 and CurrentFrame >= len(SourceDirFileList):
+            CurrentFrame = 0
     else:
         CurrentFrame = 0
     if 'EncodeAllFrames' in project_config:
@@ -1138,7 +1149,15 @@ def decode_project_config():
             yolo_draw_detections_var.set(project_config["DrawYoloDetections"])
             global draw_yolo_detections
             draw_yolo_detections = project_config["DrawYoloDetections"]
-    except NameError:
+        if 'SaveYoloUndetected' in project_config:
+            yolo_save_undetected_var.set(project_config["SaveYoloUndetected"])
+            global save_yolo_undetected
+            save_yolo_undetected = project_config["SaveYoloUndetected"]
+        if 'YoloSubpixelRefinement' in project_config:
+            yolo_subpixel_refinement_var.set(project_config["YoloSubpixelRefinement"])
+            global yolo_subpixel_refinement
+            yolo_subpixel_refinement = project_config["YoloSubpixelRefinement"]
+    except (NameError, AttributeError):
         # Widgets not created yet, will be set when UI is built
         pass
 
@@ -3497,6 +3516,11 @@ def scale_display_update(update_filters=True, offset_x = 0, offset_y = 0):
         logging.error(
             "Error reading frame %i, skipping", CurrentFrame)
     else:
+        # Keep a reference to the original unmodified image for saving undetected frames
+        img_original = img.copy() if img is not None else None
+        # Get the source filename for saving undetected frames
+        source_filename = os.path.basename(SourceDirFileList[CurrentFrame])
+
         if hole_search_area_adjustment_pending:
             hole_search_area_adjustment_pending = False
             set_hole_search_area(img)
@@ -3507,7 +3531,7 @@ def scale_display_update(update_filters=True, offset_x = 0, offset_y = 0):
             # (YOLO detection happens inside if enabled)
             shift_x, shift_y = 0, 0
             if perform_stabilization.get() or FrameSync_Viewer_opened:
-                img = stabilize_image(CurrentFrame, img, img, offset_x, offset_y)[0]
+                img = stabilize_image(CurrentFrame, img, img, offset_x, offset_y, img_original=img_original, source_filename=source_filename)[0]
                 # Get shift values for drawing detection boxes
                 if use_yolo_stabilization and latest_yolo_detection is not None:
                     shift_x, shift_y = latest_yolo_detection.get('shift', (0, 0))
@@ -3521,7 +3545,7 @@ def scale_display_update(update_filters=True, offset_x = 0, offset_y = 0):
 
                 if loaded_model is not None:
                     # Run detection (stores result in latest_yolo_detection)
-                    detection = detect_yolo_sprocket(CurrentFrame, img, loaded_model)
+                    detection = detect_yolo_sprocket(CurrentFrame, img, loaded_model, img_original, source_filename)
                     if detection is not None:
                         latest_yolo_detection = detection
 
@@ -4712,14 +4736,118 @@ def load_yolo_model():
         return None
 
 
-def detect_yolo_sprocket(frame_idx, img_ref, yolo_model):
+def refine_yolo_sprocket_y_position(img_ref, sprocket_box):
+    """
+    Refine the Y-axis position of YOLO-detected sprocket hole using edge detection.
+    This helps reduce vertical jitter by finding the precise edge of the sprocket hole.
+
+    Args:
+        img_ref: Input image (OpenCV BGR format)
+        sprocket_box: YOLO bounding box [x1, y1, x2, y2]
+
+    Returns:
+        refined_y: Sub-pixel accurate Y position (top edge), or original y1 if refinement fails
+    """
+    try:
+        x1, y1, x2, y2 = [int(coord) for coord in sprocket_box]
+        img_height, img_width = img_ref.shape[:2]
+
+        # Expand ROI vertically to capture edges better
+        margin_y = 15
+        margin_x = 5
+
+        roi_y1 = max(0, y1 - margin_y)
+        roi_y2 = min(img_height, y2 + margin_y)
+        roi_x1 = max(0, x1 - margin_x)
+        roi_x2 = min(img_width, x2 + margin_x)
+
+        # Extract ROI
+        roi = img_ref[roi_y1:roi_y2, roi_x1:roi_x2]
+
+        if roi.size == 0:
+            logging.debug("Sub-pixel refinement: ROI is empty, using original position")
+            return y1
+
+        # Convert to grayscale
+        if len(roi.shape) == 3:
+            roi_gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+        else:
+            roi_gray = roi
+
+        # Apply Gaussian blur to reduce noise
+        roi_blurred = cv2.GaussianBlur(roi_gray, (5, 5), 1.0)
+
+        # Find edges using Canny
+        edges = cv2.Canny(roi_blurred, 30, 100)
+
+        # Find horizontal edges in the top portion of the sprocket hole
+        # Focus on the top third of the detection box
+        box_height = y2 - y1
+        search_start = margin_y  # Start from the top margin
+        search_end = margin_y + int(box_height * 0.5)  # Search in top half
+
+        if search_end <= search_start or search_end > edges.shape[0]:
+            logging.debug("Sub-pixel refinement: Invalid search range, using original position")
+            return y1
+
+        # Sum edge intensity along each horizontal line
+        edge_profile = np.sum(edges[search_start:search_end, :], axis=1)
+
+        if len(edge_profile) == 0 or np.max(edge_profile) == 0:
+            logging.debug("Sub-pixel refinement: No edges found, using original position")
+            return y1
+
+        # Find the strongest edge (likely the top edge of sprocket hole)
+        # Look for the first strong edge from the top
+        threshold = np.max(edge_profile) * 0.5
+        edge_indices = np.where(edge_profile > threshold)[0]
+
+        if len(edge_indices) == 0:
+            logging.debug("Sub-pixel refinement: No strong edges found, using original position")
+            return y1
+
+        # Use the first strong edge as the top edge
+        refined_y_offset = edge_indices[0]
+
+        # Apply sub-pixel refinement using parabolic interpolation
+        if 0 < refined_y_offset < len(edge_profile) - 1:
+            # Get three points around the peak
+            y_prev = edge_profile[refined_y_offset - 1]
+            y_curr = edge_profile[refined_y_offset]
+            y_next = edge_profile[refined_y_offset + 1]
+
+            # Parabolic interpolation for sub-pixel accuracy
+            denom = 2 * (2 * y_curr - y_prev - y_next)
+            if abs(denom) > 1e-6:  # Avoid division by zero
+                sub_pixel_offset = (y_prev - y_next) / denom
+                refined_y_offset += sub_pixel_offset
+
+        # Convert back to original image coordinates
+        refined_y = roi_y1 + search_start + refined_y_offset
+
+        # Sanity check: refined position should be close to original
+        if abs(refined_y - y1) > 10:
+            logging.debug(f"Sub-pixel refinement: Large deviation ({refined_y - y1:.2f}px), using original position")
+            return y1
+
+        logging.debug(f"Sub-pixel refinement: Y adjusted by {refined_y - y1:.2f} pixels")
+        return refined_y
+
+    except Exception as e:
+        logging.error(f"Sub-pixel refinement failed: {e}")
+        return sprocket_box[1]  # Return original y1 on error
+
+
+def detect_yolo_sprocket(frame_idx, img_ref, yolo_model, img_original=None, source_filename=None):
     """
     Detect sprocket hole using YOLO (independent of stabilization).
 
     Args:
         frame_idx: Current frame index
-        img_ref: Input image (OpenCV BGR format)
+        img_ref: Input image (OpenCV BGR format) - used for detection
         yolo_model: Loaded YOLO model instance
+        img_original: Original unmodified image (before rotation/cropping) - used for saving undetected frames
+        source_filename: Original source filename for saving undetected frames
 
     Returns:
         dict with detection data, or None if no detection:
@@ -4732,7 +4860,7 @@ def detect_yolo_sprocket(frame_idx, img_ref, yolo_model):
             'detected_pos': (x, y) of top-right corner of selected box
         }
     """
-    global yolo_confidence_threshold, latest_yolo_detection
+    global yolo_confidence_threshold, latest_yolo_detection, save_yolo_undetected, project_name
 
     # IMPORTANT: YOLO expects BGR format when passing numpy arrays (same as OpenCV)
     # Run YOLO detection
@@ -4744,6 +4872,12 @@ def detect_yolo_sprocket(frame_idx, img_ref, yolo_model):
 
     if len(results) == 0 or len(results[0].boxes) == 0:
         logging.debug(f"Frame {frame_idx}: No sprocket holes detected by YOLO")
+        # Save undetected frame if feature is enabled
+        if save_yolo_undetected and source_filename:
+            # Use original image if available, otherwise fall back to img_ref
+            img_to_save = img_original if img_original is not None else img_ref
+            logging.info(f"Frame {frame_idx}: Saving undetected frame, img_original={'available' if img_original is not None else 'None'}, dimensions: {img_to_save.shape[1]}x{img_to_save.shape[0]}")
+            save_yolo_undetected_frame(img_to_save, source_filename)
         return None
 
     boxes = results[0].boxes.xyxy.cpu().numpy()
@@ -4783,6 +4917,11 @@ def detect_yolo_sprocket(frame_idx, img_ref, yolo_model):
 
     if len(bottom_left_boxes) == 0:
         logging.debug(f"Frame {frame_idx}: YOLO found {len(boxes)} sprocket(s) but none in bottom-left quadrant")
+        # Save undetected frame if feature is enabled
+        if save_yolo_undetected and source_filename:
+            # Use original image if available, otherwise fall back to img_ref
+            img_to_save = img_original if img_original is not None else img_ref
+            save_yolo_undetected_frame(img_to_save, source_filename)
         return None
 
     # Select highest confidence detection
@@ -4794,7 +4933,15 @@ def detect_yolo_sprocket(frame_idx, img_ref, yolo_model):
     detected_x = int(sprocket_hole[2])
     detected_y = int(sprocket_hole[1])
 
-    logging.debug(f"Frame {frame_idx}: YOLO selected sprocket at ({detected_x}, {detected_y}), confidence: {match_level:.2f}")
+    # Apply sub-pixel Y-axis refinement if enabled
+    global yolo_subpixel_refinement
+    if yolo_subpixel_refinement:
+        refined_y = refine_yolo_sprocket_y_position(img_ref, sprocket_hole)
+        logging.debug(f"Frame {frame_idx}: YOLO selected sprocket at ({detected_x}, {detected_y}), "
+                     f"refined Y: {refined_y:.2f} (delta: {refined_y - detected_y:.2f}px), confidence: {match_level:.2f}")
+        detected_y = refined_y
+    else:
+        logging.debug(f"Frame {frame_idx}: YOLO selected sprocket at ({detected_x}, {detected_y}), confidence: {match_level:.2f}")
 
     return {
         'boxes': boxes.tolist(),
@@ -4804,6 +4951,58 @@ def detect_yolo_sprocket(frame_idx, img_ref, yolo_model):
         'img_size': (img_width, img_height),
         'detected_pos': (detected_x, detected_y)
     }
+
+
+def save_yolo_undetected_frame(img_bgr, source_filename):
+    """
+    Save a frame where YOLO failed to detect sprocket holes.
+    Saves the southwest (bottom-left) quadrant of the image to /tmp/yolo-undetected/
+    for later analysis and training data collection.
+
+    Args:
+        img_bgr: Input image (OpenCV BGR format)
+        source_filename: Original source filename (e.g., "picture-03794.png")
+    """
+    global project_name, file_type_out
+
+    try:
+        # Create output directory
+        output_dir = "/tmp/yolo-undetected"
+        os.makedirs(output_dir, exist_ok=True)
+
+        # Extract southwest (bottom-left) quadrant
+        # Image array shape is [height, width, channels]
+        # Array indexing: img[row_start:row_end, col_start:col_end]
+        # In image coordinates: Y increases downward, X increases rightward
+        # Bottom-left quadrant: bottom half (mid_height to height), left half (0 to mid_width)
+        height = img_bgr.shape[0]
+        width = img_bgr.shape[1]
+        mid_height = height // 2
+        mid_width = width // 2
+
+        logging.info(f"save_yolo_undetected_frame: Image dimensions: {width}x{height}, extracting quadrant [{mid_height}:{height}, 0:{mid_width}]")
+
+        # Extract the bottom-left (southwest) quadrant
+        # Bottom half: rows from mid_height to height
+        # Left half: columns from 0 to mid_width
+        sw_quadrant = img_bgr[mid_height:height, 0:mid_width]
+
+        # Generate output filename based on source filename
+        # e.g., "picture-03794.png" -> "picture-03794-sw-quad.png"
+        base_name = os.path.splitext(os.path.basename(source_filename))[0]
+        ext = os.path.splitext(source_filename)[1][1:]  # Remove the dot
+        if not ext:
+            ext = file_type_out if file_type_out else 'png'
+
+        filename = f"{base_name}-sw-quad.{ext}"
+        filepath = os.path.join(output_dir, filename)
+
+        # Save the image
+        cv2.imwrite(filepath, sw_quadrant)
+        logging.info(f"Saved undetected frame (SW quadrant): {filepath}")
+
+    except Exception as e:
+        logging.error(f"Failed to save undetected frame from {source_filename}: {e}")
 
 
 def draw_yolo_detections_on_bgr_image(img_bgr, shift_x=0, shift_y=0):
@@ -4825,10 +5024,23 @@ def draw_yolo_detections_on_bgr_image(img_bgr, shift_x=0, shift_y=0):
     if latest_yolo_detection is None:
         return img_bgr
 
+    # Validate detection data structure
+    if not isinstance(latest_yolo_detection, dict):
+        logging.error(f"Invalid latest_yolo_detection type: {type(latest_yolo_detection)}")
+        return img_bgr
+
+    if 'boxes' not in latest_yolo_detection or 'confidences' not in latest_yolo_detection or 'selected_box' not in latest_yolo_detection:
+        logging.error(f"Missing keys in latest_yolo_detection: {latest_yolo_detection.keys()}")
+        return img_bgr
+
     # Draw directly on the input image (no copy needed - saves 500-1000ms for large images!)
     boxes = latest_yolo_detection['boxes']
     confidences = latest_yolo_detection['confidences']
     selected_box = latest_yolo_detection['selected_box']
+
+    if boxes is None or confidences is None or selected_box is None:
+        logging.warning("Incomplete detection data, skipping drawing")
+        return img_bgr
 
     # Performance check - log if we're drawing too many boxes
     if len(boxes) > 10:
@@ -4889,7 +5101,7 @@ def draw_yolo_detections_on_bgr_image(img_bgr, shift_x=0, shift_y=0):
     return img_bgr
 
 
-def calculate_frame_displacement_with_yolo(frame_idx, img_ref, yolo_model):
+def calculate_frame_displacement_with_yolo(frame_idx, img_ref, yolo_model, img_original=None, source_filename=None):
     """
     Calculate frame displacement using YOLO sprocket hole detection.
     This now uses the standalone detect_yolo_sprocket() function.
@@ -4898,6 +5110,8 @@ def calculate_frame_displacement_with_yolo(frame_idx, img_ref, yolo_model):
         frame_idx: Current frame index
         img_ref: Input image (OpenCV BGR format)
         yolo_model: Loaded YOLO model instance
+        img_original: Original unmodified image (before rotation/cropping) - used for saving undetected frames
+        source_filename: Original source filename for saving undetected frames
 
     Returns:
         move_x: Horizontal displacement
@@ -4909,7 +5123,7 @@ def calculate_frame_displacement_with_yolo(frame_idx, img_ref, yolo_model):
     global yolo_check_shift_sanity, latest_yolo_detection
 
     # Use the standalone detection function
-    detection = detect_yolo_sprocket(frame_idx, img_ref, yolo_model)
+    detection = detect_yolo_sprocket(frame_idx, img_ref, yolo_model, img_original, source_filename)
 
     if detection is None:
         # No detection found
@@ -5015,7 +5229,7 @@ def fill_image(source_img, stabilized_img, move_x, move_y, offset_x = 0, offset_
     return stabilized_img
 
 
-def stabilize_image(frame_idx, img, img_ref, offset_x = 0, offset_y = 0, img_ref_alt = None, id = -1):
+def stabilize_image(frame_idx, img, img_ref, offset_x = 0, offset_y = 0, img_ref_alt = None, id = -1, img_original=None, source_filename=None):
     """
     frame_idx: Index of frame being stabilize
     img: Source Image being stabilized
@@ -5024,6 +5238,8 @@ def stabilize_image(frame_idx, img, img_ref, offset_x = 0, offset_y = 0, img_ref
     offset_y:  Additional displacement in y direction (compensation y in UI)
     img_ref_alt:
     id: Thread identifier, for debugging purposes
+    img_original: Original unmodified image (before rotation/cropping) - used for saving undetected frames
+    source_filename: Original source filename for saving undetected frames
     """
     global SourceDirFileList
     global first_absolute_frame, StartFrame
@@ -5056,18 +5272,17 @@ def stabilize_image(frame_idx, img, img_ref, offset_x = 0, offset_y = 0, img_ref
 
         if loaded_model is not None:
             move_x, move_y, top_left, match_level, frame_threshold = \
-                calculate_frame_displacement_with_yolo(frame_idx, img_ref, loaded_model)
+                calculate_frame_displacement_with_yolo(frame_idx, img_ref, loaded_model, img_original, source_filename)
 
-            # Fallback to template matching if YOLO fails and fallback enabled
-            if yolo_fallback_to_template and match_level < 0.3:
-                logging.warning(f"Frame {frame_idx}: YOLO confidence too low ({match_level:.2f}), "
-                              f"falling back to template matching")
-                move_x, move_y, top_left, match_level, frame_threshold = \
+            # Fallback to template matching if YOLO finds no detection and fallback enabled
+            if yolo_fallback_to_template and match_level == 0.0:
+                logging.warning(f"Frame {frame_idx}: YOLO found no detection, falling back to template matching")
+                move_x, move_y, top_left, match_level, frame_threshold, num_loops = \
                     calculate_frame_displacement_with_templates(frame_idx, img_ref, img_ref_alt, id)
         else:
             # YOLO model failed to load, use template matching
             logging.error("YOLO model not available, using template matching")
-            move_x, move_y, top_left, match_level, frame_threshold = \
+            move_x, move_y, top_left, match_level, frame_threshold, num_loops = \
                 calculate_frame_displacement_with_templates(frame_idx, img_ref, img_ref_alt, id)
     else:
         move_x, move_y, top_left, match_level, frame_threshold, num_loops  = calculate_frame_displacement_with_templates(frame_idx, img_ref, img_ref_alt, id)
@@ -5098,7 +5313,8 @@ def stabilize_image(frame_idx, img, img_ref, offset_x = 0, offset_y = 0, img_ref
             if GenerateCsv:
                 with open(CsvPathName, 'a') as csv_file:
                     csv_file.write(f"{first_absolute_frame+frame_idx}, {missing_rows}, {frame_threshold}, {num_loops}, {int(match_level*100)}, {move_x}, {move_y}\n")
-    if match_level < 0.4:   # If match level is too bad, revert to simple algorithm
+    # Fallback to simple algorithm for non-YOLO methods if match level is too low
+    if not use_yolo_stabilization and match_level < 0.4:
         move_x, move_y = calculate_frame_displacement_simple(frame_idx, img)
     # Create the translation matrix using move_x and move_y (NumPy array): This is the actual stabilization
     # We double-check the check box since this function might be called just to debug template detection
@@ -5697,6 +5913,11 @@ def frame_encode(frame_idx, id, do_save = True, offset_x = 0, offset_y = 0):
         logging.error(
             "Error reading frame %i, skipping", frame_idx)
     else:
+        # Keep a reference to the original unmodified image for saving undetected frames
+        img_original = img.copy() if img is not None else None
+        # Store the source filename for saving undetected frames
+        source_filename = os.path.basename(file1)
+
         register_frame()
         if perform_rotation.get():
             img = rotate_image(img)
@@ -5705,7 +5926,7 @@ def frame_encode(frame_idx, id, do_save = True, offset_x = 0, offset_y = 0):
             # TODO JK: this used to be like this, see if causes issues with yolo code:
             # img = stabilize_image(frame_idx, img, img_ref, offset_x, offset_y, img_ref_aux, id)
 
-            stabilized_img, match_level, move_x, move_y = stabilize_image(frame_idx, img, img_ref, offset_x, offset_y, img_ref_aux, id)
+            stabilized_img, match_level, move_x, move_y = stabilize_image(frame_idx, img, img_ref, offset_x, offset_y, img_ref_aux, id, img_original, source_filename)
             img = fill_image(img, stabilized_img, move_x, move_y, offset_x, offset_y)
         else:
             move_x = move_y = match_level = 0 # Required as it is stored in bad frame list
@@ -5853,10 +6074,15 @@ def frame_generation_loop():
     if CurrentFrame >= StartFrame + frames_to_encode and last_displayed_image+1 >= StartFrame + frames_to_encode:
         FPS_CalculatedValue = -1
         # write average match quality in the status line, and in the widget
-        status_str = f"Status: Frame generation OK - AvgQ: {int(match_level_average.get_average()*100)}"
-        app_status_label.config(text=status_str, fg='green')
-        stabilization_threshold_match_label.config(fg='white', bg=match_level_color(match_level_average.get_average()),
-                                                   text=str(int(match_level_average.get_average() * 100)))
+        avg_quality = match_level_average.get_average()
+        if avg_quality is not None:
+            status_str = f"Status: Frame generation OK - AvgQ: {int(avg_quality*100)}"
+            app_status_label.config(text=status_str, fg='green')
+            stabilization_threshold_match_label.config(fg='white', bg=match_level_color(avg_quality),
+                                                       text=str(int(avg_quality * 100)))
+        else:
+            status_str = "Status: Frame generation OK"
+            app_status_label.config(text=status_str, fg='green')
         # Clear display queue (does not seem to work as expected, leave commented for now)
         # subprocess_event_queue.queue.clear()
         last_displayed_image = 0
@@ -6333,6 +6559,11 @@ def init_display():
 
     if len(SourceDirFileList) == 0:
         return
+
+    # Ensure CurrentFrame is within valid bounds
+    global CurrentFrame
+    if CurrentFrame >= len(SourceDirFileList):
+        CurrentFrame = 0
 
     file = SourceDirFileList[CurrentFrame]
 
@@ -6861,7 +7092,7 @@ def build_ui():
 
     stabilization_shift_x_value = tk.IntVar(value=0)
     stabilization_shift_x_spinbox = tk.Spinbox(postprocessing_frame, width=3, command=select_stabilization_shift_x,
-        textvariable=stabilization_shift_x_value, from_=-150, to=150, increment=-5, font=("Arial", FontSize))
+        textvariable=stabilization_shift_x_value, from_=-1000, to=1000, increment=-5, font=("Arial", FontSize))
     stabilization_shift_x_spinbox.grid(row=postprocessing_row, column=2, sticky=W)
     as_tooltips.add(stabilization_shift_x_spinbox, "Allows to move the frame up or down after stabilization "
                                 "(to compensate for films where the frame is not centered around the hole/holes)")
@@ -6869,7 +7100,7 @@ def build_ui():
 
     stabilization_shift_y_value = tk.IntVar(value=0)
     stabilization_shift_y_spinbox = tk.Spinbox(postprocessing_frame, width=3, command=select_stabilization_shift_y,
-        textvariable=stabilization_shift_y_value, from_=-150, to=150, increment=-5, font=("Arial", FontSize))
+        textvariable=stabilization_shift_y_value, from_=-1000, to=1000, increment=-5, font=("Arial", FontSize))
     stabilization_shift_y_spinbox.grid(row=postprocessing_row, column=2, sticky=E)
     as_tooltips.add(stabilization_shift_y_spinbox, "Allows to move the frame up or down after stabilization "
                                 "(to compensate for films where the frame is not centered around the hole/holes)")
@@ -6900,12 +7131,16 @@ def build_ui():
             yolo_confidence_spinbox.config(state='readonly')
             yolo_fallback_checkbox.config(state=NORMAL)
             yolo_draw_detections_checkbox.config(state=NORMAL)
+            yolo_save_undetected_checkbox.config(state=NORMAL)
+            yolo_subpixel_refinement_checkbox.config(state=NORMAL)
         else:
             yolo_model_entry.config(state=DISABLED)
             yolo_model_browse_btn.config(state=DISABLED)
             yolo_confidence_spinbox.config(state=DISABLED)
             yolo_fallback_checkbox.config(state=DISABLED)
             yolo_draw_detections_checkbox.config(state=DISABLED)
+            yolo_save_undetected_checkbox.config(state=DISABLED)
+            yolo_subpixel_refinement_checkbox.config(state=DISABLED)
 
         # Save to project config
         project_config["StabilizationMethod"] = method
@@ -7050,6 +7285,51 @@ def build_ui():
     )
     yolo_draw_detections_checkbox.grid(row=postprocessing_row, column=3, sticky='w', padx=2)
     as_tooltips.add(yolo_draw_detections_checkbox, "Draw YOLO detection bounding boxes on the image")
+
+    # YOLO Save Undetected option
+    yolo_save_undetected_var = tk.BooleanVar(value=save_yolo_undetected)
+
+    def yolo_save_undetected_changed():
+        """Handle YOLO save undetected checkbox changes."""
+        global save_yolo_undetected
+        save_yolo_undetected = yolo_save_undetected_var.get()
+        project_config["SaveYoloUndetected"] = save_yolo_undetected
+        logging.info(f"YOLO save undetected changed to: {save_yolo_undetected}")
+
+    yolo_save_undetected_checkbox = tk.Checkbutton(
+        postprocessing_frame,
+        text="Save undetected",
+        variable=yolo_save_undetected_var,
+        command=yolo_save_undetected_changed,
+        state=DISABLED,
+        font=("Arial", FontSize)
+    )
+    yolo_save_undetected_checkbox.grid(row=postprocessing_row, column=4, sticky='w', padx=2)
+    as_tooltips.add(yolo_save_undetected_checkbox, "Save the bottom left quadrant of frames with undetected sprocket holes under /tmp/yolo-undetected for later Yolo training")
+
+    # YOLO Sub-pixel Refinement option
+    yolo_subpixel_refinement_var = tk.BooleanVar(value=yolo_subpixel_refinement)
+
+    def yolo_subpixel_refinement_changed():
+        """Handle YOLO sub-pixel refinement checkbox changes."""
+        global yolo_subpixel_refinement
+        yolo_subpixel_refinement = yolo_subpixel_refinement_var.get()
+        project_config["YoloSubpixelRefinement"] = yolo_subpixel_refinement
+        logging.info(f"YOLO sub-pixel refinement changed to: {yolo_subpixel_refinement}")
+        # Refresh display if not in a loop
+        if not ConvertLoopRunning and not BatchJobRunning:
+            scale_display_update()
+
+    yolo_subpixel_refinement_checkbox = tk.Checkbutton(
+        postprocessing_frame,
+        text="Sub-pixel Y",
+        variable=yolo_subpixel_refinement_var,
+        command=yolo_subpixel_refinement_changed,
+        state=DISABLED,
+        font=("Arial", FontSize)
+    )
+    yolo_subpixel_refinement_checkbox.grid(row=postprocessing_row, column=5, sticky='w', padx=2)
+    as_tooltips.add(yolo_subpixel_refinement_checkbox, "Enable sub-pixel Y-axis refinement using edge detection to reduce vertical jitter")
 
     postprocessing_row += 1
 
