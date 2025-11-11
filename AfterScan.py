@@ -70,6 +70,7 @@ import uuid
 import base64
 from collections import deque
 import webbrowser
+import tempfile
 
 try:
     import requests
@@ -4985,8 +4986,8 @@ def detect_yolo_sprocket(frame_idx, img_ref, yolo_model, img_original=None, sour
 def save_yolo_undetected_frame(img_bgr, source_filename):
     """
     Save a frame where YOLO failed to detect sprocket holes.
-    Saves the southwest (bottom-left) quadrant of the image to /tmp/yolo-undetected/
-    for later analysis and training data collection.
+    Saves the southwest (bottom-left) quadrant of the image to a platform-independent
+    temporary directory (yolo-undetected/) for later analysis and training data collection.
 
     Args:
         img_bgr: Input image (OpenCV BGR format)
@@ -4995,8 +4996,10 @@ def save_yolo_undetected_frame(img_bgr, source_filename):
     global project_name, file_type_out
 
     try:
-        # Create output directory
-        output_dir = "/tmp/yolo-undetected"
+        # Create output directory in platform-independent temp location
+        # Windows: C:\Users\{user}\AppData\Local\Temp\yolo-undetected
+        # Linux/macOS: /tmp/yolo-undetected
+        output_dir = os.path.join(tempfile.gettempdir(), "yolo-undetected")
         os.makedirs(output_dir, exist_ok=True)
 
         # Extract southwest (bottom-left) quadrant
@@ -7338,7 +7341,7 @@ def build_ui():
         font=("Arial", FontSize)
     )
     yolo_save_undetected_checkbox.grid(row=postprocessing_row, column=4, sticky='w', padx=2)
-    as_tooltips.add(yolo_save_undetected_checkbox, "Save the bottom left quadrant of frames with undetected sprocket holes under /tmp/yolo-undetected for later Yolo training")
+    as_tooltips.add(yolo_save_undetected_checkbox, "Save the bottom left quadrant of frames with undetected sprocket holes to the system temp directory (yolo-undetected/) for later Yolo training")
 
     # YOLO Sub-pixel Refinement option
     yolo_subpixel_refinement_var = tk.BooleanVar(value=yolo_subpixel_refinement)
