@@ -23,9 +23,13 @@ And that's about it. Other post-processing jobs (color correction) can be done, 
 ## Installation
 
 ### Requirements
-This tool relies on the following open source projects:
-* [Python 3](https://www.python.org/) with tkinter support
-* [FFmpeg](https://ffmpeg.org/) (optional, for video generation)
+This tool relies in the following open source projects to achieve its objectives. Need to be installed in the system used to run AfterScan:
+* [Python](https://www.python.org/)
+* [OpenCV](https://opencv.org/)
+* [NumPy](https://numpy.org/)
+* [FFmpeg](https://ffmpeg.org/)
+* [Pillow](https://python-pillow.org/)
+
 
 ### Setup Instructions
 
