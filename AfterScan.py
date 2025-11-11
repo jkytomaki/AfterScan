@@ -376,7 +376,6 @@ use_yolo_stabilization = False      # Enable YOLO-based sprocket hole detection 
 yolo_model_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Resources", "yolo_sprocket_detector.pt")  # Path to YOLO model (.pt file)
 yolo_model = None                   # Cached YOLO model instance (lazy loaded)
 yolo_confidence_threshold = 0.10    # Minimum confidence for YOLO detections (0.0-1.0)
-yolo_fallback_to_template = True    # Fallback to template matching if YOLO fails or has low confidence
 yolo_check_shift_sanity = False     # Enable sanity check for shift size (reject if too big)
 draw_yolo_detections = False        # Draw YOLO detection bounding boxes on the image
 save_yolo_undetected = False        # Save frames with undetected sprocket holes for training
@@ -384,6 +383,12 @@ yolo_subpixel_refinement = False    # Enable sub-pixel Y-axis refinement for YOL
 
 # Global variable to store latest YOLO detection data for visualization
 latest_yolo_detection = None        # Stores: {'boxes': [], 'confidences': [], 'selected_box': None, 'selected_conf': None}
+
+# Rolling averages for YOLO stabilization transformations
+# These track the average move_x and move_y over the last N frames
+# Used to apply smooth transformation when no sprocket is detected
+yolo_transform_avg_x = None         # RollingAverage for move_x transformations
+yolo_transform_avg_y = None         # RollingAverage for move_y transformations
 
 # Info required for usage counter
 UserConsent = None
@@ -843,7 +848,6 @@ def save_project_config():
         project_config["StabilizationMethod"] = stabilization_method.get()
     project_config["YoloModelPath"] = yolo_model_path
     project_config["YoloConfidenceThreshold"] = yolo_confidence_threshold
-    project_config["YoloFallbackToTemplate"] = yolo_fallback_to_template
     project_config["DrawYoloDetections"] = draw_yolo_detections
     project_config["SaveYoloUndetected"] = save_yolo_undetected
     project_config["YoloSubpixelRefinement"] = yolo_subpixel_refinement
@@ -1139,11 +1143,6 @@ def decode_project_config():
             yolo_confidence_var.set(project_config["YoloConfidenceThreshold"])
             global yolo_confidence_threshold
             yolo_confidence_threshold = project_config["YoloConfidenceThreshold"]
-
-        if 'YoloFallbackToTemplate' in project_config:
-            yolo_fallback_var.set(project_config["YoloFallbackToTemplate"])
-            global yolo_fallback_to_template
-            yolo_fallback_to_template = project_config["YoloFallbackToTemplate"]
 
         if 'DrawYoloDetections' in project_config:
             yolo_draw_detections_var.set(project_config["DrawYoloDetections"])
@@ -5106,6 +5105,9 @@ def calculate_frame_displacement_with_yolo(frame_idx, img_ref, yolo_model, img_o
     Calculate frame displacement using YOLO sprocket hole detection.
     This now uses the standalone detect_yolo_sprocket() function.
 
+    When no sprocket is detected, uses the rolling average of transformations
+    from the previous 20 frames to provide a smooth fallback transformation.
+
     Args:
         frame_idx: Current frame index
         img_ref: Input image (OpenCV BGR format)
@@ -5121,12 +5123,28 @@ def calculate_frame_displacement_with_yolo(frame_idx, img_ref, yolo_model, img_o
         frame_threshold: Threshold used (0 for YOLO)
     """
     global yolo_check_shift_sanity, latest_yolo_detection
+    global yolo_transform_avg_x, yolo_transform_avg_y
 
     # Use the standalone detection function
     detection = detect_yolo_sprocket(frame_idx, img_ref, yolo_model, img_original, source_filename)
 
     if detection is None:
-        # No detection found
+        # No detection found - use rolling average if available
+        if yolo_transform_avg_x is not None and yolo_transform_avg_y is not None:
+            avg_x = yolo_transform_avg_x.get_average()
+            avg_y = yolo_transform_avg_y.get_average()
+
+            if avg_x is not None and avg_y is not None:
+                # Use the average transformation from previous frames
+                move_x = int(round(avg_x))
+                move_y = int(round(avg_y))
+                logging.info(f"Frame {frame_idx}: No YOLO detection, using average transform from previous frames: "
+                           f"({move_x}, {move_y})")
+                # Return with low match level to indicate this is a fallback
+                return move_x, move_y, [0, 0], 0.0, 0
+
+        # No detection and no average available - return zeros
+        logging.debug(f"Frame {frame_idx}: No YOLO detection and no average available")
         return 0, 0, [0, 0], 0.0, 0
 
     # Store detection data globally for visualization (will be updated with shift later)
@@ -5152,6 +5170,11 @@ def calculate_frame_displacement_with_yolo(frame_idx, img_ref, yolo_model, img_o
         match_level = 0.0
     else:
         logging.debug(f"Frame {frame_idx}: YOLO shift: ({move_x}, {move_y})")
+
+        # Add successful transformation to rolling averages
+        if yolo_transform_avg_x is not None and yolo_transform_avg_y is not None:
+            yolo_transform_avg_x.add_value(move_x)
+            yolo_transform_avg_y.add_value(move_y)
 
     # Update detection with shift values
     latest_yolo_detection['shift'] = (move_x, move_y)
@@ -5273,12 +5296,7 @@ def stabilize_image(frame_idx, img, img_ref, offset_x = 0, offset_y = 0, img_ref
         if loaded_model is not None:
             move_x, move_y, top_left, match_level, frame_threshold = \
                 calculate_frame_displacement_with_yolo(frame_idx, img_ref, loaded_model, img_original, source_filename)
-
-            # Fallback to template matching if YOLO finds no detection and fallback enabled
-            if yolo_fallback_to_template and match_level == 0.0:
-                logging.warning(f"Frame {frame_idx}: YOLO found no detection, falling back to template matching")
-                move_x, move_y, top_left, match_level, frame_threshold, num_loops = \
-                    calculate_frame_displacement_with_templates(frame_idx, img_ref, img_ref_alt, id)
+            num_loops = 1
         else:
             # YOLO model failed to load, use template matching
             logging.error("YOLO model not available, using template matching")
@@ -5774,6 +5792,11 @@ def start_convert():
                     csv_file.write("Frame, Missing rows, Threshold, Num loops, Match level, move_x, move_y\n")
             match_level_average.clear()
             horizontal_offset_average.clear()
+            # Clear YOLO transform averages when starting new conversion
+            if yolo_transform_avg_x is not None:
+                yolo_transform_avg_x.clear()
+            if yolo_transform_avg_y is not None:
+                yolo_transform_avg_y.clear()
             # Disable manual stabilize popup widgets
             FrameSync_Viewer_popup_update_widgets(DISABLED)
             # Multiprocessing: Start all threads before encoding
@@ -6639,6 +6662,7 @@ def afterscan_init():
     global BigSize, FontSize
     global MergeMertens, AlignMtb
     global match_level_average, horizontal_offset_average
+    global yolo_transform_avg_x, yolo_transform_avg_y
 
     win = Tk()  # Create main window, store it in 'win'
 
@@ -6676,6 +6700,8 @@ def afterscan_init():
     # Init rolling Averages
     match_level_average = RollingAverage(50)
     horizontal_offset_average = RollingAverage(50)
+    yolo_transform_avg_x = RollingAverage(20)  # Track last 20 frames for X transformations
+    yolo_transform_avg_y = RollingAverage(20)  # Track last 20 frames for Y transformations
 
     # Get Top window coordinates
     TopWinX = win.winfo_x()
@@ -7129,7 +7155,6 @@ def build_ui():
             yolo_model_entry.config(state=NORMAL)
             yolo_model_browse_btn.config(state=NORMAL)
             yolo_confidence_spinbox.config(state='readonly')
-            yolo_fallback_checkbox.config(state=NORMAL)
             yolo_draw_detections_checkbox.config(state=NORMAL)
             yolo_save_undetected_checkbox.config(state=NORMAL)
             yolo_subpixel_refinement_checkbox.config(state=NORMAL)
@@ -7137,7 +7162,6 @@ def build_ui():
             yolo_model_entry.config(state=DISABLED)
             yolo_model_browse_btn.config(state=DISABLED)
             yolo_confidence_spinbox.config(state=DISABLED)
-            yolo_fallback_checkbox.config(state=DISABLED)
             yolo_draw_detections_checkbox.config(state=DISABLED)
             yolo_save_undetected_checkbox.config(state=DISABLED)
             yolo_subpixel_refinement_checkbox.config(state=DISABLED)
@@ -7243,26 +7267,6 @@ def build_ui():
     yolo_confidence_spinbox.bind("<FocusOut>", lambda e: yolo_confidence_changed())
     as_tooltips.add(yolo_confidence_spinbox, "Minimum confidence threshold for YOLO detections (0.1-0.9)")
 
-    # YOLO Fallback option
-    yolo_fallback_var = tk.BooleanVar(value=yolo_fallback_to_template)
-
-    def yolo_fallback_changed():
-        """Handle YOLO fallback checkbox changes."""
-        global yolo_fallback_to_template
-        yolo_fallback_to_template = yolo_fallback_var.get()
-        project_config["YoloFallbackToTemplate"] = yolo_fallback_to_template
-
-    yolo_fallback_checkbox = tk.Checkbutton(
-        postprocessing_frame,
-        text="Fallback",
-        variable=yolo_fallback_var,
-        command=yolo_fallback_changed,
-        state=DISABLED,
-        font=("Arial", FontSize)
-    )
-    yolo_fallback_checkbox.grid(row=postprocessing_row, column=2, sticky='w', padx=2)
-    as_tooltips.add(yolo_fallback_checkbox, "Use template matching if YOLO confidence is below 0.3")
-
     # YOLO Draw Detections option
     yolo_draw_detections_var = tk.BooleanVar(value=draw_yolo_detections)
 
@@ -7283,7 +7287,7 @@ def build_ui():
         state=DISABLED,
         font=("Arial", FontSize)
     )
-    yolo_draw_detections_checkbox.grid(row=postprocessing_row, column=3, sticky='w', padx=2)
+    yolo_draw_detections_checkbox.grid(row=postprocessing_row, column=2, sticky='w', padx=2)
     as_tooltips.add(yolo_draw_detections_checkbox, "Draw YOLO detection bounding boxes on the image")
 
     # YOLO Save Undetected option
