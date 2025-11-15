@@ -381,7 +381,11 @@ yolo_confidence_threshold = 0.10    # Minimum confidence for YOLO detections (0.
 yolo_check_shift_sanity = False     # Enable sanity check for shift size (reject if too big)
 draw_yolo_detections = False        # Draw YOLO detection bounding boxes on the image
 save_yolo_undetected = False        # Save frames with undetected sprocket holes for training
-yolo_subpixel_refinement = False    # Enable sub-pixel Y-axis refinement for YOLO detections
+yolo_subpixel_refinement = True     # Enable sub-pixel Y-axis refinement for YOLO detections
+
+# Temporal smoothing configuration for jitter reduction
+yolo_smoothing_strength = 0.7       # Strength of exponential smoothing (0.0-1.0, higher = more smoothing)
+yolo_filter_method = "none"         # Filtering method: "none" or "exponential" (default: none - edge detection is the primary fix)
 
 # Global variable to store latest YOLO detection data for visualization
 latest_yolo_detection = None        # Stores: {'boxes': [], 'confidences': [], 'selected_box': None, 'selected_conf': None}
@@ -391,6 +395,10 @@ latest_yolo_detection = None        # Stores: {'boxes': [], 'confidences': [], '
 # Used to apply smooth transformation when no sprocket is detected
 yolo_transform_avg_x = None         # RollingAverage for move_x transformations
 yolo_transform_avg_y = None         # RollingAverage for move_y transformations
+
+# Exponential smoothing state (previous frame's displacement)
+yolo_prev_move_x = None             # Previous frame's move_x for exponential smoothing
+yolo_prev_move_y = None             # Previous frame's move_y for exponential smoothing
 
 # Info required for usage counter
 UserConsent = None
@@ -4768,8 +4776,17 @@ def load_yolo_model():
 
 def refine_yolo_sprocket_y_position(img_ref, sprocket_box):
     """
-    Refine the Y-axis position of YOLO-detected sprocket hole using edge detection.
-    This helps reduce vertical jitter by finding the precise edge of the sprocket hole.
+    Refine the Y-axis position of YOLO-detected sprocket hole using advanced edge detection.
+
+    This function addresses the core issue: YOLO bounding boxes correctly identify sprocket
+    holes but their top edge has random variation relative to the physical sprocket edge.
+
+    Uses multiple robust techniques:
+    - Sobel gradient detection (more stable than Canny alone)
+    - Weighted voting from multiple edge candidates
+    - Morphological operations to detect gradients
+    - Sub-pixel accuracy via gradient interpolation
+    - Outlier rejection based on proximity to expected position
 
     Args:
         img_ref: Input image (OpenCV BGR format)
@@ -4782,9 +4799,9 @@ def refine_yolo_sprocket_y_position(img_ref, sprocket_box):
         x1, y1, x2, y2 = [int(coord) for coord in sprocket_box]
         img_height, img_width = img_ref.shape[:2]
 
-        # Expand ROI vertically to capture edges better
-        margin_y = 15
-        margin_x = 5
+        # Expand ROI to capture edge context
+        margin_y = 20  # Increased from 15 for better context
+        margin_x = 10  # Increased from 5
 
         roi_y1 = max(0, y1 - margin_y)
         roi_y2 = min(img_height, y2 + margin_y)
@@ -4795,8 +4812,8 @@ def refine_yolo_sprocket_y_position(img_ref, sprocket_box):
         roi = img_ref[roi_y1:roi_y2, roi_x1:roi_x2]
 
         if roi.size == 0:
-            logging.debug("Sub-pixel refinement: ROI is empty, using original position")
-            return y1
+            logging.warning("Sub-pixel refinement: ROI is empty, returning original")
+            return float(y1)
 
         # Convert to grayscale
         if len(roi.shape) == 3:
@@ -4804,68 +4821,125 @@ def refine_yolo_sprocket_y_position(img_ref, sprocket_box):
         else:
             roi_gray = roi
 
-        # Apply Gaussian blur to reduce noise
-        roi_blurred = cv2.GaussianBlur(roi_gray, (5, 5), 1.0)
+        # Method 1: Sobel Y gradient (detects horizontal edges)
+        # More stable than Canny, gives gradient magnitude
+        roi_blurred = cv2.GaussianBlur(roi_gray, (5, 5), 1.5)  # Increased sigma
+        sobel_y = cv2.Sobel(roi_blurred, cv2.CV_64F, 0, 1, ksize=3)
 
-        # Find edges using Canny
-        edges = cv2.Canny(roi_blurred, 30, 100)
+        # We want positive gradient (dark to bright transition)
+        # Sprocket holes are dark, film is bright, so top edge is dark-to-bright
+        sobel_y_positive = np.maximum(sobel_y, 0)
 
-        # Find horizontal edges in the top portion of the sprocket hole
-        # Focus on the top third of the detection box
+        # Method 2: Canny edges with adaptive thresholds
+        median_intensity = np.median(roi_gray)
+        lower_canny = int(max(0, median_intensity * 0.33))
+        upper_canny = int(min(255, median_intensity * 0.66))
+        edges_canny = cv2.Canny(roi_blurred, lower_canny, upper_canny)
+
+        # Method 3: Morphological gradient
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+        morph_gradient = cv2.morphologyEx(roi_blurred, cv2.MORPH_GRADIENT, kernel)
+
+        # Search region: expanded to 75% of box height (was 50%)
         box_height = y2 - y1
-        search_start = margin_y  # Start from the top margin
-        search_end = margin_y + int(box_height * 0.5)  # Search in top half
+        search_start = margin_y
+        search_end = margin_y + int(box_height * 0.75)
 
-        if search_end <= search_start or search_end > edges.shape[0]:
-            logging.debug("Sub-pixel refinement: Invalid search range, using original position")
-            return y1
+        if search_end <= search_start or search_end > roi_gray.shape[0]:
+            logging.warning(f"Sub-pixel refinement: Invalid search range ({search_start} to {search_end}, roi height: {roi_gray.shape[0]})")
+            return float(y1)
 
-        # Sum edge intensity along each horizontal line
-        edge_profile = np.sum(edges[search_start:search_end, :], axis=1)
+        # Extract search regions
+        sobel_region = sobel_y_positive[search_start:search_end, :]
+        canny_region = edges_canny[search_start:search_end, :]
+        morph_region = morph_gradient[search_start:search_end, :]
 
-        if len(edge_profile) == 0 or np.max(edge_profile) == 0:
-            logging.debug("Sub-pixel refinement: No edges found, using original position")
-            return y1
+        # Create combined edge profile using weighted voting
+        sobel_profile = np.sum(sobel_region, axis=1)
+        canny_profile = np.sum(canny_region, axis=1)
+        morph_profile = np.sum(morph_region, axis=1)
 
-        # Find the strongest edge (likely the top edge of sprocket hole)
-        # Look for the first strong edge from the top
-        threshold = np.max(edge_profile) * 0.5
-        edge_indices = np.where(edge_profile > threshold)[0]
+        # Normalize profiles to 0-1 range
+        if np.max(sobel_profile) > 0:
+            sobel_profile = sobel_profile / np.max(sobel_profile)
+        if np.max(canny_profile) > 0:
+            canny_profile = canny_profile / np.max(canny_profile)
+        if np.max(morph_profile) > 0:
+            morph_profile = morph_profile / np.max(morph_profile)
 
-        if len(edge_indices) == 0:
-            logging.debug("Sub-pixel refinement: No strong edges found, using original position")
-            return y1
+        # Weighted combination: Sobel is most reliable for this task
+        combined_profile = (0.6 * sobel_profile + 0.25 * canny_profile + 0.15 * morph_profile)
 
-        # Use the first strong edge as the top edge
-        refined_y_offset = edge_indices[0]
+        if len(combined_profile) == 0 or np.max(combined_profile) < 0.1:
+            logging.warning(f"Sub-pixel refinement: No edges detected (profile max: {np.max(combined_profile) if len(combined_profile) > 0 else 0:.3f})")
+            return float(y1)
 
-        # Apply sub-pixel refinement using parabolic interpolation
-        if 0 < refined_y_offset < len(edge_profile) - 1:
-            # Get three points around the peak
-            y_prev = edge_profile[refined_y_offset - 1]
-            y_curr = edge_profile[refined_y_offset]
-            y_next = edge_profile[refined_y_offset + 1]
+        # Find edge candidates - look for peaks in the profile
+        threshold = np.max(combined_profile) * 0.4  # Lowered from 0.5 for more candidates
+        peak_indices = []
 
-            # Parabolic interpolation for sub-pixel accuracy
+        # Simple peak detection: local maxima above threshold
+        for i in range(1, len(combined_profile) - 1):
+            if (combined_profile[i] > threshold and
+                combined_profile[i] >= combined_profile[i-1] and
+                combined_profile[i] >= combined_profile[i+1]):
+                peak_indices.append(i)
+
+        if len(peak_indices) == 0:
+            # Fallback: just use the maximum
+            peak_indices = [np.argmax(combined_profile)]
+
+        # Select the best edge: prefer edges closer to expected position (top of box)
+        # Weight by: (1) edge strength, (2) proximity to top
+        expected_offset = margin_y - search_start  # Offset to original y1
+        best_score = -1
+        best_edge = peak_indices[0]
+
+        for idx in peak_indices:
+            edge_strength = combined_profile[idx]
+            distance_from_expected = abs(idx - expected_offset)
+
+            # Score: high edge strength, close to expected position
+            distance_penalty = distance_from_expected / max(10, box_height * 0.3)
+            score = edge_strength / (1.0 + distance_penalty)
+
+            if score > best_score:
+                best_score = score
+                best_edge = idx
+
+        refined_y_offset = float(best_edge)
+
+        # Sub-pixel refinement using quadratic interpolation on combined profile
+        if 0 < best_edge < len(combined_profile) - 1:
+            y_prev = combined_profile[best_edge - 1]
+            y_curr = combined_profile[best_edge]
+            y_next = combined_profile[best_edge + 1]
+
+            # Quadratic peak interpolation
             denom = 2 * (2 * y_curr - y_prev - y_next)
-            if abs(denom) > 1e-6:  # Avoid division by zero
+            if abs(denom) > 1e-6:
                 sub_pixel_offset = (y_prev - y_next) / denom
+                # Clamp sub-pixel adjustment to reasonable range
+                sub_pixel_offset = np.clip(sub_pixel_offset, -0.5, 0.5)
                 refined_y_offset += sub_pixel_offset
 
         # Convert back to original image coordinates
         refined_y = roi_y1 + search_start + refined_y_offset
 
-        # Sanity check: refined position should be close to original
-        if abs(refined_y - y1) > 10:
-            logging.debug(f"Sub-pixel refinement: Large deviation ({refined_y - y1:.2f}px), using original position")
-            return y1
+        # Sanity check: refined position should be reasonably close to original
+        # YOLO boxes are often loose, so true edge can be 20-50 pixels from box edge
+        deviation = abs(refined_y - y1)
+        if deviation > 60:  # Increased from 15 to 60 - YOLO boxes don't tightly fit sprocket holes
+            logging.warning(f"Sub-pixel refinement: Excessive deviation ({deviation:.2f}px), rejecting and using original")
+            return float(y1)
 
-        logging.debug(f"Sub-pixel refinement: Y adjusted by {refined_y - y1:.2f} pixels")
+        adjustment = refined_y - y1
+        logging.info(f"Sub-pixel refinement: Y {y1} -> {refined_y:.3f} (adjusted {adjustment:.3f}px, score: {best_score:.3f})")
         return refined_y
 
     except Exception as e:
-        logging.error(f"Sub-pixel refinement failed: {e}")
-        return sprocket_box[1]  # Return original y1 on error
+        logging.error(f"Sub-pixel refinement failed: {e}", exc_info=True)
+        return float(sprocket_box[1])  # Return original y1 on error
 
 
 def detect_yolo_sprocket(frame_idx, img_ref, yolo_model, img_original=None, source_filename=None):
@@ -4960,8 +5034,9 @@ def detect_yolo_sprocket(frame_idx, img_ref, yolo_model, img_original=None, sour
     match_level = float(bottom_left_confs[best_idx])
 
     # Use top-right corner as reference point (like YOLO script)
-    detected_x = int(sprocket_hole[2])
-    detected_y = int(sprocket_hole[1])
+    # Keep as float to preserve sub-pixel precision
+    detected_x = float(sprocket_hole[2])
+    detected_y = float(sprocket_hole[1])
 
     # Apply sub-pixel Y-axis refinement if enabled
     global yolo_subpixel_refinement
@@ -5133,6 +5208,68 @@ def draw_yolo_detections_on_bgr_image(img_bgr, shift_x=0, shift_y=0):
     return img_bgr
 
 
+def apply_yolo_smoothing(raw_move_x, raw_move_y, frame_idx):
+    """
+    Apply temporal smoothing to YOLO displacement values to reduce jitter.
+
+    Implements exponential moving average (EMA) smoothing with adaptive alpha.
+
+    Args:
+        raw_move_x: Raw horizontal displacement from YOLO detection
+        raw_move_y: Raw vertical displacement from YOLO detection
+        frame_idx: Current frame index for logging
+
+    Returns:
+        (smoothed_move_x, smoothed_move_y): Filtered displacement values
+    """
+    global yolo_prev_move_x, yolo_prev_move_y
+    global yolo_smoothing_strength, yolo_filter_method
+
+    move_x = raw_move_x
+    move_y = raw_move_y
+
+    # Check filter method
+    if yolo_filter_method == "none":
+        # No filtering - return raw values
+        yolo_prev_move_x = move_x
+        yolo_prev_move_y = move_y
+        return move_x, move_y
+
+    # Apply exponential smoothing if enabled
+    if yolo_filter_method == "exponential":
+        if yolo_prev_move_x is not None and yolo_prev_move_y is not None:
+            # Calculate displacement magnitude for adaptive smoothing
+            displacement_magnitude = np.sqrt(move_x**2 + move_y**2)
+
+            # Adaptive alpha: smooth more when displacements are small (likely noise),
+            # smooth less when displacements are large (likely real motion)
+            # Base alpha from smoothing_strength (inverted: higher strength = lower alpha = more smoothing)
+            base_alpha = 1.0 - yolo_smoothing_strength
+
+            # Adapt based on motion magnitude
+            # Small motion (<5 px): use base_alpha (more smoothing)
+            # Large motion (>50 px): increase alpha (less smoothing, faster response)
+            adaptive_factor = min(1.0, displacement_magnitude / 50.0)
+            adaptive_alpha = base_alpha + (1.0 - base_alpha) * adaptive_factor
+            adaptive_alpha = max(0.1, min(1.0, adaptive_alpha))  # Clamp to [0.1, 1.0]
+
+            # Apply exponential moving average: new = alpha * current + (1-alpha) * previous
+            smoothed_x = adaptive_alpha * move_x + (1.0 - adaptive_alpha) * yolo_prev_move_x
+            smoothed_y = adaptive_alpha * move_y + (1.0 - adaptive_alpha) * yolo_prev_move_y
+
+            logging.debug(f"Frame {frame_idx}: EMA smoothing - alpha: {adaptive_alpha:.2f}, "
+                        f"raw: ({move_x:.2f}, {move_y:.2f}), smoothed: ({smoothed_x:.2f}, {smoothed_y:.2f})")
+
+            move_x = smoothed_x
+            move_y = smoothed_y
+
+        # Update previous values
+        yolo_prev_move_x = move_x
+        yolo_prev_move_y = move_y
+
+    return move_x, move_y
+
+
 def calculate_frame_displacement_with_yolo(frame_idx, img_ref, yolo_model, img_original=None, source_filename=None):
     """
     Calculate frame displacement using YOLO sprocket hole detection.
@@ -5157,6 +5294,8 @@ def calculate_frame_displacement_with_yolo(frame_idx, img_ref, yolo_model, img_o
     """
     global yolo_check_shift_sanity, latest_yolo_detection
     global yolo_transform_avg_x, yolo_transform_avg_y
+    global yolo_prev_move_x, yolo_prev_move_y
+    global yolo_smoothing_strength, yolo_filter_method
 
     # Use the standalone detection function
     detection = detect_yolo_sprocket(frame_idx, img_ref, yolo_model, img_original, source_filename)
@@ -5190,8 +5329,14 @@ def calculate_frame_displacement_with_yolo(frame_idx, img_ref, yolo_model, img_o
 
     # Calculate displacement relative to expected position
     hole_template_pos = template_list.get_active_position()
-    move_x = hole_template_pos[0] - detected_x
-    move_y = hole_template_pos[1] - detected_y
+    raw_move_x = hole_template_pos[0] - detected_x
+    raw_move_y = hole_template_pos[1] - detected_y
+
+    # DIAGNOSTIC: Log raw detection details
+    logging.info(f"Frame {frame_idx}: YOLO raw - detected_y: {detected_y:.3f}, template_y: {hole_template_pos[1]:.3f}, raw_move_y: {raw_move_y:.3f}")
+
+    # Apply temporal smoothing and filtering to reduce jitter
+    move_x, move_y = apply_yolo_smoothing(raw_move_x, raw_move_y, frame_idx)
 
     # Sanity check (optional)
     if yolo_check_shift_sanity and (abs(move_x) > 200 or abs(move_y) > 600):
@@ -7190,6 +7335,7 @@ def build_ui():
             yolo_draw_detections_checkbox.config(state=NORMAL)
             yolo_save_undetected_checkbox.config(state=NORMAL)
             yolo_subpixel_refinement_checkbox.config(state=NORMAL)
+            yolo_filter_dropdown.config(state=NORMAL)
         else:
             yolo_model_entry.config(state=DISABLED)
             yolo_model_browse_btn.config(state=DISABLED)
@@ -7197,6 +7343,7 @@ def build_ui():
             yolo_draw_detections_checkbox.config(state=DISABLED)
             yolo_save_undetected_checkbox.config(state=DISABLED)
             yolo_subpixel_refinement_checkbox.config(state=DISABLED)
+            yolo_filter_dropdown.config(state=DISABLED)
 
         # Save to project config
         project_config["StabilizationMethod"] = method
@@ -7366,6 +7513,33 @@ def build_ui():
     )
     yolo_subpixel_refinement_checkbox.grid(row=postprocessing_row, column=5, sticky='w', padx=2)
     as_tooltips.add(yolo_subpixel_refinement_checkbox, "Enable sub-pixel Y-axis refinement using edge detection to reduce vertical jitter")
+
+    # YOLO Filter Method dropdown (advanced option for temporal smoothing)
+    yolo_filter_method_var = tk.StringVar(value=yolo_filter_method)
+
+    def yolo_filter_method_changed(*args):
+        """Handle YOLO filter method changes."""
+        global yolo_filter_method, yolo_prev_move_x, yolo_prev_move_y
+        yolo_filter_method = yolo_filter_method_var.get()
+        project_config["YoloFilterMethod"] = yolo_filter_method
+        # Reset filter state when method changes
+        yolo_prev_move_x = None
+        yolo_prev_move_y = None
+        logging.info(f"YOLO filter method changed to: {yolo_filter_method}")
+
+    yolo_filter_label = tk.Label(postprocessing_frame, text="Filter:", font=("Arial", FontSize))
+    yolo_filter_label.grid(row=postprocessing_row, column=6, sticky='e', padx=(10, 0))
+
+    yolo_filter_dropdown = tk.OptionMenu(
+        postprocessing_frame,
+        yolo_filter_method_var,
+        "none",
+        "exponential",
+        command=yolo_filter_method_changed
+    )
+    yolo_filter_dropdown.config(font=("Arial", FontSize), state=DISABLED, width=10)
+    yolo_filter_dropdown.grid(row=postprocessing_row, column=7, sticky='w', padx=2)
+    as_tooltips.add(yolo_filter_dropdown, "Temporal smoothing: 'none' uses only edge detection, 'exponential' adds adaptive smoothing")
 
     postprocessing_row += 1
 
