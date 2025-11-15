@@ -4942,6 +4942,165 @@ def refine_yolo_sprocket_y_position(img_ref, sprocket_box):
         return float(sprocket_box[1])  # Return original y1 on error
 
 
+def refine_yolo_sprocket_x_position(img_ref, sprocket_box):
+    """
+    Refine the X-axis position of YOLO-detected sprocket hole using advanced edge detection.
+
+    Similar to Y refinement, but detects the vertical right edge of the sprocket hole.
+    YOLO bounding boxes have random offsets from the physical edges - this finds the true edge.
+
+    Uses multiple robust techniques:
+    - Sobel X gradient (detects vertical edges)
+    - Weighted voting from multiple edge candidates
+    - Morphological operations to detect gradients
+    - Sub-pixel accuracy via gradient interpolation
+
+    Args:
+        img_ref: Input image (OpenCV BGR format)
+        sprocket_box: YOLO bounding box [x1, y1, x2, y2]
+
+    Returns:
+        refined_x: Sub-pixel accurate X position (right edge), or original x2 if refinement fails
+    """
+    try:
+        x1, y1, x2, y2 = [int(coord) for coord in sprocket_box]
+        img_height, img_width = img_ref.shape[:2]
+
+        # Expand ROI to capture edge context
+        margin_x = 20  # Horizontal margin for X refinement
+        margin_y = 10  # Vertical margin
+
+        roi_x1 = max(0, x1 - margin_x)
+        roi_x2 = min(img_width, x2 + margin_x)
+        roi_y1 = max(0, y1 - margin_y)
+        roi_y2 = min(img_height, y2 + margin_y)
+
+        # Extract ROI
+        roi = img_ref[roi_y1:roi_y2, roi_x1:roi_x2]
+
+        if roi.size == 0:
+            logging.warning("Sub-pixel X refinement: ROI is empty, returning original")
+            return float(x2)
+
+        # Convert to grayscale
+        if len(roi.shape) == 3:
+            roi_gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+        else:
+            roi_gray = roi
+
+        # Method 1: Sobel X gradient (detects vertical edges)
+        roi_blurred = cv2.GaussianBlur(roi_gray, (5, 5), 1.5)
+        sobel_x = cv2.Sobel(roi_blurred, cv2.CV_64F, 1, 0, ksize=3)
+
+        # We want negative gradient (bright to dark transition: film → sprocket hole)
+        # Right edge of hole: bright film on left, dark hole on right
+        sobel_x_negative = np.maximum(-sobel_x, 0)
+
+        # Method 2: Canny edges with adaptive thresholds
+        median_intensity = np.median(roi_gray)
+        lower_canny = int(max(0, median_intensity * 0.33))
+        upper_canny = int(min(255, median_intensity * 0.66))
+        edges_canny = cv2.Canny(roi_blurred, lower_canny, upper_canny)
+
+        # Method 3: Morphological gradient
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+        morph_gradient = cv2.morphologyEx(roi_blurred, cv2.MORPH_GRADIENT, kernel)
+
+        # Search region: right 75% of bounding box
+        box_width = x2 - x1
+        search_start = margin_x + int(box_width * 0.25)  # Start at 25% from left
+        search_end = margin_x + box_width  # Search to right edge
+
+        if search_end <= search_start or search_end > roi_gray.shape[1]:
+            logging.warning(f"Sub-pixel X refinement: Invalid search range ({search_start} to {search_end}, roi width: {roi_gray.shape[1]})")
+            return float(x2)
+
+        # Extract search regions and sum vertically to create horizontal profile
+        sobel_region = sobel_x_negative[:, search_start:search_end]
+        canny_region = edges_canny[:, search_start:search_end]
+        morph_region = morph_gradient[:, search_start:search_end]
+
+        # Create profiles by summing along vertical axis (axis=0)
+        sobel_profile = np.sum(sobel_region, axis=0)
+        canny_profile = np.sum(canny_region, axis=0)
+        morph_profile = np.sum(morph_region, axis=0)
+
+        # Normalize profiles to 0-1 range
+        if np.max(sobel_profile) > 0:
+            sobel_profile = sobel_profile / np.max(sobel_profile)
+        if np.max(canny_profile) > 0:
+            canny_profile = canny_profile / np.max(canny_profile)
+        if np.max(morph_profile) > 0:
+            morph_profile = morph_profile / np.max(morph_profile)
+
+        # Weighted combination
+        combined_profile = (0.6 * sobel_profile + 0.25 * canny_profile + 0.15 * morph_profile)
+
+        if len(combined_profile) == 0 or np.max(combined_profile) < 0.1:
+            logging.warning(f"Sub-pixel X refinement: No edges detected (profile max: {np.max(combined_profile) if len(combined_profile) > 0 else 0:.3f})")
+            return float(x2)
+
+        # Find edge candidates - look for peaks
+        threshold = np.max(combined_profile) * 0.4
+        peak_indices = []
+
+        for i in range(1, len(combined_profile) - 1):
+            if (combined_profile[i] > threshold and
+                combined_profile[i] >= combined_profile[i-1] and
+                combined_profile[i] >= combined_profile[i+1]):
+                peak_indices.append(i)
+
+        if len(peak_indices) == 0:
+            peak_indices = [np.argmax(combined_profile)]
+
+        # Select best edge: prefer edges closer to expected position (right side of box)
+        expected_offset = (margin_x + box_width) - search_start  # Offset to original x2
+        best_score = -1
+        best_edge = peak_indices[0]
+
+        for idx in peak_indices:
+            edge_strength = combined_profile[idx]
+            distance_from_expected = abs(idx - expected_offset)
+
+            distance_penalty = distance_from_expected / max(10, box_width * 0.3)
+            score = edge_strength / (1.0 + distance_penalty)
+
+            if score > best_score:
+                best_score = score
+                best_edge = idx
+
+        refined_x_offset = float(best_edge)
+
+        # Sub-pixel refinement using quadratic interpolation
+        if 0 < best_edge < len(combined_profile) - 1:
+            x_prev = combined_profile[best_edge - 1]
+            x_curr = combined_profile[best_edge]
+            x_next = combined_profile[best_edge + 1]
+
+            denom = 2 * (2 * x_curr - x_prev - x_next)
+            if abs(denom) > 1e-6:
+                sub_pixel_offset = (x_prev - x_next) / denom
+                sub_pixel_offset = np.clip(sub_pixel_offset, -0.5, 0.5)
+                refined_x_offset += sub_pixel_offset
+
+        # Convert back to original image coordinates
+        refined_x = roi_x1 + search_start + refined_x_offset
+
+        # Sanity check: refined position should be reasonably close to original
+        deviation = abs(refined_x - x2)
+        if deviation > 60:
+            logging.warning(f"Sub-pixel X refinement: Excessive deviation ({deviation:.2f}px), rejecting and using original")
+            return float(x2)
+
+        adjustment = refined_x - x2
+        logging.info(f"Sub-pixel X refinement: X {x2} -> {refined_x:.3f} (adjusted {adjustment:.3f}px, score: {best_score:.3f})")
+        return refined_x
+
+    except Exception as e:
+        logging.error(f"Sub-pixel X refinement failed: {e}", exc_info=True)
+        return float(sprocket_box[2])  # Return original x2 on error
+
+
 def detect_yolo_sprocket(frame_idx, img_ref, yolo_model, img_original=None, source_filename=None):
     """
     Detect sprocket hole using YOLO (independent of stabilization).
@@ -5038,12 +5197,15 @@ def detect_yolo_sprocket(frame_idx, img_ref, yolo_model, img_original=None, sour
     detected_x = float(sprocket_hole[2])
     detected_y = float(sprocket_hole[1])
 
-    # Apply sub-pixel Y-axis refinement if enabled
+    # Apply sub-pixel X and Y refinement if enabled
     global yolo_subpixel_refinement
     if yolo_subpixel_refinement:
+        refined_x = refine_yolo_sprocket_x_position(img_ref, sprocket_hole)
         refined_y = refine_yolo_sprocket_y_position(img_ref, sprocket_hole)
-        logging.debug(f"Frame {frame_idx}: YOLO selected sprocket at ({detected_x}, {detected_y}), "
-                     f"refined Y: {refined_y:.2f} (delta: {refined_y - detected_y:.2f}px), confidence: {match_level:.2f}")
+        logging.debug(f"Frame {frame_idx}: YOLO sprocket at ({detected_x:.1f}, {detected_y:.1f}), "
+                     f"refined to ({refined_x:.3f}, {refined_y:.3f}), "
+                     f"delta: ({refined_x - detected_x:.2f}, {refined_y - detected_y:.2f})px, conf: {match_level:.2f}")
+        detected_x = refined_x
         detected_y = refined_y
     else:
         logging.debug(f"Frame {frame_idx}: YOLO selected sprocket at ({detected_x}, {detected_y}), confidence: {match_level:.2f}")
@@ -7505,14 +7667,14 @@ def build_ui():
 
     yolo_subpixel_refinement_checkbox = tk.Checkbutton(
         postprocessing_frame,
-        text="Sub-pixel Y",
+        text="Sub-pixel XY",
         variable=yolo_subpixel_refinement_var,
         command=yolo_subpixel_refinement_changed,
         state=DISABLED,
         font=("Arial", FontSize)
     )
     yolo_subpixel_refinement_checkbox.grid(row=postprocessing_row, column=5, sticky='w', padx=2)
-    as_tooltips.add(yolo_subpixel_refinement_checkbox, "Enable sub-pixel Y-axis refinement using edge detection to reduce vertical jitter")
+    as_tooltips.add(yolo_subpixel_refinement_checkbox, "Enable sub-pixel X and Y refinement using edge detection to reduce jitter in both dimensions")
 
     # YOLO Filter Method dropdown (advanced option for temporal smoothing)
     yolo_filter_method_var = tk.StringVar(value=yolo_filter_method)
