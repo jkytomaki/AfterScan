@@ -707,7 +707,6 @@ def decode_general_config():
     global SavedWithVersion, JobListFilename
     global precise_template_match, high_sensitive_bad_frame_detection
     global LeftStripeWidth
-    global stabilization_method
     if 'SourceDir' in general_config:
         SourceDir = general_config["SourceDir"]
         # If directory in configuration does not exist, set current working dir
@@ -742,10 +741,6 @@ def decode_general_config():
         precise_template_match = general_config["PreciseTemplateMatch"]
     if 'HighSensitiveBadFrameDetection' in general_config:
         high_sensitive_bad_frame_detection = general_config["HighSensitiveBadFrameDetection"]
-
-    # Load stabilization method and update GUI if it exists
-    if stabilization_method is not None and 'StabilizationMethod' in general_config:
-        stabilization_method.set(general_config["StabilizationMethod"])
 
 
 
@@ -931,7 +926,7 @@ def load_project_config():
 
 def decode_project_config():
     global SourceDir, TargetDir
-    global project_config
+    global project_config, general_config
     global template_list
     global project_config_basename, project_config_filename
     global CurrentFrame, frame_slider
@@ -1152,6 +1147,9 @@ def decode_project_config():
     try:
         if 'StabilizationMethod' in project_config:
             stabilization_method.set(project_config["StabilizationMethod"])
+            stabilization_method_changed()
+        elif 'StabilizationMethod' in general_config:
+            stabilization_method.set(general_config["StabilizationMethod"])
             stabilization_method_changed()
         else:
             stabilization_method.set("template")
@@ -7143,6 +7141,7 @@ def build_ui():
     global display_template_popup_btn
     global stabilization_shift_y_value, stabilization_shift_label, stabilization_shift_y_spinbox
     global stabilization_shift_x_value, stabilization_shift_x_spinbox
+    global stabilization_method
 
     # Menu bar
     menu_bar = tk.Menu(win)
