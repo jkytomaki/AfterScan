@@ -292,6 +292,7 @@ left_stripe_stabilized_canvas = None
 
 # UI control variables (StringVar, IntVar, etc.)
 stabilization_method = None
+stabilization_method_changed = None  # Function reference, set when UI is built
 
 
 # Video generation vars
@@ -1153,14 +1154,16 @@ def decode_project_config():
             # Explicitly set flags in case stabilization_method_changed() fails
             use_simple_stabilization = (method == "simple")
             use_yolo_stabilization = (method == "yolo")
-            stabilization_method_changed()
+            if stabilization_method_changed is not None:
+                stabilization_method_changed()
         elif 'StabilizationMethod' in general_config:
             method = general_config["StabilizationMethod"]
             stabilization_method.set(method)
             # Explicitly set flags in case stabilization_method_changed() fails
             use_simple_stabilization = (method == "simple")
             use_yolo_stabilization = (method == "yolo")
-            stabilization_method_changed()
+            if stabilization_method_changed is not None:
+                stabilization_method_changed()
         else:
             stabilization_method.set("template")
             use_simple_stabilization = False
@@ -7534,6 +7537,9 @@ def build_ui():
                 scale_display_update()
             except Exception as e:
                 logging.debug(f"Could not update display when changing stabilization method: {e}")
+
+    # Make stabilization_method_changed accessible globally for decode_project_config()
+    globals()['stabilization_method_changed'] = stabilization_method_changed
 
     template_radio = tk.Radiobutton(
         postprocessing_frame,
