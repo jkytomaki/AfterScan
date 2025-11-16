@@ -7694,7 +7694,7 @@ def build_ui():
 
     yolo_subpixel_refinement_checkbox = tk.Checkbutton(
         postprocessing_frame,
-        text="Sub-pixel XY",
+        text="Edge refinement",
         variable=yolo_subpixel_refinement_var,
         command=yolo_subpixel_refinement_changed,
         state=DISABLED,
