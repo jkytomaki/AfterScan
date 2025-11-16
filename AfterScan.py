@@ -1145,14 +1145,26 @@ def decode_project_config():
         stabilization_shift_x_value.set(0)
     # Load YOLO configuration
     try:
+        global use_simple_stabilization, use_yolo_stabilization
+
         if 'StabilizationMethod' in project_config:
-            stabilization_method.set(project_config["StabilizationMethod"])
+            method = project_config["StabilizationMethod"]
+            stabilization_method.set(method)
+            # Explicitly set flags in case stabilization_method_changed() fails
+            use_simple_stabilization = (method == "simple")
+            use_yolo_stabilization = (method == "yolo")
             stabilization_method_changed()
         elif 'StabilizationMethod' in general_config:
-            stabilization_method.set(general_config["StabilizationMethod"])
+            method = general_config["StabilizationMethod"]
+            stabilization_method.set(method)
+            # Explicitly set flags in case stabilization_method_changed() fails
+            use_simple_stabilization = (method == "simple")
+            use_yolo_stabilization = (method == "yolo")
             stabilization_method_changed()
         else:
             stabilization_method.set("template")
+            use_simple_stabilization = False
+            use_yolo_stabilization = False
 
         if 'YoloModelPath' in project_config:
             global yolo_model_path
