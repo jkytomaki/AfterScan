@@ -1191,8 +1191,9 @@ def decode_project_config():
             yolo_subpixel_refinement_var.set(project_config["YoloSubpixelRefinement"])
             global yolo_subpixel_refinement
             yolo_subpixel_refinement = project_config["YoloSubpixelRefinement"]
-    except (NameError, AttributeError):
+    except (NameError, AttributeError) as e:
         # Widgets not created yet, will be set when UI is built
+        logging.debug(f"Exception while loading YOLO configuration: {e}")
         pass
 
     if 'PerformRotation' in project_config:
@@ -7527,8 +7528,12 @@ def build_ui():
         project_config["StabilizationMethod"] = method
 
         # Refresh display if not in a loop
+        # Wrap in try/except to prevent display update failures from breaking widget enable/disable
         if not ConvertLoopRunning and not BatchJobRunning:
-            scale_display_update()
+            try:
+                scale_display_update()
+            except Exception as e:
+                logging.debug(f"Could not update display when changing stabilization method: {e}")
 
     template_radio = tk.Radiobutton(
         postprocessing_frame,
