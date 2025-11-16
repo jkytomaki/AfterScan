@@ -707,6 +707,7 @@ def decode_general_config():
     global SavedWithVersion, JobListFilename
     global precise_template_match, high_sensitive_bad_frame_detection
     global LeftStripeWidth
+    global stabilization_method
     if 'SourceDir' in general_config:
         SourceDir = general_config["SourceDir"]
         # If directory in configuration does not exist, set current working dir
@@ -741,6 +742,10 @@ def decode_general_config():
         precise_template_match = general_config["PreciseTemplateMatch"]
     if 'HighSensitiveBadFrameDetection' in general_config:
         high_sensitive_bad_frame_detection = general_config["HighSensitiveBadFrameDetection"]
+
+    # Load stabilization method and update GUI if it exists
+    if stabilization_method is not None and 'StabilizationMethod' in general_config:
+        stabilization_method.set(general_config["StabilizationMethod"])
 
 
 
