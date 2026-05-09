@@ -4,29 +4,34 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
-    QLabel,
     QPushButton,
+    QScrollArea,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
+from afterscan.core.settings import FrameRange, Settings
+from afterscan.ui.panels.inspectors import (
+    EnhanceInspector,
+    FrameDataInspector,
+    RenderInspector,
+    SourceInspector,
+    StabilizeInspector,
+)
 from afterscan.ui.widgets._qss import set_flag
 
 
-_PLACEHOLDER_PER_STEP = {
-    "source": "Source settings — film format, frame range, rotation.",
-    "stabilize": "Stabilization — method, confidence, compensation.",
-    "enhance": "Enhance — crop, color, frame fill.",
-    "render": "Render — output, encode, estimates.",
-}
-
-
 class Inspector(QFrame):
-    """Right-side context-aware inspector. Phase 2 ships placeholder content;
-    Phase 3 swaps the placeholder for real per-step inspector panels."""
+    """Right-side context-aware inspector. Settings tab swaps content per
+    workflow step; Frame data tab is shared."""
 
-    def __init__(self, parent=None) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        frame_range: FrameRange,
+        parent=None,
+    ) -> None:
         super().__init__(parent)
         self.setObjectName("inspector")
         self.setFixedWidth(320)
@@ -43,22 +48,33 @@ class Inspector(QFrame):
 
         layout.addWidget(self._tabs_bar())
 
-        self._settings_stack = QStackedWidget()
         self._step_pages: dict[str, int] = {}
-        for step_id, text in _PLACEHOLDER_PER_STEP.items():
-            page = self._placeholder_page(text)
-            self._step_pages[step_id] = self._settings_stack.addWidget(page)
+        self._settings_stack = QStackedWidget()
+        for step_id, panel in (
+            ("source", SourceInspector(settings)),
+            ("stabilize", StabilizeInspector(settings)),
+            ("enhance", EnhanceInspector(settings)),
+            ("render", RenderInspector(settings)),
+        ):
+            scroller = self._scroll(panel)
+            self._step_pages[step_id] = self._settings_stack.addWidget(scroller)
 
-        self._metadata_page = self._placeholder_page(
-            "Per-frame metadata, detection confidence, history."
-        )
+        self._frame_data_page = self._scroll(FrameDataInspector(settings, frame_range))
 
         self._tab_stack = QStackedWidget()
         self._tab_stack.addWidget(self._settings_stack)
-        self._tab_stack.addWidget(self._metadata_page)
-
+        self._tab_stack.addWidget(self._frame_data_page)
         layout.addWidget(self._tab_stack, stretch=1)
+
         self._apply_tab_state()
+
+    def _scroll(self, content: QWidget) -> QScrollArea:
+        scroller = QScrollArea()
+        scroller.setWidgetResizable(True)
+        scroller.setFrameShape(QFrame.NoFrame)
+        scroller.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroller.setWidget(content)
+        return scroller
 
     def _tabs_bar(self) -> QFrame:
         bar = QFrame()
@@ -89,18 +105,6 @@ class Inspector(QFrame):
         for tab_id, btn in self._tabs.items():
             set_flag(btn, "on", tab_id == self._current_tab)
         self._tab_stack.setCurrentIndex(0 if self._current_tab == "settings" else 1)
-
-    def _placeholder_page(self, text: str) -> QWidget:
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(16, 16, 16, 16)
-        label = QLabel(text)
-        label.setWordWrap(True)
-        label.setAlignment(Qt.AlignTop)
-        label.setStyleSheet("color: rgba(236,232,225,0.5); font-size: 12px;")
-        layout.addWidget(label)
-        layout.addStretch(1)
-        return page
 
     def set_step(self, step_id: str) -> None:
         idx = self._step_pages.get(step_id)

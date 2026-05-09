@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
 )
 
 from afterscan import __version__
+from afterscan.core.settings import FrameRange, Settings
 from afterscan.ui.panels.filmstrip import Filmstrip
 from afterscan.ui.panels.inspector import Inspector
 from afterscan.ui.panels.preview import Preview
@@ -19,10 +20,17 @@ from afterscan.ui.widgets.steps import StepsBar
 
 
 class MainWindow(QMainWindow):
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        settings: Settings | None = None,
+        frame_range: FrameRange | None = None,
+    ) -> None:
         super().__init__()
         self.setWindowTitle(f"AfterScan — {__version__}")
         self.resize(1440, 900)
+
+        self.settings = settings or Settings()
+        self.frame_range = frame_range or FrameRange()
 
         root = QWidget()
         root.setObjectName("stage")
@@ -81,7 +89,7 @@ class MainWindow(QMainWindow):
         canvas_layout.addWidget(self.filmstrip)
         canvas_layout.addWidget(self.queue)
 
-        self.inspector = Inspector()
+        self.inspector = Inspector(self.settings, self.frame_range)
 
         h.addWidget(canvas, stretch=1)
         h.addWidget(self.inspector)
