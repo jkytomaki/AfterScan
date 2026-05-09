@@ -193,6 +193,31 @@ def find_all_flat_bright_runs(
     return out
 
 
+def _runs_from_mask(mask: np.ndarray, min_len: int):
+    """Return (cols, starts, ends) arrays for each run of True ≥ min_len in
+    `mask` (H × W bool). Vectorised: one whole-image diff finds every
+    transition, then we sort by (column, row) so starts and ends pair up
+    within each column."""
+    H, W = mask.shape
+    # Pad with False rows top/bottom so np.diff catches column-edge runs.
+    padded = np.zeros((H + 2, W), dtype=np.int8)
+    padded[1:-1] = mask
+    d = np.diff(padded, axis=0)  # shape (H + 1, W)
+    start_rows, start_cols = np.where(d == 1)
+    end_rows, end_cols = np.where(d == -1)
+    # np.where walks row-major; reorder so all events for a column are
+    # contiguous and in row order — that way starts[i] / ends[i] pair up.
+    s_order = np.lexsort((start_rows, start_cols))
+    e_order = np.lexsort((end_rows, end_cols))
+    start_cols = start_cols[s_order]
+    start_rows = start_rows[s_order]
+    end_cols = end_cols[e_order]  # noqa: F841 — used implicitly by ordering
+    end_rows = end_rows[e_order] - 1  # exclusive → inclusive
+    lengths = end_rows - start_rows + 1
+    keep = lengths >= min_len
+    return start_cols[keep], start_rows[keep], end_rows[keep]
+
+
 def _column_runs_normal(img_rgb: np.ndarray) -> list[tuple[int, int, int, float]]:
     """Per-column flat-bright runs in normal regime.
 
@@ -201,40 +226,69 @@ def _column_runs_normal(img_rgb: np.ndarray) -> list[tuple[int, int, int, float]
     content like red halation: pixels with min_ch < CHROMA_FLOOR are zeroed
     out before plateau detection. White and lightly-tinted whites have
     min_ch >= 200; halation/strong color casts have min_ch < 150.
+
+    Vectorised: sliding-window stats over the whole image at once instead of
+    one Python call per column.
     """
-    # Floor below which a pixel is too chromatic to be a sprocket. Some scans
-    # have heavy color cast (e.g. picture-00254.png has min_ch~120-165 in
-    # sprocket interior). Halation/red bleed has min_ch <= ~80 in solid color.
     CHROMA_FLOOR = 110
     H, W, _ = img_rgb.shape
     x_cut = int(W * LEFT_HALF_FRAC)
+    if x_cut < 1 or H < 5:
+        return []
+
     sig_max = _max_channel(img_rgb)
     sig_min = _min_channel(img_rgb)
     sig = np.where(sig_min >= CHROMA_FLOOR, sig_max, 0.0).astype(np.float32)
-    pts: list[tuple[int, int, int, float]] = []
-    for x in range(x_cut):
-        for s, e, mv in find_all_flat_bright_runs(sig[:, x]):
-            pts.append((x, s, e, mv))
-    return pts
+    sig_left = sig[:, :x_cut]  # H × x_cut
+
+    win = 5
+    if H < win:
+        return []
+    # Sliding window along the row axis. Result: (H - win + 1, x_cut, win)
+    sw = np.lib.stride_tricks.sliding_window_view(sig_left, win, axis=0)
+    win_max = sw.max(axis=2)
+    win_min = sw.min(axis=2)
+    win_mean = sw.mean(axis=2)
+    stable = (
+        (win_max - win_min <= PLATEAU_FLAT_TOL)
+        & (win_mean >= PLATEAU_MIN_BRIGHTNESS)
+        & (win_min >= PLATEAU_MIN_FLOOR)
+    )
+    # Each window's truth attaches to its centre row.
+    full_stable = np.zeros((H, x_cut), dtype=bool)
+    full_stable[win // 2 : win // 2 + stable.shape[0], :] = stable
+
+    # Cumulative sum lets each run's mean be computed in O(1).
+    cum = np.empty((H + 1, x_cut), dtype=np.float64)
+    cum[0] = 0
+    np.cumsum(sig_left, axis=0, dtype=np.float64, out=cum[1:])
+
+    cols, starts, ends = _runs_from_mask(full_stable, MIN_PLATEAU_LEN)
+    if cols.size == 0:
+        return []
+    means = (cum[ends + 1, cols] - cum[starts, cols]) / (ends - starts + 1)
+    return list(zip(
+        cols.astype(int).tolist(),
+        starts.astype(int).tolist(),
+        ends.astype(int).tolist(),
+        means.tolist(),
+    ))
 
 
 def _column_runs_extreme(img_rgb: np.ndarray) -> list[tuple[int, int, int, float]]:
     H, W, _ = img_rgb.shape
     x_cut = int(W * LEFT_HALF_FRAC)
+    if x_cut < 1:
+        return []
     min_ch = _min_channel(img_rgb)
-    sat = (min_ch >= 255).astype(np.uint8)
-    pts: list[tuple[int, int, int, float]] = []
-    for x in range(x_cut):
-        col = sat[:, x]
-        if not col.any():
-            continue
-        d = np.diff(np.concatenate([[0], col, [0]]))
-        starts = np.where(d == 1)[0]
-        ends = np.where(d == -1)[0] - 1
-        for s, e in zip(starts, ends):
-            if e - s + 1 >= MIN_PLATEAU_LEN:
-                pts.append((int(x), int(s), int(e), 255.0))
-    return pts
+    sat = (min_ch[:, :x_cut] >= 255)
+    cols, starts, ends = _runs_from_mask(sat, MIN_PLATEAU_LEN)
+    return list(zip(
+        cols.astype(int).tolist(),
+        starts.astype(int).tolist(),
+        ends.astype(int).tolist(),
+        [255.0] * cols.size,
+    ))
 
 
 def _build_components(
