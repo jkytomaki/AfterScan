@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QMouseEvent
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel
 
 from afterscan.ui.theme import DARK
@@ -12,6 +13,8 @@ from afterscan.ui.widgets.status_pill import StatusPill
 class TopBar(QFrame):
     start_clicked = Signal()
     settings_clicked = Signal()
+    source_clicked = Signal()
+    target_clicked = Signal()
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -27,6 +30,10 @@ class TopBar(QFrame):
 
         self._source_crumb = Crumb("Source", "—", parent=self)
         self._target_crumb = Crumb("Target", "—", parent=self)
+        self._source_crumb.setCursor(Qt.PointingHandCursor)
+        self._target_crumb.setCursor(Qt.PointingHandCursor)
+        self._source_crumb.mousePressEvent = self._on_source_clicked  # type: ignore[assignment]
+        self._target_crumb.mousePressEvent = self._on_target_clicked  # type: ignore[assignment]
         layout.addWidget(self._source_crumb)
         layout.addWidget(QLabel("→"))
         layout.addWidget(self._target_crumb)
@@ -82,3 +89,11 @@ class TopBar(QFrame):
 
     def set_running(self, running: bool) -> None:
         self._start_btn.setText("Pause batch" if running else "Start batch")
+
+    def _on_source_clicked(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.LeftButton:
+            self.source_clicked.emit()
+
+    def _on_target_clicked(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.LeftButton:
+            self.target_clicked.emit()
