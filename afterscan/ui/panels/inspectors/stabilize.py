@@ -106,26 +106,11 @@ class StabilizeInspector(QWidget):
         return frame
 
     def _classical_extras_widget(self) -> QFrame:
-        from afterscan.core import detect_classical
         frame = QFrame()
         v = QVBoxLayout(frame)
         v.setContentsMargins(0, 4, 0, 0)
         v.setSpacing(10)
-
         v.addWidget(bind_bool(QCheckBox("Edge refinement"), self._s, "edge_refinement"))
-
-        status = QLabel()
-        if detect_classical.is_available():
-            status.setText("Detector source found.")
-            status.setStyleSheet(f"color: {DARK.fg_3}; font-size: 11px;")
-        else:
-            status.setText(
-                "Detector source not found. Set AFTERSCAN_YOLO_DATASET_PATH or "
-                "place the yolo-dataset checkout under ~/personal-projects/."
-            )
-            status.setWordWrap(True)
-            status.setStyleSheet(f"color: {DARK.fg_3}; font-size: 11px;")
-        v.addWidget(status)
         return frame
 
     def _compensation_section(self) -> Section:
