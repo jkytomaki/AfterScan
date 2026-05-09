@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QThreadPool, QTimer
 from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
@@ -17,6 +17,7 @@ from pathlib import Path
 
 from afterscan import __version__
 from afterscan.core import jobs as jobs_io
+from afterscan.core.classical_worker import ClassicalDetectTask
 from afterscan.core.frames import FrameSource
 from afterscan.core.job_runner import JobRunner
 from afterscan.core.jobs import Job, JobList
@@ -84,6 +85,11 @@ class MainWindow(QMainWindow):
         self._play_timer = QTimer(self)
         self._play_timer.timeout.connect(self._tick)
 
+        self._detect_timer = QTimer(self)
+        self._detect_timer.setSingleShot(True)
+        self._detect_timer.setInterval(150)
+        self._detect_timer.timeout.connect(self._run_classical_detect)
+
     def _build_steps_row(self, steps: StepsBar, split_btn: IconBtn) -> QFrame:
         row = QFrame()
         h = QHBoxLayout(row)
@@ -135,6 +141,9 @@ class MainWindow(QMainWindow):
         self.queue.add_current_clicked.connect(self._add_current_job)
         self.queue.run_all_clicked.connect(self._toggle_batch)
         self.queue.suspend_mode_changed.connect(self._set_suspend_mode)
+        stab = self.inspector.panels["stabilize"]
+        stab.method_changed.connect(self._on_method_changed)
+        stab.stabilize_changed.connect(self._on_stabilize_changed)
         self._runner.job_started.connect(self._on_job_started)
         self._runner.job_progress.connect(self._on_job_progress)
         self._runner.job_finished.connect(self._on_job_finished)
@@ -195,14 +204,18 @@ class MainWindow(QMainWindow):
         before = pixmap if self._show_split else None
         self.preview.set_frame(pixmap, before=before)
         self.filmstrip.set_frame(idx)
+        self._schedule_detection()
 
     def _set_playing(self, on: bool) -> None:
         self.filmstrip.set_playing(on)
         if on:
+            self._detect_timer.stop()
+            self.preview.clear_detection()
             interval = max(int(1000 / max(self.settings.fps or 18, 1)), 16)
             self._play_timer.start(interval)
         else:
             self._play_timer.stop()
+            self._schedule_detection()
 
     def _tick(self) -> None:
         if self._frame_source is None or self._frame_source.total == 0:
@@ -217,6 +230,50 @@ class MainWindow(QMainWindow):
         self.preview.set_show_split(self._show_split)
         if self._frame_source is not None:
             self._show_frame(self.frame_range.current)
+
+    # ── classical detection ──────────────────────────────────────
+
+    def _on_method_changed(self, _method: str) -> None:
+        self.preview.clear_detection()
+        self._schedule_detection()
+
+    def _on_stabilize_changed(self, _on: bool) -> None:
+        self.preview.clear_detection()
+        self._schedule_detection()
+
+    def _schedule_detection(self) -> None:
+        if (self._frame_source is None
+                or not self.settings.stabilize
+                or self.settings.method != "classical"
+                or self._play_timer.isActive()):
+            return
+        self._detect_timer.start()
+
+    def _run_classical_detect(self) -> None:
+        if (self._frame_source is None
+                or not self.settings.stabilize
+                or self.settings.method != "classical"):
+            return
+        idx = self.frame_range.current
+        path = str(self._frame_source.path(idx))
+        task = ClassicalDetectTask(idx, path, self.settings.edge_refinement)
+        task.signals.finished.connect(self._on_detect_finished)
+        QThreadPool.globalInstance().start(task)
+
+    def _on_detect_finished(self, frame_idx: int, result) -> None:
+        # Stale: user scrubbed past, or method/stabilize toggled off mid-flight.
+        if (frame_idx != self.frame_range.current
+                or not self.settings.stabilize
+                or self.settings.method != "classical"):
+            return
+        if result is None or result.right_edge_x is None or result.corner_y is None:
+            self.preview.clear_detection()
+            return
+        label = (
+            f"x={result.right_edge_x:.1f}  y={result.corner_y:.1f}"
+            f"  {result.regime}/{result.mode}"
+        )
+        self.preview.set_detection(result.right_edge_x, result.corner_y, label)
 
     # ── job queue ─────────────────────────────────────────────────
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QRect, Qt
+from PySide6.QtCore import QPointF, QRect, Qt
 from PySide6.QtGui import QColor, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QSizePolicy, QVBoxLayout
 
@@ -24,6 +24,8 @@ class Preview(QFrame):
         self._pixmap: QPixmap | None = None
         self._before_pixmap: QPixmap | None = None
         self._show_split = False
+        self._detection_point: tuple[float, float] | None = None
+        self._detection_label: str = ""
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(24, 24, 24, 24)
@@ -47,6 +49,8 @@ class Preview(QFrame):
     def set_frame(self, pixmap: QPixmap, before: QPixmap | None = None) -> None:
         self._pixmap = pixmap if not pixmap.isNull() else None
         self._before_pixmap = before
+        self._detection_point = None
+        self._detection_label = ""
         self._refresh_chips()
         self.update_canvas()
 
@@ -54,11 +58,25 @@ class Preview(QFrame):
         self._show_split = on
         self.update_canvas()
 
+    def set_detection(self, x: float, y: float, label: str = "") -> None:
+        self._detection_point = (x, y)
+        self._detection_label = label
+        self.update_canvas()
+
+    def clear_detection(self) -> None:
+        if self._detection_point is None:
+            return
+        self._detection_point = None
+        self._detection_label = ""
+        self.update_canvas()
+
     def update_canvas(self) -> None:
         self._canvas.update_state(
             pixmap=self._pixmap,
             before=self._before_pixmap if self._show_split else None,
             settings=self._s,
+            detection_point=self._detection_point,
+            detection_label=self._detection_label,
         )
 
     def _refresh_chips(self) -> None:
@@ -90,11 +108,16 @@ class _Canvas(QFrame):
         self._pixmap: QPixmap | None = None
         self._before: QPixmap | None = None
         self._settings: Settings | None = None
+        self._detection_point: tuple[float, float] | None = None
+        self._detection_label: str = ""
 
-    def update_state(self, *, pixmap, before, settings) -> None:
+    def update_state(self, *, pixmap, before, settings,
+                     detection_point=None, detection_label="") -> None:
         self._pixmap = pixmap
         self._before = before
         self._settings = settings
+        self._detection_point = detection_point
+        self._detection_label = detection_label
         self.update()
 
     def paintEvent(self, _event) -> None:
@@ -117,7 +140,9 @@ class _Canvas(QFrame):
             return
         if s.crop:
             self._draw_crop_guides(p, frame_rect)
-        if s.stabilize and s.method in ("yolo", "classical"):
+        if s.stabilize and self._detection_point is not None and self._pixmap is not None:
+            self._draw_detection_point(p, frame_rect)
+        elif s.stabilize and s.method in ("yolo", "classical"):
             self._draw_detection(p, frame_rect)
 
     def _draw_frame(self, p: QPainter, rect: QRect):
@@ -174,6 +199,42 @@ class _Canvas(QFrame):
         p.setBrush(Qt.NoBrush)
         p.drawRect(guide)
         p.restore()
+
+    def _draw_detection_point(self, p: QPainter, frame: QRect) -> None:
+        pm = self._pixmap
+        if pm is None or self._detection_point is None or pm.width() == 0 or pm.height() == 0:
+            return
+        ix, iy = self._detection_point
+        sx = frame.width() / pm.width()
+        sy = frame.height() / pm.height()
+        cx = frame.x() + ix * sx
+        cy = frame.y() + iy * sy
+
+        accent = QColor(DARK.accent)
+        pen = QPen(accent)
+        pen.setWidthF(1.0)
+        pen.setStyle(Qt.DashLine)
+        p.setPen(pen)
+        p.setBrush(Qt.NoBrush)
+        p.drawLine(frame.x(), int(round(cy)), frame.right(), int(round(cy)))
+        p.drawLine(int(round(cx)), frame.y(), int(round(cx)), frame.bottom())
+
+        pen.setStyle(Qt.SolidLine)
+        pen.setWidthF(2.0)
+        p.setPen(pen)
+        p.drawEllipse(QPointF(cx, cy), 12, 12)
+
+        label = self._detection_label or f"({ix:.1f}, {iy:.1f})"
+        font = p.font()
+        font.setFamily("JetBrains Mono")
+        font.setPointSizeF(8.5)
+        p.setFont(font)
+        bg_rect = QRect(int(cx) + 16, int(cy) - 22, max(110, len(label) * 7), 16)
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(0, 0, 0, 170))
+        p.drawRect(bg_rect)
+        p.setPen(accent)
+        p.drawText(bg_rect.adjusted(6, 0, -4, 0), Qt.AlignVCenter | Qt.AlignLeft, label)
 
     def _draw_detection(self, p: QPainter, frame: QRect) -> None:
         # Stub bbox: left-edge sprocket strip. Replaced by real YOLO results later.

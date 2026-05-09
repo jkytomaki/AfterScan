@@ -48,16 +48,16 @@ class Inspector(QFrame):
 
         layout.addWidget(self._tabs_bar())
 
+        self.panels = {
+            "source": SourceInspector(settings),
+            "stabilize": StabilizeInspector(settings),
+            "enhance": EnhanceInspector(settings),
+            "render": RenderInspector(settings),
+        }
         self._step_pages: dict[str, int] = {}
         self._settings_stack = QStackedWidget()
-        for step_id, panel in (
-            ("source", SourceInspector(settings)),
-            ("stabilize", StabilizeInspector(settings)),
-            ("enhance", EnhanceInspector(settings)),
-            ("render", RenderInspector(settings)),
-        ):
-            scroller = self._scroll(panel)
-            self._step_pages[step_id] = self._settings_stack.addWidget(scroller)
+        for step_id, panel in self.panels.items():
+            self._step_pages[step_id] = self._settings_stack.addWidget(self._scroll(panel))
 
         self._frame_data_page = self._scroll(FrameDataInspector(settings, frame_range))
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QFrame,
@@ -21,6 +21,9 @@ from afterscan.ui.widgets.toggle import Toggle
 
 
 class StabilizeInspector(QWidget):
+    method_changed = Signal(str)
+    stabilize_changed = Signal(bool)
+
     def __init__(self, settings: Settings, parent=None) -> None:
         super().__init__(parent)
         self._s = settings
@@ -43,6 +46,7 @@ class StabilizeInspector(QWidget):
         on_lbl = QLabel("Stabilize frames")
         on_lbl.setStyleSheet(f"color: {DARK.fg_2}; font-size: 12px;")
         on_toggle = bind_bool(Toggle(), self._s, "stabilize")
+        on_toggle.toggled.connect(self.stabilize_changed)
         on_row.addWidget(on_lbl)
         on_row.addStretch(1)
         on_row.addWidget(on_toggle)
@@ -150,6 +154,7 @@ class StabilizeInspector(QWidget):
             card.set_on(method_id == method)
         self._yolo_extras.setVisible(method == "yolo")
         self._classical_extras.setVisible(method == "classical")
+        self.method_changed.emit(method)
 
     def _set_confidence(self, value: float, field: Field) -> None:
         self._s.confidence = value
