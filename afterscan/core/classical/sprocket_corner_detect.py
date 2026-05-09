@@ -16,8 +16,47 @@ of the bounding rectangle around the rounded-rectangle sprocket.
 """
 
 from __future__ import annotations
+import threading
+from contextlib import contextmanager
 from dataclasses import dataclass
 import numpy as np
+
+
+_scale_lock = threading.Lock()
+
+
+# Pixel-distance constants that should scale linearly with image size.
+# Brightness thresholds (PLATEAU_MIN_BRIGHTNESS, etc.), counts (TOP_EDGE_MAX_MISSES),
+# and fractions (LEFT_HALF_FRAC) are intensity-domain or unitless and stay fixed.
+_SCALABLE_CONSTANTS = (
+    "MIN_PLATEAU_LEN",
+    "MIN_VISIBLE_WIDTH",
+    "MAX_PLAUSIBLE_WIDTH_NORMAL",
+    "SEARCH_BOUNDARY_MARGIN",
+    "TOP_EDGE_MAX_TRAVEL_NORMAL",
+    "TOP_EDGE_MAX_TRAVEL_EXTREME",
+    "EDGE_REFINE_HALF_WINDOW",
+    "EDGE_REFINE_MAX_OFFSET",
+)
+
+
+@contextmanager
+def _scaled_constants(scale: float):
+    """Temporarily scale module-level pixel-distance constants. Held under a
+    lock since the constants are global; callers serialize naturally enough
+    in practice (debounced detect calls), and the lock prevents accidental
+    cross-thread interference."""
+    saved: dict = {}
+    with _scale_lock:
+        try:
+            module = globals()
+            for name in _SCALABLE_CONSTANTS:
+                saved[name] = module[name]
+                module[name] = max(1, int(round(saved[name] * scale)))
+            yield
+        finally:
+            for name, value in saved.items():
+                globals()[name] = value
 
 
 # Tunables
@@ -278,7 +317,8 @@ def _build_components(
     return finalized
 
 
-def _score_component(c: dict, H: int, W: int, x_prior: int | None = None) -> float:
+def _score_component(c: dict, H: int, W: int,
+                     x_prior: int | None = None, scale: float = 1.0) -> float:
     """Score a candidate component for being THE sprocket.
 
     Priors:
@@ -288,7 +328,12 @@ def _score_component(c: dict, H: int, W: int, x_prior: int | None = None) -> flo
       - SUPPORT: more supporting columns is better
       - BRIGHTNESS: brighter plateau is more sprocket-like
       - X PRIOR: prefer components near temporal X estimate
+
+    `scale` adjusts pixel-distance thresholds for downsampled inputs.
     """
+    def _s(v):  # scaled-int helper for thresholds
+        return max(1, int(round(v * scale)))
+
     n = c["n"]
     width = c["x_max"] - c["x_min"] + 1
     brightness = c["mean_brightness"]
@@ -296,26 +341,28 @@ def _score_component(c: dict, H: int, W: int, x_prior: int | None = None) -> flo
     x_max = c["x_max"]
     y_bot = c["y_bot_med"]
 
-    # Leftmost prior: strong bonus if x_min <= 30
-    if x_min <= 5:
+    near = _s(5)
+    far = _s(60)
+    if x_min <= near:
         leftmost = 1.0
-    elif x_min < 60:
-        leftmost = 1.0 - (x_min - 5) / 55.0  # 1.0 -> 0.0 across [5, 60]
+    elif x_min < far:
+        leftmost = 1.0 - (x_min - near) / max(1.0, float(far - near))
     else:
         leftmost = 0.0
 
-    # Width prior: ideal in [50, 250]; penalize outside
-    if 50 <= width <= 250:
+    width_lo = _s(50)
+    width_hi = _s(250)
+    if width_lo <= width <= width_hi:
         width_factor = 1.0
-    elif width < 50:
-        width_factor = max(0.2, width / 50.0)
+    elif width < width_lo:
+        width_factor = max(0.2, width / float(width_lo))
     else:  # too wide -> probably picture content
-        width_factor = max(0.15, 250.0 / width)
+        width_factor = max(0.15, float(width_hi) / width)
 
     # Bottom prior: y_bot deeper in frame is more sprocket-like
     bot_factor = float(y_bot) / max(H, 1)
 
-    # Brightness factor: 220 -> 0.1, 255 -> 1.0
+    # Brightness factor: 220 -> 0.1, 255 -> 1.0  (intensity, not scaled)
     bright_factor = max(0.1, min(1.5, (brightness - 220.0) / 35.0))
 
     score = (
@@ -327,9 +374,8 @@ def _score_component(c: dict, H: int, W: int, x_prior: int | None = None) -> flo
     )
 
     if x_prior is not None:
-        # Prefer components whose right edge is near x_prior
         d = abs(x_max - x_prior)
-        score *= max(0.4, 1.0 - d / 80.0)
+        score *= max(0.4, 1.0 - d / max(1.0, float(_s(80))))
 
     return float(score)
 
@@ -709,26 +755,44 @@ def _refine_right_edge_sobel(
 
 
 def detect(img_rgb: np.ndarray, x_prior: int | None = None,
-           edge_refine: bool = True) -> Detection:
+           edge_refine: bool = True, scale: float = 1.0) -> Detection:
     """Detect the geometric top-right corner of the sprocket hole.
 
     `x_prior` is an optional temporal hint (e.g., running median of past X) that
     biases candidate selection toward components near this X.
+
+    `scale` is the linear scale factor of `img_rgb` relative to a "native"
+    full-resolution scan (typically 2028×1520 for an 8mm scan). Pass 0.5 if
+    you've halved the image before calling — pixel-distance thresholds and
+    geometric priors scale accordingly. Brightness thresholds are NOT scaled
+    (interpolation preserves plateau interiors well enough to keep the
+    intensity gates intact).
     """
+    if scale != 1.0:
+        with _scaled_constants(scale):
+            return _detect_impl(img_rgb, x_prior, edge_refine, scale)
+    return _detect_impl(img_rgb, x_prior, edge_refine, scale)
+
+
+def _detect_impl(img_rgb: np.ndarray, x_prior: int | None,
+                 edge_refine: bool, scale: float) -> Detection:
     regime = regime_classify(img_rgb)
     H, W, _ = img_rgb.shape
     x_cut = int(W * LEFT_HALF_FRAC)
 
+    x_gap_normal = max(1, int(round(15 * scale)))
+    x_gap_extreme = max(1, int(round(8 * scale)))
+    y_tol = max(1, int(round(60 * scale)))
+    min_n_extreme = max(1, int(round(30 * scale)))
+
     if regime == "extreme":
         points = _column_runs_extreme(img_rgb)
-        # In extreme regime the sprocket interior is fully saturated; runs need to
-        # be substantial. Tighten min_n for the saturated case to avoid noise.
-        components = _build_components(points, x_gap=8, y_tol=60, min_n=30)
+        components = _build_components(points, x_gap=x_gap_extreme,
+                                       y_tol=y_tol, min_n=min_n_extreme)
     else:
-        # Allow a wider x_gap to merge over short chroma-gated dropouts in the
-        # sprocket (e.g. small gaps where one channel briefly clips).
         points = _column_runs_normal(img_rgb)
-        components = _build_components(points, x_gap=15, y_tol=60, min_n=MIN_PLATEAU_LEN)
+        components = _build_components(points, x_gap=x_gap_normal,
+                                       y_tol=y_tol, min_n=MIN_PLATEAU_LEN)
 
     if not components:
         return Detection(None, None, 0.0, 0.0, regime, 0, "failed")
@@ -742,7 +806,8 @@ def detect(img_rgb: np.ndarray, x_prior: int | None = None,
     if not valid:
         return Detection(None, None, 0.0, 0.0, regime, 0, "failed")
 
-    valid.sort(key=lambda c: _score_component(c, H, W, x_prior=x_prior), reverse=True)
+    valid.sort(key=lambda c: _score_component(c, H, W, x_prior=x_prior, scale=scale),
+               reverse=True)
     best = valid[0]
 
     n_cols = best["n_unique_cols"]
@@ -782,7 +847,7 @@ def detect(img_rgb: np.ndarray, x_prior: int | None = None,
         y_top = _find_top_edge_bottom_up(
             img_rgb, y_bot_med, x_min, x_max, regime
         )
-        if y_top < y_top_initial - 100:
+        if y_top < y_top_initial - max(1, int(round(100 * scale))):
             y_top = y_top_initial
     else:
         y_top = _refine_top_edge_hysteresis(
@@ -804,17 +869,19 @@ def detect(img_rgb: np.ndarray, x_prior: int | None = None,
 
     # Confidence
     spread_y = best["y_top_mad"]
-    conf_y = float(np.clip(1.0 - spread_y / 30.0, 0.0, 1.0))
-    width_factor = 1.0 if MIN_VISIBLE_WIDTH <= width <= 250 else 0.6
-    leftmost_factor = 1.0 if x_min <= 60 else 0.5
+    conf_y = float(np.clip(1.0 - spread_y / max(1.0, 30.0 * scale), 0.0, 1.0))
+    width_max = max(1, int(round(250 * scale)))
+    leftmost_thresh = max(1, int(round(60 * scale)))
+    width_factor = 1.0 if MIN_VISIBLE_WIDTH <= width <= width_max else 0.6
+    leftmost_factor = 1.0 if x_min <= leftmost_thresh else 0.5
     conf_x = float(
         np.clip(edge_conf * width_factor * leftmost_factor, 0.0, 1.0)
     )
 
     # Runner-up gap: if 2nd-best score is close, reduce confidence.
     if len(valid) > 1:
-        s1 = _score_component(valid[0], H, W, x_prior=x_prior)
-        s2 = _score_component(valid[1], H, W, x_prior=x_prior)
+        s1 = _score_component(valid[0], H, W, x_prior=x_prior, scale=scale)
+        s2 = _score_component(valid[1], H, W, x_prior=x_prior, scale=scale)
         gap = (s1 - s2) / max(s1, 1.0)
         if gap < 0.15:
             conf_x *= 0.7

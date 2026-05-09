@@ -28,9 +28,10 @@ def is_available() -> bool:
     return True
 
 
-def detect_corner(image_rgb, edge_refine: bool = True) -> Optional[ClassicalResult]:
+def detect_corner(image_rgb, edge_refine: bool = True,
+                  scale: float = 1.0) -> Optional[ClassicalResult]:
     try:
-        det = _detect(image_rgb, edge_refine=edge_refine)
+        det = _detect(image_rgb, edge_refine=edge_refine, scale=scale)
     except Exception:
         return None
     return ClassicalResult(
