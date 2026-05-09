@@ -1,18 +1,21 @@
 """Background worker for classical sprocket detection.
 
 Runs the corner detector on `QThreadPool.globalInstance()` so the UI
-stays responsive. Pre-detection optimisations:
+stays responsive. The only pre-detection optimisation we apply is a
+crop to the left fraction of the frame: sprocket holes are on the
+left of left-sprocket scans (the common case), and analysing the
+right ⅔ is wasted work. Cropping doesn't change which cluster the
+detector picks — it produces the exact same (x, y) as full-res.
 
-  - **Crop to the left fraction of the image.** Sprocket holes are on
-    the left of left-sprocket scans (the common case); analysing the
-    right ⅔ is wasted work.
-  - **Downsample 2×.** Sub-pixel-accurate detection is preserved by
-    scaling the returned (x, y) back up.
+We tried a 2× downsample on top of the crop. It was 3× faster but
+caused the detector to pick the wrong sprocket cluster on ~30% of
+frames, because its MIN_PLATEAU_LEN is a fixed pixel count and a
+real 30-px plateau halves to 15 px under the threshold. Reverted —
+correctness over speed for an overlay people are reading positions
+off of.
 
-Both knobs are conservative — together they take detection on a
-2028×1520 frame from ~490 ms to ~36 ms with sub-pixel accuracy loss
-(~0.5 px x, ~3 px y vs. full-res). Right-sprocket scans need a wider
-crop; revisit if those become a real workflow."""
+Right-sprocket scans need a wider crop than 0.35; revisit if those
+become a real workflow."""
 
 from __future__ import annotations
 
@@ -26,7 +29,6 @@ from afterscan.core import detect_classical
 
 
 _CROP_LEFT_FRAC = 0.35
-_DOWNSAMPLE = 2
 
 
 class _Signals(QObject):
@@ -48,28 +50,9 @@ class ClassicalDetectTask(QRunnable):
     def _detect(self) -> Optional[detect_classical.ClassicalResult]:
         try:
             img = Image.open(self._image_path).convert("RGB")
-            W, H = img.size
-            crop_w = max(int(W * _CROP_LEFT_FRAC), 64)
-            cropped = img.crop((0, 0, crop_w, H))
-            small = cropped.resize(
-                (cropped.width // _DOWNSAMPLE, cropped.height // _DOWNSAMPLE),
-                Image.BILINEAR,
-            )
-            arr = np.array(small)
-            result = detect_classical.detect_corner(arr, edge_refine=self._edge_refine)
+            crop_w = max(int(img.width * _CROP_LEFT_FRAC), 64)
+            cropped = img.crop((0, 0, crop_w, img.height))
+            arr = np.array(cropped)
+            return detect_classical.detect_corner(arr, edge_refine=self._edge_refine)
         except Exception:
             return None
-        if result is None:
-            return None
-        return detect_classical.ClassicalResult(
-            right_edge_x=_scale_up(result.right_edge_x),
-            corner_y=_scale_up(result.corner_y),
-            confidence_x=result.confidence_x,
-            confidence_y=result.confidence_y,
-            regime=result.regime,
-            mode=result.mode,
-        )
-
-
-def _scale_up(value: Optional[float]) -> Optional[float]:
-    return None if value is None else value * _DOWNSAMPLE
