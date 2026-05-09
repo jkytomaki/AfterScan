@@ -48,27 +48,35 @@ class StabilizeInspector(QWidget):
         on_row.addWidget(on_toggle)
         section.add_layout(on_row)
 
-        # Method cards
-        cards_row = QHBoxLayout()
-        cards_row.setSpacing(8)
-        self._template_card = MethodCard(
-            "Template", "Match a reference sprocket. Fast, predictable on clean scans.",
-            on=self._s.method == "template",
-        )
-        self._yolo_card = MethodCard(
-            "YOLO", "Neural sprocket detection. Robust to scratches & light leaks.",
-            on=self._s.method == "yolo",
-        )
-        self._template_card.selected.connect(lambda: self._set_method("template"))
-        self._yolo_card.selected.connect(lambda: self._set_method("yolo"))
-        cards_row.addWidget(self._template_card, stretch=1)
-        cards_row.addWidget(self._yolo_card, stretch=1)
-        section.add_layout(cards_row)
+        # Method cards — stacked vertically because three cards on a 320 px
+        # inspector are too cramped horizontally.
+        self._method_cards = {
+            "template": MethodCard(
+                "Template", "Match a reference sprocket. Fast, predictable on clean scans.",
+                on=self._s.method == "template",
+            ),
+            "yolo": MethodCard(
+                "YOLO", "Neural sprocket detection. Robust to scratches & light leaks.",
+                on=self._s.method == "yolo",
+            ),
+            "classical": MethodCard(
+                "Classical",
+                "Plateau-based corner detector. Pure numpy, no ML deps.",
+                on=self._s.method == "classical",
+            ),
+        }
+        for method_id, card in self._method_cards.items():
+            card.selected.connect(lambda m=method_id: self._set_method(m))
+            section.add(card)
 
         # Per-method extras
         self._yolo_extras = self._yolo_extras_widget()
         section.add(self._yolo_extras)
         self._yolo_extras.setVisible(self._s.method == "yolo")
+
+        self._classical_extras = self._classical_extras_widget()
+        section.add(self._classical_extras)
+        self._classical_extras.setVisible(self._s.method == "classical")
         return section
 
     def _yolo_extras_widget(self) -> QFrame:
@@ -93,6 +101,29 @@ class StabilizeInspector(QWidget):
         v.addWidget(bind_bool(QCheckBox("Save undetected frames separately"), self._s, "save_undetected"))
         return frame
 
+    def _classical_extras_widget(self) -> QFrame:
+        from afterscan.core import detect_classical
+        frame = QFrame()
+        v = QVBoxLayout(frame)
+        v.setContentsMargins(0, 4, 0, 0)
+        v.setSpacing(10)
+
+        v.addWidget(bind_bool(QCheckBox("Edge refinement"), self._s, "edge_refinement"))
+
+        status = QLabel()
+        if detect_classical.is_available():
+            status.setText("Detector source found.")
+            status.setStyleSheet(f"color: {DARK.fg_3}; font-size: 11px;")
+        else:
+            status.setText(
+                "Detector source not found. Set AFTERSCAN_YOLO_DATASET_PATH or "
+                "place the yolo-dataset checkout under ~/personal-projects/."
+            )
+            status.setWordWrap(True)
+            status.setStyleSheet(f"color: {DARK.fg_3}; font-size: 11px;")
+        v.addWidget(status)
+        return frame
+
     def _compensation_section(self) -> Section:
         section = Section("Compensation")
 
@@ -115,9 +146,10 @@ class StabilizeInspector(QWidget):
         if method == self._s.method:
             return
         self._s.method = method  # type: ignore[assignment]
-        self._template_card.set_on(method == "template")
-        self._yolo_card.set_on(method == "yolo")
+        for method_id, card in self._method_cards.items():
+            card.set_on(method_id == method)
         self._yolo_extras.setVisible(method == "yolo")
+        self._classical_extras.setVisible(method == "classical")
 
     def _set_confidence(self, value: float, field: Field) -> None:
         self._s.confidence = value

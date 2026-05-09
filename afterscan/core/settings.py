@@ -13,7 +13,7 @@ from typing import Literal
 
 
 FilmFormat = Literal["super8", "regular8"]
-StabMethod = Literal["template", "yolo"]
+StabMethod = Literal["template", "yolo", "classical"]
 AspectRatio = Literal["free", "4:3", "16:9"]
 FrameFill = Literal["none", "fake", "dumb"]
 RenderQuality = Literal["fast", "medium", "best"]

@@ -117,7 +117,7 @@ class _Canvas(QFrame):
             return
         if s.crop:
             self._draw_crop_guides(p, frame_rect)
-        if s.stabilize and s.method == "yolo":
+        if s.stabilize and s.method in ("yolo", "classical"):
             self._draw_detection(p, frame_rect)
 
     def _draw_frame(self, p: QPainter, rect: QRect):
