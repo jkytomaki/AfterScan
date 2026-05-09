@@ -12,8 +12,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from dataclasses import replace
+from pathlib import Path
+
 from afterscan import __version__
+from afterscan.core import jobs as jobs_io
 from afterscan.core.frames import FrameSource
+from afterscan.core.job_runner import JobRunner
+from afterscan.core.jobs import Job, JobList
 from afterscan.core.settings import FrameRange, Settings
 from afterscan.ui.panels.filmstrip import Filmstrip
 from afterscan.ui.panels.inspector import Inspector
@@ -25,6 +31,7 @@ from afterscan.ui.widgets.steps import StepsBar
 
 
 _THUMB_COUNT = 28
+_JOB_LIST_PATH = Path.home() / ".config" / "afterscan" / "joblist.json"
 
 
 class MainWindow(QMainWindow):
@@ -42,6 +49,10 @@ class MainWindow(QMainWindow):
         self._frame_source: FrameSource | None = None
         self._running = False
         self._show_split = False
+        self._suspend_mode = "none"
+
+        self._job_list = jobs_io.load(_JOB_LIST_PATH)
+        self._runner = JobRunner(self._job_list, parent=self)
 
         self._build_ui()
         self._wire_ui()
@@ -99,7 +110,7 @@ class MainWindow(QMainWindow):
 
         self.preview = Preview(self.settings, self.frame_range)
         self.filmstrip = Filmstrip(self.settings, self.frame_range)
-        self.queue = QueueDock()
+        self.queue = QueueDock(self._job_list)
 
         canvas_layout.addWidget(self.preview, stretch=1)
         canvas_layout.addWidget(self.filmstrip)
@@ -121,6 +132,13 @@ class MainWindow(QMainWindow):
         self.filmstrip.seek_requested.connect(self._seek)
         self.filmstrip.play_toggled.connect(self._set_playing)
         self._split_btn.clicked.connect(self._toggle_split)
+        self.queue.add_current_clicked.connect(self._add_current_job)
+        self.queue.run_all_clicked.connect(self._toggle_batch)
+        self.queue.suspend_mode_changed.connect(self._set_suspend_mode)
+        self._runner.job_started.connect(self._on_job_started)
+        self._runner.job_progress.connect(self._on_job_progress)
+        self._runner.job_finished.connect(self._on_job_finished)
+        self._runner.batch_finished.connect(self._on_batch_finished)
 
     # ── events ────────────────────────────────────────────────────
 
@@ -199,3 +217,68 @@ class MainWindow(QMainWindow):
         self.preview.set_show_split(self._show_split)
         if self._frame_source is not None:
             self._show_frame(self.frame_range.current)
+
+    # ── job queue ─────────────────────────────────────────────────
+
+    def _add_current_job(self) -> None:
+        if not self.settings.source_dir:
+            return
+        name = Path(self.settings.source_dir).name or "current"
+        job = Job(
+            name=name,
+            source_dir=self.settings.source_dir,
+            target_dir=self.settings.target_dir,
+            frame_total=self.frame_range.total,
+            settings=replace(self.settings),
+        )
+        self._job_list.add(job)
+        self.queue.refresh()
+        self._persist_jobs()
+
+    def _toggle_batch(self) -> None:
+        if self._runner.is_running:
+            self._runner.stop()
+            self.queue.set_running(False)
+            self.queue.refresh()
+            self.topbar.set_status("idle", "Idle")
+            self._persist_jobs()
+            return
+        if not any(j.state == "queued" for j in self._job_list.jobs):
+            return
+        self.queue.set_running(True)
+        self._runner.start()
+
+    def _set_suspend_mode(self, mode: str) -> None:
+        self._suspend_mode = mode  # actioned once a real worker lands
+
+    def _on_job_started(self, _job_id: str) -> None:
+        self.queue.refresh()
+
+    def _on_job_progress(self, job_id: str, fraction: float, _eta: float) -> None:
+        job = self._job_list.find(job_id)
+        if job is not None:
+            self.queue.update_job(job)
+            self.topbar.set_status(
+                "running",
+                f"Stabilizing — {int(fraction * job.frame_total)}/{job.frame_total}",
+            )
+
+    def _on_job_finished(self, _job_id: str) -> None:
+        self.queue.refresh()
+        self._persist_jobs()
+
+    def _on_batch_finished(self) -> None:
+        self.queue.set_running(False)
+        self.topbar.set_status("idle", "Idle")
+        self._persist_jobs()
+
+    def _persist_jobs(self) -> None:
+        try:
+            jobs_io.save(self._job_list, _JOB_LIST_PATH)
+        except OSError:
+            pass
+
+    def closeEvent(self, event) -> None:
+        self._runner.stop()
+        self._persist_jobs()
+        super().closeEvent(event)
