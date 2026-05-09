@@ -79,6 +79,13 @@ except ImportError:
     requests_loaded = False
 
 from define_rectangle import DefineRectangle
+from afterscan.core.util import (
+    empty_queue,
+    find_closest,
+    generate_dict_hash,
+    is_a_number,
+    sort_nested_json,
+)
 # Check for YOLO availability at startup
 try:
     from ultralytics import YOLO
@@ -582,24 +589,6 @@ Utility functions
 
 # Define a function for
 # identifying a Digit
-def is_a_number(string):
-    # Make a regular expression
-    # for identifying a digit
-    regex = '^[0-9]+$'
-    # pass the regular expression
-    # and the string in search() method
-    if (re.search(regex, string)):
-        return True
-    else:
-        return False
-
-
-def empty_queue(q):
-    while not q.empty():
-        item = q.get()
-        logging.debug(f"Emptying queue: Got {item[0]}")
-
-
 """
 ####################################
 Configuration file support functions
@@ -652,16 +641,6 @@ def set_project_defaults():
     project_config["FillBorders"] = False
     project_config["StabilizationShiftY"] = 0
     project_config["StabilizationShiftX"] = 0
-
-
-def sort_nested_json(data):
-    """Sorts keys in nested dictionaries."""
-    if isinstance(data, dict):
-        return {k: sort_nested_json(data[k]) for k in sorted(data)}
-    elif isinstance(data, list):
-        return [sort_nested_json(item) for item in data]
-    else:
-        return data
 
 
 def save_general_config():
@@ -1499,13 +1478,6 @@ def search_job_name_in_job_treeview(job_name):
         if name == job_name:  # Check first column
             return item_id
     return -1
-
-
-def generate_dict_hash(dictionary):
-    """Generates a SHA-256 hash from a dictionary."""
-    serialized_dict = json.dumps(dictionary, sort_keys=True).encode('utf-8')
-    hash_object = hashlib.sha256(serialized_dict)
-    return hash_object.hexdigest()
 
 
 def save_named_job_list():
@@ -2641,38 +2613,6 @@ def delete_current_bad_frame_info(event):
         bad_frame_list[current_bad_frame_index]['is_frame_saved'] = False
         FrameSync_Viewer_popup_refresh()
 
-
-def find_closest(sorted_list, target):
-    # Check if the list is empty
-    if not sorted_list:
-        return None
-
-    # Initialize the left and right pointers
-    left, right = 0, len(sorted_list) - 1
-    
-    # If the target is less than or equal to the smallest element or greater than or equal to the largest element
-    if target <= sorted_list[left]:
-        return sorted_list[left]
-    if target >= sorted_list[right]:
-        return sorted_list[right]
-
-    # Binary search-like approach
-    while left <= right:
-        mid = (left + right) // 2
-        if sorted_list[mid] == target:
-            return sorted_list[mid]
-        elif sorted_list[mid] < target:
-            left = mid + 1
-        else:
-            right = mid - 1
-
-    # After the while loop, left will be where we insert target to keep the list sorted
-    # Check if the target is closer to the element at 'left' or 'right'
-    if abs(sorted_list[left] - target) < abs(sorted_list[right] - target):
-        return sorted_list[left]
-    else:
-        return sorted_list[right]
-    
 
 def insert_or_replace_sorted(sorted_list, new_inner_dict, key='frame_idx'):
     """

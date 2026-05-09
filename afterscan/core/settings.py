@@ -1,0 +1,73 @@
+"""Settings model for the modernized UI.
+
+Mirrors the per-project state surface the design's inspector panels expose
+(see design/modern-ui-handoff/project/inspectors.jsx). Phase 3 binds UI
+controls to instances of this dataclass; later phases serialize/deserialize
+through afterscan.core.project.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Literal
+
+
+FilmFormat = Literal["super8", "regular8"]
+StabMethod = Literal["template", "yolo"]
+AspectRatio = Literal["free", "4:3", "16:9"]
+FrameFill = Literal["none", "fake", "dumb"]
+RenderQuality = Literal["fast", "medium", "best"]
+
+
+@dataclass
+class Settings:
+    # Source
+    source_dir: str = ""
+    target_dir: str = ""
+    format: FilmFormat = "regular8"
+    all_frames: bool = True
+    frame_from: int = 0
+    frame_to: int = 0
+    rotation: float = 0.0
+
+    # Stabilize
+    stabilize: bool = True
+    method: StabMethod = "yolo"
+    yolo_model: str = ""
+    confidence: float = 0.10
+    edge_refinement: bool = True
+    draw_boxes: bool = False
+    save_undetected: bool = False
+    comp_x: int = 0
+    comp_y: int = 0
+
+    # Enhance
+    crop: bool = True
+    aspect: AspectRatio = "4:3"
+    low_contrast: bool = False
+    denoise: bool = False
+    sharpen: bool = False
+    gamma_correction: bool = False
+    gamma: float = 2.2
+    fill: FrameFill = "none"
+
+    # Render
+    output_filename: str = "out.mp4"
+    title: str = ""
+    video: bool = True
+    skip_regen: bool = False
+    quality: RenderQuality = "fast"
+    resolution: str = "640x480"
+    fps: int = 18
+
+
+@dataclass
+class FrameRange:
+    total: int = 0
+    detected: int = 0
+    undetected_indices: list[int] = field(default_factory=list)
+    current: int = 0
+
+    @property
+    def missed(self) -> int:
+        return len(self.undetected_indices)
