@@ -26,6 +26,7 @@ class Preview(QFrame):
         self._show_split = False
         self._detection_point: tuple[float, float] | None = None
         self._detection_label: str = ""
+        self._detection_bbox: tuple[float, float, float, float] | None = None
         self._shift: tuple[float, float] | None = None
 
         outer = QVBoxLayout(self)
@@ -52,6 +53,7 @@ class Preview(QFrame):
         self._before_pixmap = before
         self._detection_point = None
         self._detection_label = ""
+        self._detection_bbox = None
         self._shift = None
         self._refresh_chips()
         self.update_canvas()
@@ -60,16 +62,24 @@ class Preview(QFrame):
         self._show_split = on
         self.update_canvas()
 
-    def set_detection(self, x: float, y: float, label: str = "") -> None:
+    def set_detection(
+        self,
+        x: float,
+        y: float,
+        label: str = "",
+        bbox: tuple[float, float, float, float] | None = None,
+    ) -> None:
         self._detection_point = (x, y)
         self._detection_label = label
+        self._detection_bbox = bbox
         self.update_canvas()
 
     def clear_detection(self) -> None:
-        if self._detection_point is None:
+        if self._detection_point is None and self._detection_bbox is None:
             return
         self._detection_point = None
         self._detection_label = ""
+        self._detection_bbox = None
         self.update_canvas()
 
     def set_shift(self, dx: float, dy: float) -> None:
@@ -92,6 +102,7 @@ class Preview(QFrame):
             settings=self._s,
             detection_point=self._detection_point,
             detection_label=self._detection_label,
+            detection_bbox=self._detection_bbox,
             shift=self._shift,
         )
 
@@ -126,16 +137,18 @@ class _Canvas(QFrame):
         self._settings: Settings | None = None
         self._detection_point: tuple[float, float] | None = None
         self._detection_label: str = ""
+        self._detection_bbox: tuple[float, float, float, float] | None = None
         self._shift: tuple[float, float] | None = None
 
     def update_state(self, *, pixmap, before, settings,
                      detection_point=None, detection_label="",
-                     shift=None) -> None:
+                     detection_bbox=None, shift=None) -> None:
         self._pixmap = pixmap
         self._before = before
         self._settings = settings
         self._detection_point = detection_point
         self._detection_label = detection_label
+        self._detection_bbox = detection_bbox
         self._shift = shift
         self.update()
 
@@ -160,9 +173,11 @@ class _Canvas(QFrame):
             return
         if s.crop:
             self._draw_crop_guides(p, viewport_rect)
+        if s.stabilize and self._detection_bbox is not None and self._pixmap is not None:
+            self._draw_detection_bbox(p, image_rect)
         if s.stabilize and self._detection_point is not None and self._pixmap is not None:
             self._draw_detection_point(p, image_rect)
-        elif s.stabilize and s.method in ("yolo", "classical"):
+        elif s.stabilize and self._detection_bbox is None and s.method in ("yolo", "classical"):
             self._draw_detection(p, viewport_rect)
 
     def _draw_frame(self, p: QPainter, rect: QRect):
@@ -274,6 +289,25 @@ class _Canvas(QFrame):
         p.drawRect(bg_rect)
         p.setPen(accent)
         p.drawText(bg_rect.adjusted(6, 0, -4, 0), Qt.AlignVCenter | Qt.AlignLeft, label)
+
+    def _draw_detection_bbox(self, p: QPainter, frame: QRect) -> None:
+        pm = self._pixmap
+        if pm is None or self._detection_bbox is None or pm.width() == 0:
+            return
+        bx, by, bw, bh = self._detection_bbox
+        sx = frame.width() / pm.width()
+        sy = frame.height() / pm.height()
+        rect = QRect(
+            int(round(frame.x() + bx * sx)),
+            int(round(frame.y() + by * sy)),
+            max(1, int(round(bw * sx))),
+            max(1, int(round(bh * sy))),
+        )
+        pen = QPen(QColor(DARK.accent))
+        pen.setWidthF(1.2)
+        p.setPen(pen)
+        p.setBrush(Qt.NoBrush)
+        p.drawRect(rect)
 
     def _draw_detection(self, p: QPainter, frame: QRect) -> None:
         # Stub bbox: left-edge sprocket strip. Replaced by real YOLO results later.

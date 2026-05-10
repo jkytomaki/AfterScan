@@ -35,6 +35,10 @@ from afterscan.ui.widgets.buttons import IconBtn
 _THUMB_COUNT = 28
 _JOB_LIST_PATH = Path.home() / ".config" / "afterscan" / "joblist.json"
 _DEFAULT_YOLO_MODEL = Path(__file__).resolve().parents[1] / "Resources" / "yolo_sprocket_detector.pt"
+# Reject shifts larger than these — almost certainly a misdetection. Mirrors
+# the legacy AfterScan.py thresholds (line 4685).
+_MAX_SHIFT_X = 200
+_MAX_SHIFT_Y = 600
 
 
 class MainWindow(QMainWindow):
@@ -266,10 +270,13 @@ class MainWindow(QMainWindow):
             return
         tx, ty = self._template_anchor
         cx, cy = self._latest_anchor
-        self.preview.set_shift(
-            tx - cx + self.settings.comp_x,
-            ty - cy + self.settings.comp_y,
-        )
+        dx = tx - cx + self.settings.comp_x
+        dy = ty - cy + self.settings.comp_y
+        # Likely-misdetection guard: an outlier shift snaps the preview
+        # halfway across the canvas. Drop it; keep the previous shift.
+        if abs(dx) > _MAX_SHIFT_X or abs(dy) > _MAX_SHIFT_Y:
+            return
+        self.preview.set_shift(dx, dy)
 
     def _schedule_detection(self) -> None:
         if (self._frame_source is None
@@ -292,7 +299,10 @@ class MainWindow(QMainWindow):
             QThreadPool.globalInstance().start(task)
         elif method == "yolo":
             model_path = self.settings.yolo_model or str(_DEFAULT_YOLO_MODEL)
-            task = YoloDetectTask(idx, path, model_path, self.settings.confidence)
+            task = YoloDetectTask(
+                idx, path, model_path, self.settings.confidence,
+                edge_refine=self.settings.edge_refinement,
+            )
             task.signals.finished.connect(self._on_yolo_finished)
             yolo_worker.thread_pool().start(task)
 
@@ -325,7 +335,7 @@ class MainWindow(QMainWindow):
             self._refresh_shift()
             return
         label = f"sprocket · {result.confidence:.2f}"
-        self.preview.set_detection(result.anchor_x, result.anchor_y, label)
+        self.preview.set_detection(result.anchor_x, result.anchor_y, label, bbox=result.bbox)
         self._latest_anchor = (result.anchor_x, result.anchor_y)
         self._refresh_shift()
 

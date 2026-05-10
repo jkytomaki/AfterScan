@@ -20,8 +20,11 @@ import traceback
 from dataclasses import dataclass
 from typing import Optional
 
+import numpy as np
+from PIL import Image
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal
 
+from afterscan.core.classical.sprocket_corner_detect import _refine_top_edge_sobel
 from afterscan.core.detect import Detection, Detector
 
 
@@ -82,6 +85,7 @@ class YoloDetectTask(QRunnable):
         image_path: str,
         model_path: str,
         confidence_threshold: float,
+        edge_refine: bool = True,
     ) -> None:
         super().__init__()
         self.signals = _Signals()
@@ -89,6 +93,7 @@ class YoloDetectTask(QRunnable):
         self._image_path = image_path
         self._model_path = model_path
         self._threshold = confidence_threshold
+        self._edge_refine = edge_refine
 
     def run(self) -> None:
         result = self._detect()
@@ -104,12 +109,33 @@ class YoloDetectTask(QRunnable):
         best = _pick_best(detections, self._threshold)
         if best is None:
             return None
+        anchor_y = best.y
+        if self._edge_refine:
+            try:
+                refined = _refine_bbox_top(self._image_path, best)
+                if refined is not None:
+                    anchor_y = refined
+            except Exception:
+                traceback.print_exc()
         return YoloResult(
             anchor_x=best.x + best.width,
-            anchor_y=best.y,
+            anchor_y=anchor_y,
             confidence=best.confidence,
             bbox=(best.x, best.y, best.width, best.height),
         )
+
+
+def _refine_bbox_top(image_path: str, det: Detection) -> Optional[float]:
+    """Snap the YOLO bbox top edge to the nearest dark→bright luminance
+    transition. Re-uses the classical detector's pure-numpy Sobel routine so
+    we don't pull cv2 into the YOLO worker."""
+    img = np.asarray(Image.open(image_path).convert("RGB"))
+    x_min = max(0, int(round(det.x)))
+    x_max = min(img.shape[1] - 1, int(round(det.x + det.width)))
+    y_estimate = int(round(det.y))
+    if x_max <= x_min:
+        return None
+    return _refine_top_edge_sobel(img, y_estimate, x_min, x_max)
 
 
 def _pick_best(detections: list[Detection], threshold: float) -> Optional[Detection]:
