@@ -53,6 +53,8 @@ class MainWindow(QMainWindow):
         self._running = False
         self._show_split = False
         self._suspend_mode = "none"
+        self._template_anchor: tuple[float, float] | None = None
+        self._latest_anchor: tuple[float, float] | None = None
 
         self._job_list = jobs_io.load(_JOB_LIST_PATH)
         self._runner = JobRunner(self._job_list, parent=self)
@@ -135,6 +137,7 @@ class MainWindow(QMainWindow):
         self.topbar.source_clicked.connect(self._pick_source_folder)
         self.filmstrip.seek_requested.connect(self._seek)
         self.filmstrip.play_toggled.connect(self._set_playing)
+        self.filmstrip.template_clicked.connect(self._set_template)
         self._split_btn.clicked.connect(self._toggle_split)
         self.queue.add_current_clicked.connect(self._add_current_job)
         self.queue.run_all_clicked.connect(self._toggle_batch)
@@ -233,14 +236,40 @@ class MainWindow(QMainWindow):
 
     def _on_method_changed(self, method: str) -> None:
         self.preview.clear_detection()
+        # Templates are anchor-coordinates from a specific detector; switching
+        # methods invalidates them.
+        self._template_anchor = None
+        self._latest_anchor = None
+        self.preview.clear_shift()
         if method == "yolo":
             model_path = self.settings.yolo_model or str(_DEFAULT_YOLO_MODEL)
             yolo_worker.preload(model_path)
         self._schedule_detection()
 
-    def _on_stabilize_changed(self, _on: bool) -> None:
+    def _on_stabilize_changed(self, on: bool) -> None:
         self.preview.clear_detection()
+        if not on:
+            self.preview.clear_shift()
         self._schedule_detection()
+
+    def _set_template(self) -> None:
+        if self._latest_anchor is None:
+            return
+        self._template_anchor = self._latest_anchor
+        self._refresh_shift()
+
+    def _refresh_shift(self) -> None:
+        if (self._template_anchor is None
+                or self._latest_anchor is None
+                or not self.settings.stabilize):
+            self.preview.clear_shift()
+            return
+        tx, ty = self._template_anchor
+        cx, cy = self._latest_anchor
+        self.preview.set_shift(
+            tx - cx + self.settings.comp_x,
+            ty - cy + self.settings.comp_y,
+        )
 
     def _schedule_detection(self) -> None:
         if (self._frame_source is None
@@ -274,12 +303,16 @@ class MainWindow(QMainWindow):
             return
         if result is None or result.right_edge_x is None or result.corner_y is None:
             self.preview.clear_detection()
+            self._latest_anchor = None
+            self._refresh_shift()
             return
         label = (
             f"x={result.right_edge_x:.1f}  y={result.corner_y:.1f}"
             f"  {result.regime}/{result.mode}"
         )
         self.preview.set_detection(result.right_edge_x, result.corner_y, label)
+        self._latest_anchor = (result.right_edge_x, result.corner_y)
+        self._refresh_shift()
 
     def _on_yolo_finished(self, frame_idx: int, result) -> None:
         if (frame_idx != self.frame_range.current
@@ -288,9 +321,13 @@ class MainWindow(QMainWindow):
             return
         if result is None:
             self.preview.clear_detection()
+            self._latest_anchor = None
+            self._refresh_shift()
             return
         label = f"sprocket · {result.confidence:.2f}"
         self.preview.set_detection(result.anchor_x, result.anchor_y, label)
+        self._latest_anchor = (result.anchor_x, result.anchor_y)
+        self._refresh_shift()
 
     # ── job queue ─────────────────────────────────────────────────
 

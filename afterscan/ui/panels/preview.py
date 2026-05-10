@@ -26,6 +26,7 @@ class Preview(QFrame):
         self._show_split = False
         self._detection_point: tuple[float, float] | None = None
         self._detection_label: str = ""
+        self._shift: tuple[float, float] | None = None
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(24, 24, 24, 24)
@@ -51,6 +52,7 @@ class Preview(QFrame):
         self._before_pixmap = before
         self._detection_point = None
         self._detection_label = ""
+        self._shift = None
         self._refresh_chips()
         self.update_canvas()
 
@@ -70,6 +72,19 @@ class Preview(QFrame):
         self._detection_label = ""
         self.update_canvas()
 
+    def set_shift(self, dx: float, dy: float) -> None:
+        """Translate the displayed pixmap by `(dx, dy)` image-space pixels.
+        Detection overlay follows the shift; crop/split stay in viewport
+        coordinates."""
+        self._shift = (dx, dy)
+        self.update_canvas()
+
+    def clear_shift(self) -> None:
+        if self._shift is None:
+            return
+        self._shift = None
+        self.update_canvas()
+
     def update_canvas(self) -> None:
         self._canvas.update_state(
             pixmap=self._pixmap,
@@ -77,6 +92,7 @@ class Preview(QFrame):
             settings=self._s,
             detection_point=self._detection_point,
             detection_label=self._detection_label,
+            shift=self._shift,
         )
 
     def _refresh_chips(self) -> None:
@@ -110,14 +126,17 @@ class _Canvas(QFrame):
         self._settings: Settings | None = None
         self._detection_point: tuple[float, float] | None = None
         self._detection_label: str = ""
+        self._shift: tuple[float, float] | None = None
 
     def update_state(self, *, pixmap, before, settings,
-                     detection_point=None, detection_label="") -> None:
+                     detection_point=None, detection_label="",
+                     shift=None) -> None:
         self._pixmap = pixmap
         self._before = before
         self._settings = settings
         self._detection_point = detection_point
         self._detection_label = detection_label
+        self._shift = shift
         self.update()
 
     def paintEvent(self, _event) -> None:
@@ -127,33 +146,53 @@ class _Canvas(QFrame):
         rect = self.rect().adjusted(0, 0, -1, -1)
         p.fillRect(rect, QColor("#000000"))
 
-        frame_rect = self._draw_frame(p, rect)
-        if frame_rect is None:
+        rects = self._draw_frame(p, rect)
+        if rects is None:
             self._draw_placeholder(p, rect)
             return
+        viewport_rect, image_rect = rects
 
         if self._before is not None:
-            self._draw_split(p, frame_rect)
+            self._draw_split(p, viewport_rect)
 
         s = self._settings
         if s is None:
             return
         if s.crop:
-            self._draw_crop_guides(p, frame_rect)
+            self._draw_crop_guides(p, viewport_rect)
         if s.stabilize and self._detection_point is not None and self._pixmap is not None:
-            self._draw_detection_point(p, frame_rect)
+            self._draw_detection_point(p, image_rect)
         elif s.stabilize and s.method in ("yolo", "classical"):
-            self._draw_detection(p, frame_rect)
+            self._draw_detection(p, viewport_rect)
 
     def _draw_frame(self, p: QPainter, rect: QRect):
+        """Draw the frame pixmap. Returns `(viewport_rect, image_rect)`:
+
+          - viewport_rect — the unshifted area where the frame would land,
+            used by overlays that should stay put (crop, split).
+          - image_rect — the actual draw position after applying shift,
+            used by overlays that should follow the image (detection)."""
         pm = self._pixmap
         if pm is None or pm.isNull():
             return None
         scaled = pm.scaled(rect.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
-        x = rect.x() + (rect.width() - scaled.width()) // 2
-        y = rect.y() + (rect.height() - scaled.height()) // 2
-        p.drawPixmap(x, y, scaled)
-        return QRect(x, y, scaled.width(), scaled.height())
+        vx = rect.x() + (rect.width() - scaled.width()) // 2
+        vy = rect.y() + (rect.height() - scaled.height()) // 2
+        viewport_rect = QRect(vx, vy, scaled.width(), scaled.height())
+
+        ix, iy = vx, vy
+        if self._shift is not None and pm.width() > 0:
+            scale = scaled.width() / pm.width()
+            dx, dy = self._shift
+            ix += int(round(dx * scale))
+            iy += int(round(dy * scale))
+        image_rect = QRect(ix, iy, scaled.width(), scaled.height())
+
+        p.save()
+        p.setClipRect(viewport_rect)
+        p.drawPixmap(ix, iy, scaled)
+        p.restore()
+        return viewport_rect, image_rect
 
     def _draw_placeholder(self, p: QPainter, rect: QRect) -> None:
         p.setPen(QColor(255, 255, 255, 80))
