@@ -56,7 +56,6 @@ def stylesheet(t: Tokens = DARK) -> str:
     * {{ outline: 0; }}
 
     QWidget {{
-        background: {t.bg_app};
         color: {t.fg_1};
         font-family: "Inter", "Segoe UI", "DejaVu Sans", sans-serif;
         font-size: 12px;
@@ -198,6 +197,33 @@ def stylesheet(t: Tokens = DARK) -> str:
         font-size: 10px;
         font-weight: 600;
         letter-spacing: 1px;
+    }}
+
+    /* Lightroom-style collapsible group: dark header (uppercase title)
+       above a slightly lighter body. */
+    QFrame#lr-group {{ background: transparent; }}
+    QFrame#lr-group-hd {{
+        background: #161412;
+        border-top: 1px solid rgba(0,0,0,0.5);
+        border-bottom: 1px solid rgba(0,0,0,0.5);
+    }}
+    QFrame#lr-group-hd:hover {{ background: #1d1a17; }}
+    QLabel#lr-group-title {{
+        background: transparent;
+        color: {t.fg_2};
+        font-size: 10px;
+        font-weight: 600;
+        letter-spacing: 1px;
+    }}
+    QFrame#lr-group-hd:hover QLabel#lr-group-title {{ color: {t.fg_1}; }}
+    QLabel#lr-group-chev {{
+        background: transparent;
+        color: {t.fg_3};
+        font-size: 10px;
+        min-width: 10px;
+    }}
+    QFrame#lr-group-body {{
+        background: #2a2724;
     }}
 
     /* Inputs */

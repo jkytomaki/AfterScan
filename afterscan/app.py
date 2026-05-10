@@ -28,7 +28,6 @@ from afterscan.ui.panels.preview import Preview
 from afterscan.ui.panels.queue_dock import QueueDock
 from afterscan.ui.panels.topbar import TopBar
 from afterscan.ui.widgets.buttons import IconBtn
-from afterscan.ui.widgets.steps import StepsBar
 
 
 _THUMB_COUNT = 28
@@ -73,13 +72,12 @@ class MainWindow(QMainWindow):
         layout.setSpacing(0)
 
         self.topbar = TopBar()
-        self.steps = StepsBar(current="stabilize")
         self._split_btn = IconBtn("▤", tooltip="Toggle before/after compare")
-        steps_row = self._build_steps_row(self.steps, self._split_btn)
+        tools_row = self._build_tools_row(self._split_btn)
         body = self._build_body()
 
         layout.addWidget(self.topbar)
-        layout.addWidget(steps_row)
+        layout.addWidget(tools_row)
         layout.addWidget(body, stretch=1)
 
         self._play_timer = QTimer(self)
@@ -90,12 +88,11 @@ class MainWindow(QMainWindow):
         self._detect_timer.setInterval(150)
         self._detect_timer.timeout.connect(self._run_classical_detect)
 
-    def _build_steps_row(self, steps: StepsBar, split_btn: IconBtn) -> QFrame:
+    def _build_tools_row(self, split_btn: IconBtn) -> QFrame:
         row = QFrame()
         h = QHBoxLayout(row)
-        h.setContentsMargins(16, 12, 16, 0)
-        h.setSpacing(12)
-        h.addWidget(steps)
+        h.setContentsMargins(16, 8, 16, 0)
+        h.setSpacing(4)
         h.addStretch(1)
         h.addWidget(split_btn)
         for glyph, tip in (("◐", "Toggle preview filter"),
@@ -131,8 +128,6 @@ class MainWindow(QMainWindow):
     # ── wiring ────────────────────────────────────────────────────
 
     def _wire_ui(self) -> None:
-        self.steps.step_changed.connect(self.inspector.set_step)
-        self.inspector.set_step(self.steps.current)
         self.topbar.start_clicked.connect(self._toggle_running)
         self.topbar.source_clicked.connect(self._pick_source_folder)
         self.filmstrip.seek_requested.connect(self._seek)

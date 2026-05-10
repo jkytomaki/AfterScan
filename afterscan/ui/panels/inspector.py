@@ -20,11 +20,20 @@ from afterscan.ui.panels.inspectors import (
     StabilizeInspector,
 )
 from afterscan.ui.widgets._qss import set_flag
+from afterscan.ui.widgets.group import CollapsibleGroup
 
 
 class Inspector(QFrame):
-    """Right-side context-aware inspector. Settings tab swaps content per
-    workflow step; Frame data tab is shared."""
+    """Right-side inspector. The Settings tab stacks all four step panels
+    in a single scrollable column with Lightroom-style collapsible group
+    headers; the Frame data tab is a separate scroll area."""
+
+    _GROUPS = (
+        ("source", "Source"),
+        ("stabilize", "Stabilize"),
+        ("enhance", "Enhance"),
+        ("render", "Render"),
+    )
 
     def __init__(
         self,
@@ -45,7 +54,6 @@ class Inspector(QFrame):
             "metadata": self._make_tab("Frame data"),
         }
         self._current_tab = "settings"
-
         layout.addWidget(self._tabs_bar())
 
         self.panels = {
@@ -54,19 +62,27 @@ class Inspector(QFrame):
             "enhance": EnhanceInspector(settings),
             "render": RenderInspector(settings),
         }
-        self._step_pages: dict[str, int] = {}
-        self._settings_stack = QStackedWidget()
-        for step_id, panel in self.panels.items():
-            self._step_pages[step_id] = self._settings_stack.addWidget(self._scroll(panel))
-
-        self._frame_data_page = self._scroll(FrameDataInspector(settings, frame_range))
+        self._groups: dict[str, CollapsibleGroup] = {}
 
         self._tab_stack = QStackedWidget()
-        self._tab_stack.addWidget(self._settings_stack)
-        self._tab_stack.addWidget(self._frame_data_page)
+        self._tab_stack.addWidget(self._build_settings_page())
+        self._tab_stack.addWidget(self._scroll(FrameDataInspector(settings, frame_range)))
         layout.addWidget(self._tab_stack, stretch=1)
 
         self._apply_tab_state()
+
+    def _build_settings_page(self) -> QScrollArea:
+        container = QWidget()
+        v = QVBoxLayout(container)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(1)
+        for step_id, label in self._GROUPS:
+            group = CollapsibleGroup(label, open_=True)
+            group.add(self.panels[step_id])
+            self._groups[step_id] = group
+            v.addWidget(group)
+        v.addStretch(1)
+        return self._scroll(container)
 
     def _scroll(self, content: QWidget) -> QScrollArea:
         scroller = QScrollArea()
@@ -105,8 +121,3 @@ class Inspector(QFrame):
         for tab_id, btn in self._tabs.items():
             set_flag(btn, "on", tab_id == self._current_tab)
         self._tab_stack.setCurrentIndex(0 if self._current_tab == "settings" else 1)
-
-    def set_step(self, step_id: str) -> None:
-        idx = self._step_pages.get(step_id)
-        if idx is not None:
-            self._settings_stack.setCurrentIndex(idx)

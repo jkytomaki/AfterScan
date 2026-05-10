@@ -20,6 +20,7 @@ class Section(QFrame):
         parent=None,
     ) -> None:
         super().__init__(parent)
+        self.setObjectName("section")
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 12, 16, 6)
         layout.setSpacing(8)
@@ -68,6 +69,7 @@ class Field(QFrame):
         parent=None,
     ) -> None:
         super().__init__(parent)
+        self.setObjectName("field")
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
