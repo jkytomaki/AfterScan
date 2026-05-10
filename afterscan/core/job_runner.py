@@ -271,6 +271,15 @@ class _JobWorker(QRunnable):
                     arr[src_y:src_y + ch, src_x:src_x + cw]
                 )
 
+        # Static per-reel rotation. Applied AFTER the per-frame shift so
+        # detection coordinates (which were computed on the raw image)
+        # stay valid; matches the live preview's order of operations.
+        if s.rotation:
+            img = Image.fromarray(out)
+            img = img.rotate(s.rotation, resample=Image.BILINEAR, expand=False)
+            out = np.asarray(img)
+            h, w = out.shape[:2]
+
         if s.crop:
             x0 = max(0, int(round(s.crop_left * w)))
             y0 = max(0, int(round(s.crop_top * h)))

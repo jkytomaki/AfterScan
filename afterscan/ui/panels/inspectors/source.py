@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QHBoxLayout,
@@ -12,11 +12,15 @@ from PySide6.QtWidgets import (
 
 from afterscan.core.settings import Settings
 from afterscan.ui.binding import bind_bool
+from afterscan.ui.widgets.buttons import Btn
 from afterscan.ui.widgets.section import Field, Section
 from afterscan.ui.widgets.seg import Seg
 
 
 class SourceInspector(QWidget):
+    rotation_changed = Signal(float)
+    estimate_rotation_clicked = Signal()
+
     def __init__(self, settings: Settings, parent=None) -> None:
         super().__init__(parent)
         self._s = settings
@@ -63,15 +67,41 @@ class SourceInspector(QWidget):
 
         # ── Rotation ──────────────────────────────────────────
         rot = Section("Rotation")
-        slider = QSlider(Qt.Horizontal)
-        slider.setRange(-500, 500)
-        slider.setValue(int(self._s.rotation * 100))
-        rot_field = Field("Rotate image", slider, value=f"{self._s.rotation:.2f}°")
-        slider.valueChanged.connect(lambda v: self._set_rotation(v / 100, rot_field))
-        rot.add(rot_field)
+        self._rot_slider = QSlider(Qt.Horizontal)
+        self._rot_slider.setRange(-500, 500)
+        self._rot_slider.setValue(int(self._s.rotation * 100))
+        self._rot_field = Field(
+            "Rotate image", self._rot_slider, value=f"{self._s.rotation:.2f}°",
+        )
+        self._rot_slider.valueChanged.connect(
+            lambda v: self._set_rotation(v / 100)
+        )
+        rot.add(self._rot_field)
+
+        self._estimate_btn = Btn("Estimate from frames", variant="ghost")
+        self._estimate_btn.clicked.connect(self.estimate_rotation_clicked)
+        rot.add(self._estimate_btn)
         layout.addWidget(rot)
 
         layout.addStretch(1)
+
+    def set_rotation(self, value: float) -> None:
+        """Update both the stored value and the slider, without
+        re-emitting `rotation_changed` via the slider's signal cascade."""
+        if abs(value - self._s.rotation) < 1e-4:
+            return
+        self._rot_slider.blockSignals(True)
+        try:
+            self._rot_slider.setValue(int(round(value * 100)))
+        finally:
+            self._rot_slider.blockSignals(False)
+        self._s.rotation = value
+        self._rot_field.set_value(f"{value:.2f}°")
+        self.rotation_changed.emit(value)
+
+    def set_estimate_busy(self, busy: bool) -> None:
+        self._estimate_btn.setEnabled(not busy)
+        self._estimate_btn.setText("Estimating…" if busy else "Estimate from frames")
 
     def _set_frame_from(self, text: str) -> None:
         try:
@@ -85,6 +115,7 @@ class SourceInspector(QWidget):
         except ValueError:
             pass
 
-    def _set_rotation(self, value: float, field: Field) -> None:
+    def _set_rotation(self, value: float) -> None:
         self._s.rotation = value
-        field.set_value(f"{value:.2f}°")
+        self._rot_field.set_value(f"{value:.2f}°")
+        self.rotation_changed.emit(value)

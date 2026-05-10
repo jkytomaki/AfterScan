@@ -167,34 +167,45 @@ class _Canvas(QFrame):
         rect = self.rect().adjusted(0, 0, -1, -1)
         p.fillRect(rect, QColor("#000000"))
 
-        rects = self._draw_frame(p, rect)
+        rects = self._compute_rects(rect)
         if rects is None:
             self._draw_placeholder(p, rect)
             return
-        viewport_rect, image_rect = rects
+        viewport_rect, image_rect, scaled = rects
+        s = self._settings
+        rotation = s.rotation if s is not None else 0.0
+
+        # Image-space draws (pixmap + detection overlays) under the
+        # static reel rotation. Crop / split / chips stay axis-aligned.
+        p.save()
+        if rotation:
+            center = viewport_rect.center()
+            p.translate(center)
+            p.rotate(rotation)
+            p.translate(-center.x(), -center.y())
+        p.drawPixmap(image_rect.x(), image_rect.y(), scaled)
+        if s is not None and s.stabilize:
+            if self._detection_bbox is not None and self._pixmap is not None:
+                self._draw_detection_bbox(p, image_rect)
+            if self._detection_point is not None and self._pixmap is not None:
+                self._draw_detection_point(p, image_rect)
+            elif self._detection_bbox is None and s.method in ("yolo", "classical"):
+                self._draw_detection(p, viewport_rect)
+        p.restore()
 
         if self._before is not None:
             self._draw_split(p, viewport_rect)
-
-        s = self._settings
-        if s is None:
-            return
-        if s.crop:
+        if s is not None and s.crop:
             self._draw_crop_guides(p, viewport_rect)
-        if s.stabilize and self._detection_bbox is not None and self._pixmap is not None:
-            self._draw_detection_bbox(p, image_rect)
-        if s.stabilize and self._detection_point is not None and self._pixmap is not None:
-            self._draw_detection_point(p, image_rect)
-        elif s.stabilize and self._detection_bbox is None and s.method in ("yolo", "classical"):
-            self._draw_detection(p, viewport_rect)
 
-    def _draw_frame(self, p: QPainter, rect: QRect):
-        """Draw the frame pixmap. Returns `(viewport_rect, image_rect)`:
+    def _compute_rects(self, rect: QRect):
+        """Return ``(viewport_rect, image_rect, scaled_pixmap)``:
 
           - viewport_rect — the unshifted area where the frame would land,
             used by overlays that should stay put (crop, split).
           - image_rect — the actual draw position after applying shift,
-            used by overlays that should follow the image (detection)."""
+            used by overlays that should follow the image (detection).
+          - scaled_pixmap — the pre-scaled QPixmap to draw at image_rect."""
         pm = self._pixmap
         if pm is None or pm.isNull():
             return None
@@ -211,12 +222,7 @@ class _Canvas(QFrame):
             ix += int(round(dx * scale))
             iy += int(round(dy * scale))
         image_rect = QRect(ix, iy, scaled.width(), scaled.height())
-
-        p.save()
-        p.setClipRect(viewport_rect)
-        p.drawPixmap(ix, iy, scaled)
-        p.restore()
-        return viewport_rect, image_rect
+        return viewport_rect, image_rect, scaled
 
     def _draw_placeholder(self, p: QPainter, rect: QRect) -> None:
         p.setPen(QColor(255, 255, 255, 80))

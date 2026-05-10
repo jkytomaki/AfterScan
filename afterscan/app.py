@@ -19,6 +19,7 @@ from afterscan import __version__
 from afterscan.core import jobs as jobs_io
 from afterscan.core.classical_worker import ClassicalDetectTask
 from afterscan.core import yolo_worker
+from afterscan.core.rotation_estimate import EstimateRotationTask
 from afterscan.core.yolo_worker import YoloDetectTask
 from afterscan.core.frames import FrameSource
 from afterscan.core.job_runner import JobRunner
@@ -154,6 +155,9 @@ class MainWindow(QMainWindow):
         enhance = self.inspector.panels["enhance"]
         enhance.crop_changed.connect(self.preview.update_canvas)
         self.preview.crop_changed.connect(self._on_preview_crop_dragged)
+        source = self.inspector.panels["source"]
+        source.rotation_changed.connect(lambda _v: self.preview.update_canvas())
+        source.estimate_rotation_clicked.connect(self._estimate_rotation)
         self._runner.job_started.connect(self._on_job_started)
         self._runner.job_progress.connect(self._on_job_progress)
         self._runner.job_finished.connect(self._on_job_finished)
@@ -199,6 +203,10 @@ class MainWindow(QMainWindow):
         thumbs = source.thumbnails(_THUMB_COUNT)
         self.filmstrip.set_thumbnails(thumbs)
         self._show_frame(0)
+        # First-load suggestion: only auto-run when the user hasn't picked
+        # a rotation yet. Once set, it sticks for the reel.
+        if abs(self.settings.rotation) < 1e-4:
+            self._estimate_rotation()
 
     def _seek(self, idx: int) -> None:
         if self._frame_source is None:
@@ -266,6 +274,24 @@ class MainWindow(QMainWindow):
         # Drag operates directly on settings; nothing to do for now beyond
         # leaving a hook for project persistence later.
         pass
+
+    def _estimate_rotation(self) -> None:
+        if self._frame_source is None:
+            return
+        model_path = self.settings.yolo_model or str(_DEFAULT_YOLO_MODEL)
+        source_panel = self.inspector.panels["source"]
+        source_panel.set_estimate_busy(True)
+        task = EstimateRotationTask(self._frame_source, model_path)
+        task.signals.finished.connect(self._on_rotation_estimated)
+        yolo_worker.thread_pool().start(task)
+
+    def _on_rotation_estimated(self, value) -> None:
+        source_panel = self.inspector.panels["source"]
+        source_panel.set_estimate_busy(False)
+        if value is None:
+            return
+        source_panel.set_rotation(float(value))
+        self.preview.update_canvas()
 
     def _set_template(self) -> None:
         if self._latest_anchor is None:
