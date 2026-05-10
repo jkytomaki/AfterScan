@@ -50,6 +50,14 @@ _MIN_Y_SEPARATION = 100  # px — minimum baseline for a meaningful rotation slo
 # (sprocket centered on the seam). Threshold sits at the midpoint so a
 # decisive vote either way lands cleanly.
 _FORMAT_THRESHOLD = 0.25
+# Cross-class outlier rejection: a sprocket detection with confidence
+# below `_HIGH_CONF` is only trusted when another sprocket-class
+# detection sits within `_BUDDY_Y_TOLERANCE` px vertically.  A blown-out
+# / saturated sprocket can fire a single ~0.5 detection at the wrong y
+# with nothing else nearby — without this guard, closest-to-center
+# happily picks it as primary and the frame jumps.
+_HIGH_CONF = 0.85
+_BUDDY_Y_TOLERANCE = 50
 
 
 @dataclass(frozen=True)
@@ -98,6 +106,8 @@ def fuse_anchors(
     if not above:
         return None
 
+    above = _drop_unsupported_sprockets(above)
+
     by_class: dict[str, list[Detection]] = {}
     for d in above:
         by_class.setdefault(d.label, []).append(d)
@@ -126,6 +136,48 @@ def fuse_anchors(
         surviving=surviving,
         rotation=rotation,
     )
+
+
+def _drop_unsupported_sprockets(detections: list[Detection]) -> list[Detection]:
+    """Cross-class outlier rejection: drop a sprocket-class detection
+    when its confidence is low **and** no other sprocket detection
+    sits within `_BUDDY_Y_TOLERANCE` px vertically.
+
+    The 3-class detector occasionally fires a low-confidence
+    sprocket-hole-top/bottom-right at the wrong y on a blown-out frame
+    (saturated highlights, severe scratch).  When the frame also has
+    a *good* sprocket detection, the bad one is the only one without
+    a corroborating buddy — dropping it before primary picking lets
+    closest-to-center fall on the right detection.
+
+    High-confidence sprockets always pass (they're trusted alone, and
+    occasionally only one sprocket is visible in the frame).  Seams
+    are unchanged — they need format-specific projection to validate
+    and are deprioritised by the class hierarchy anyway."""
+    sprockets = [d for d in detections if d.label in (_TOP_RIGHT, _BOTTOM_RIGHT)]
+    if len(sprockets) <= 1:
+        return detections  # singleton — no consensus possible
+    others = [d for d in detections if d.label not in (_TOP_RIGHT, _BOTTOM_RIGHT)]
+
+    kept: list[Detection] = []
+    for d in sprockets:
+        if d.confidence >= _HIGH_CONF:
+            kept.append(d)
+            continue
+        has_buddy = any(
+            other is not d and abs(other.y - d.y) < _BUDDY_Y_TOLERANCE
+            for other in sprockets
+        )
+        if has_buddy:
+            kept.append(d)
+
+    if not kept:
+        # Every sprocket is low-confidence and unbuddied — keep the
+        # single highest-conf candidate so the frame still gets some
+        # primary instead of falling all the way to a fuzzy seam.
+        kept = [max(sprockets, key=lambda d: d.confidence)]
+
+    return kept + others
 
 
 def _ransac_x(detections: list[Detection]) -> list[Detection]:
