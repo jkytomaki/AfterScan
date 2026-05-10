@@ -11,6 +11,7 @@ results are normalised to bbox tuples in image coordinates."""
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -34,7 +35,7 @@ class Detector:
         if model is None:
             return []
         try:
-            results = model(image_path, verbose=False)
+            results = model(image_path, verbose=False, device=_ultralytics_device())
         except Exception:
             return []
         out: list[Detection] = []
@@ -65,3 +66,15 @@ class Detector:
             self._unavailable = True
             self._model = None
         return self._model
+
+
+def _ultralytics_device() -> Any:
+    """Prefer GPU inference, but keep CPU as a usable fallback."""
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            return 0
+    except Exception:
+        pass
+    return "cpu"

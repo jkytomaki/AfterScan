@@ -86,13 +86,11 @@ def estimate(
         indices = [0]
     else:
         indices = [int(round(i * (n - 1) / (take - 1))) for i in range(take)]
-    detector = yolo_worker.detector_for(model_path)
     slopes: list[float] = []
     for idx in indices:
         path = str(source.path(idx))
         try:
-            with yolo_worker._inference_lock:
-                detections = detector.detect(path)
+            detections = yolo_worker.detect_image(model_path, path)
         except Exception:
             traceback.print_exc()
             continue

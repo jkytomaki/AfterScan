@@ -17,12 +17,13 @@ from __future__ import annotations
 
 import threading
 import traceback
+from queue import Empty, Queue
 from dataclasses import dataclass
-from typing import Optional
+from typing import Callable, Optional, TypeVar
 
 import numpy as np
 from PIL import Image
-from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal
+from PySide6.QtCore import QObject, QRunnable, Signal
 
 from afterscan.core.classical.sprocket_corner_detect import _refine_top_edge_sobel
 from afterscan.core.detect import Detection, Detector
@@ -36,27 +37,124 @@ class YoloResult:
     bbox: tuple[float, float, float, float]  # x, y, w, h
 
 
-_detector_cache: dict[str, Detector] = {}
 _inference_lock = threading.Lock()
-_thread_pool: Optional[QThreadPool] = None
+_thread_local = threading.local()
+_thread_pool: Optional["_SerialTaskPool"] = None
+_T = TypeVar("_T")
 
 
 def detector_for(model_path: str) -> Detector:
-    det = _detector_cache.get(model_path)
+    cache = getattr(_thread_local, "detector_cache", None)
+    if cache is None:
+        cache = {}
+        _thread_local.detector_cache = cache
+    det = cache.get(model_path)
     if det is None:
         det = Detector(model_path)
-        _detector_cache[model_path] = det
+        cache[model_path] = det
     return det
 
 
-def thread_pool() -> QThreadPool:
-    """Single-threaded pool — keeps inference serial regardless of how
-    many tasks the UI queues up while one is in flight."""
+def thread_pool() -> "_SerialTaskPool":
+    """Persistent single-worker pool for all UI-side YOLO tasks.
+
+    A ``QThreadPool`` with ``maxThreadCount=1`` serializes tasks, but it may
+    still run successive ``QRunnable`` instances on different native threads.
+    Ultralytics/Torch predictor state is not robust to that handoff in this
+    app: after rotation estimation, the queued live detector can crash inside
+    native preprocessing. Keeping one long-lived worker thread avoids that
+    cross-thread model/predictor reuse.
+    """
     global _thread_pool
     if _thread_pool is None:
-        _thread_pool = QThreadPool()
-        _thread_pool.setMaxThreadCount(1)
+        _thread_pool = _SerialTaskPool()
     return _thread_pool
+
+
+class _SerialTaskPool:
+    def __init__(self) -> None:
+        self._tasks: Queue[QRunnable | None] = Queue()
+        self._done = threading.Condition()
+        self._worker = threading.Thread(
+            target=self._run,
+            name="AfterScan-YOLO",
+            daemon=True,
+        )
+        self._worker.start()
+
+    def start(self, task: QRunnable) -> None:
+        self._tasks.put(task)
+
+    def call(self, fn: Callable[[], _T]) -> _T:
+        if threading.current_thread() is self._worker:
+            return fn()
+        done = threading.Event()
+        result: dict[str, object] = {}
+        self._tasks.put(_CallTask(fn, done, result))
+        done.wait()
+        if "error" in result:
+            raise result["error"]  # type: ignore[misc]
+        return result["value"]  # type: ignore[return-value]
+
+    def clear(self) -> None:
+        while True:
+            try:
+                self._tasks.get_nowait()
+            except Empty:
+                return
+            self._tasks.task_done()
+
+    def waitForDone(self, msecs: int = -1) -> bool:
+        timeout = None if msecs < 0 else msecs / 1000
+        with self._done:
+            return self._done.wait_for(
+                lambda: self._tasks.unfinished_tasks == 0,
+                timeout=timeout,
+            )
+
+    def _run(self) -> None:
+        while True:
+            task = self._tasks.get()
+            if task is None:
+                self._tasks.task_done()
+                return
+            try:
+                task.run()
+            finally:
+                self._tasks.task_done()
+                with self._done:
+                    self._done.notify_all()
+
+
+class _CallTask(QRunnable):
+    def __init__(
+        self,
+        fn: Callable[[], _T],
+        done: threading.Event,
+        result: dict[str, object],
+    ) -> None:
+        super().__init__()
+        self._fn = fn
+        self._done = done
+        self._result = result
+
+    def run(self) -> None:
+        try:
+            self._result["value"] = self._fn()
+        except BaseException as exc:
+            self._result["error"] = exc
+        finally:
+            self._done.set()
+
+
+def detect_image(model_path: str, image_path: str) -> list[Detection]:
+    """Run YOLO detection on the persistent YOLO worker thread."""
+    return thread_pool().call(lambda: _detect_image_on_worker(model_path, image_path))
+
+
+def _detect_image_on_worker(model_path: str, image_path: str) -> list[Detection]:
+    with _inference_lock:
+        return detector_for(model_path).detect(image_path)
 
 
 def preload(model_path: str) -> None:
@@ -101,8 +199,7 @@ class YoloDetectTask(QRunnable):
 
     def _detect(self) -> Optional[YoloResult]:
         try:
-            with _inference_lock:
-                detections = detector_for(self._model_path).detect(self._image_path)
+            detections = detect_image(self._model_path, self._image_path)
         except Exception:
             traceback.print_exc()
             return None

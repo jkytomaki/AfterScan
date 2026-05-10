@@ -215,8 +215,7 @@ class _JobWorker(QRunnable):
             return (result.right_edge_x, result.corner_y)
         if s.method == "yolo":
             model_path = s.yolo_model or str(self._default_yolo_model)
-            with yolo_worker._inference_lock:
-                detections = yolo_worker.detector_for(model_path).detect(path)
+            detections = yolo_worker.detect_image(model_path, path)
             best = _pick_best(detections, s.confidence)
             if best is None:
                 return None
