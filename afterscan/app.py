@@ -18,6 +18,8 @@ from pathlib import Path
 from afterscan import __version__
 from afterscan.core import jobs as jobs_io
 from afterscan.core.classical_worker import ClassicalDetectTask
+from afterscan.core import yolo_worker
+from afterscan.core.yolo_worker import YoloDetectTask
 from afterscan.core.frames import FrameSource
 from afterscan.core.job_runner import JobRunner
 from afterscan.core.jobs import Job, JobList
@@ -32,6 +34,7 @@ from afterscan.ui.widgets.buttons import IconBtn
 
 _THUMB_COUNT = 28
 _JOB_LIST_PATH = Path.home() / ".config" / "afterscan" / "joblist.json"
+_DEFAULT_YOLO_MODEL = Path(__file__).resolve().parents[1] / "Resources" / "yolo_sprocket_detector.pt"
 
 
 class MainWindow(QMainWindow):
@@ -228,8 +231,11 @@ class MainWindow(QMainWindow):
 
     # ── classical detection ──────────────────────────────────────
 
-    def _on_method_changed(self, _method: str) -> None:
+    def _on_method_changed(self, method: str) -> None:
         self.preview.clear_detection()
+        if method == "yolo":
+            model_path = self.settings.yolo_model or str(_DEFAULT_YOLO_MODEL)
+            yolo_worker.preload(model_path)
         self._schedule_detection()
 
     def _on_stabilize_changed(self, _on: bool) -> None:
@@ -239,24 +245,29 @@ class MainWindow(QMainWindow):
     def _schedule_detection(self) -> None:
         if (self._frame_source is None
                 or not self.settings.stabilize
-                or self.settings.method != "classical"
+                or self.settings.method not in ("classical", "yolo")
                 or self._play_timer.isActive()):
             return
         self._detect_timer.start()
 
     def _run_classical_detect(self) -> None:
         if (self._frame_source is None
-                or not self.settings.stabilize
-                or self.settings.method != "classical"):
+                or not self.settings.stabilize):
             return
         idx = self.frame_range.current
         path = str(self._frame_source.path(idx))
-        task = ClassicalDetectTask(idx, path, self.settings.edge_refinement)
-        task.signals.finished.connect(self._on_detect_finished)
-        QThreadPool.globalInstance().start(task)
+        method = self.settings.method
+        if method == "classical":
+            task = ClassicalDetectTask(idx, path, self.settings.edge_refinement)
+            task.signals.finished.connect(self._on_classical_finished)
+            QThreadPool.globalInstance().start(task)
+        elif method == "yolo":
+            model_path = self.settings.yolo_model or str(_DEFAULT_YOLO_MODEL)
+            task = YoloDetectTask(idx, path, model_path, self.settings.confidence)
+            task.signals.finished.connect(self._on_yolo_finished)
+            yolo_worker.thread_pool().start(task)
 
-    def _on_detect_finished(self, frame_idx: int, result) -> None:
-        # Stale: user scrubbed past, or method/stabilize toggled off mid-flight.
+    def _on_classical_finished(self, frame_idx: int, result) -> None:
         if (frame_idx != self.frame_range.current
                 or not self.settings.stabilize
                 or self.settings.method != "classical"):
@@ -269,6 +280,17 @@ class MainWindow(QMainWindow):
             f"  {result.regime}/{result.mode}"
         )
         self.preview.set_detection(result.right_edge_x, result.corner_y, label)
+
+    def _on_yolo_finished(self, frame_idx: int, result) -> None:
+        if (frame_idx != self.frame_range.current
+                or not self.settings.stabilize
+                or self.settings.method != "yolo"):
+            return
+        if result is None:
+            self.preview.clear_detection()
+            return
+        label = f"sprocket · {result.confidence:.2f}"
+        self.preview.set_detection(result.anchor_x, result.anchor_y, label)
 
     # ── job queue ─────────────────────────────────────────────────
 
