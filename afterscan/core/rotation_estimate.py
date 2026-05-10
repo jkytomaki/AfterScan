@@ -32,6 +32,7 @@ from PySide6.QtCore import QObject, QRunnable, Signal
 from afterscan.core import yolo_worker
 from afterscan.core.detect import Detection
 from afterscan.core.frames import FrameSource
+from afterscan.core.fuse import class_anchor
 
 
 _X_TOLERANCE = 100  # max horizontal separation between paired anchors (pixels)
@@ -39,23 +40,12 @@ _MIN_Y_SEPARATION = 100  # short baselines are noisy; require this many pixels
 _DEFAULT_SAMPLE = 12
 
 
-def _anchor(det: Detection) -> tuple[float, float]:
-    if det.label == "sprocket-hole-top-right":
-        return (det.x + det.width, det.y)
-    if det.label == "sprocket-hole-bottom-right":
-        return (det.x + det.width, det.y + det.height)
-    if det.label == "frame-seam-right":
-        return (det.x + det.width / 2, det.y + det.height / 2)
-    # Legacy single-class fallback.
-    return (det.x + det.width, det.y)
-
-
 def _frame_slopes(detections: list[Detection]) -> list[float]:
     """Slope (degrees off-vertical) for every qualifying anchor pair in
     this frame."""
     if len(detections) < 2:
         return []
-    anchors = [_anchor(d) for d in detections]
+    anchors = [class_anchor(d) for d in detections]
     slopes: list[float] = []
     for i in range(len(anchors)):
         ax, ay = anchors[i]

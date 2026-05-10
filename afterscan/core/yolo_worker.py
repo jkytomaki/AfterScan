@@ -9,9 +9,9 @@ on a shared model can crash the process. We:
   - run YOLO tasks on a dedicated single-threaded `QThreadPool` so even
     rapid scrubs queue rather than race.
 
-Picks the highest-confidence sprocket above the user's confidence
-threshold and returns its bottom-right corner as the stabilization
-anchor (matches the convention the classical detector uses)."""
+Per-frame detections are reduced to a single anchor by
+:func:`afterscan.core.fuse.fuse_anchors` — see that module for the
+class fallback hierarchy and within-class consistency rules."""
 
 from __future__ import annotations
 
@@ -27,14 +27,25 @@ from PySide6.QtCore import QObject, QRunnable, Signal
 
 from afterscan.core.classical.sprocket_corner_detect import _refine_top_edge_sobel
 from afterscan.core.detect import Detection, Detector
+from afterscan.core.fuse import fuse_anchors
+
+
+@dataclass(frozen=True)
+class YoloDetectionBox:
+    """Bbox + class label, used by the Preview to color-code surviving anchors."""
+
+    bbox: tuple[float, float, float, float]  # x, y, w, h
+    label: str
+    confidence: float
 
 
 @dataclass(frozen=True)
 class YoloResult:
     anchor_x: float
     anchor_y: float
-    confidence: float
-    bbox: tuple[float, float, float, float]  # x, y, w, h
+    confidence: float                      # primary detection's confidence
+    detections: list[YoloDetectionBox]     # all surviving anchors (post-fusion)
+    rotation: Optional[float]              # per-frame slope hint, may be None
 
 
 _inference_lock = threading.Lock()
@@ -203,22 +214,34 @@ class YoloDetectTask(QRunnable):
         except Exception:
             traceback.print_exc()
             return None
-        best = _pick_best(detections, self._threshold)
-        if best is None:
+        fused = fuse_anchors(detections, self._threshold)
+        if fused is None:
             return None
-        anchor_y = best.y
-        if self._edge_refine:
+        anchor_x, anchor_y = fused.anchor
+        if self._edge_refine and fused.primary.label.endswith("top-right"):
+            # Edge refinement only makes sense for the top edge of a
+            # sprocket bbox. The bottom corner / seam classes have a
+            # different geometry; skip rather than mis-snap.
             try:
-                refined = _refine_bbox_top(self._image_path, best)
+                refined = _refine_bbox_top(self._image_path, fused.primary)
                 if refined is not None:
                     anchor_y = refined
             except Exception:
                 traceback.print_exc()
+        boxes = [
+            YoloDetectionBox(
+                bbox=(d.x, d.y, d.width, d.height),
+                label=d.label,
+                confidence=d.confidence,
+            )
+            for d in fused.surviving
+        ]
         return YoloResult(
-            anchor_x=best.x + best.width,
+            anchor_x=anchor_x,
             anchor_y=anchor_y,
-            confidence=best.confidence,
-            bbox=(best.x, best.y, best.width, best.height),
+            confidence=fused.primary.confidence,
+            detections=boxes,
+            rotation=fused.rotation,
         )
 
 
@@ -235,14 +258,3 @@ def _refine_bbox_top(image_path: str, det: Detection) -> Optional[float]:
     return _refine_top_edge_sobel(img, y_estimate, x_min, x_max)
 
 
-def _pick_best(detections: list[Detection], threshold: float) -> Optional[Detection]:
-    above = [d for d in detections if d.confidence >= threshold]
-    if not above:
-        return None
-    # Prefer the top-right corner — sharpest, highest-contrast feature.
-    # Fall back to any surviving class so the legacy single-class model
-    # ("sprocket-hole" only) still tracks. Phase 1 replaces this with
-    # multi-anchor fusion.
-    primary = [d for d in above if d.label == "sprocket-hole-top-right"]
-    pool = primary or above
-    return max(pool, key=lambda d: d.confidence)

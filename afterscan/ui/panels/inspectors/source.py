@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QHBoxLayout,
@@ -73,8 +73,17 @@ class SourceInspector(QWidget):
         self._rot_field = Field(
             "Rotate image", self._rot_slider, value=f"{self._s.rotation:.2f}°",
         )
+        # QSlider can fire >1000 valueChanged events/sec on a fast drag.
+        # Coalesce into ~30 Hz repaints — the readout label still updates
+        # every tick so the user sees the live value, but the preview
+        # repaints (and any downstream wiring) stay throttled.
+        self._rot_pending: float | None = None
+        self._rot_timer = QTimer(self)
+        self._rot_timer.setSingleShot(True)
+        self._rot_timer.setInterval(30)
+        self._rot_timer.timeout.connect(self._emit_pending_rotation)
         self._rot_slider.valueChanged.connect(
-            lambda v: self._set_rotation(v / 100)
+            lambda v: self._on_slider_changed(v / 100)
         )
         rot.add(self._rot_field)
 
@@ -115,7 +124,16 @@ class SourceInspector(QWidget):
         except ValueError:
             pass
 
-    def _set_rotation(self, value: float) -> None:
-        self._s.rotation = value
+    def _on_slider_changed(self, value: float) -> None:
         self._rot_field.set_value(f"{value:.2f}°")
+        self._rot_pending = value
+        if not self._rot_timer.isActive():
+            self._rot_timer.start()
+
+    def _emit_pending_rotation(self) -> None:
+        if self._rot_pending is None:
+            return
+        value = self._rot_pending
+        self._rot_pending = None
+        self._s.rotation = value
         self.rotation_changed.emit(value)

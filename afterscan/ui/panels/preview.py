@@ -28,7 +28,7 @@ class Preview(QFrame):
         self._show_split = False
         self._detection_point: tuple[float, float] | None = None
         self._detection_label: str = ""
-        self._detection_bbox: tuple[float, float, float, float] | None = None
+        self._detection_boxes: list[tuple[tuple[float, float, float, float], str]] = []
         self._shift: tuple[float, float] | None = None
 
         outer = QVBoxLayout(self)
@@ -56,7 +56,7 @@ class Preview(QFrame):
         self._before_pixmap = before
         self._detection_point = None
         self._detection_label = ""
-        self._detection_bbox = None
+        self._detection_boxes = []
         self._shift = None
         self._refresh_chips()
         self.update_canvas()
@@ -70,19 +70,23 @@ class Preview(QFrame):
         x: float,
         y: float,
         label: str = "",
-        bbox: tuple[float, float, float, float] | None = None,
+        boxes: list[tuple[tuple[float, float, float, float], str]] | None = None,
     ) -> None:
+        """Show the detection: a single anchor point at `(x, y)` plus
+        zero or more bboxes. Each bbox is `((x, y, w, h), class_label)` —
+        the canvas colors them by class so the user can tell which
+        anchors survived fusion."""
         self._detection_point = (x, y)
         self._detection_label = label
-        self._detection_bbox = bbox
+        self._detection_boxes = list(boxes) if boxes else []
         self.update_canvas()
 
     def clear_detection(self) -> None:
-        if self._detection_point is None and self._detection_bbox is None:
+        if self._detection_point is None and not self._detection_boxes:
             return
         self._detection_point = None
         self._detection_label = ""
-        self._detection_bbox = None
+        self._detection_boxes = []
         self.update_canvas()
 
     def set_shift(self, dx: float, dy: float) -> None:
@@ -105,7 +109,7 @@ class Preview(QFrame):
             settings=self._s,
             detection_point=self._detection_point,
             detection_label=self._detection_label,
-            detection_bbox=self._detection_bbox,
+            detection_boxes=self._detection_boxes,
             shift=self._shift,
         )
 
@@ -142,21 +146,27 @@ class _Canvas(QFrame):
         self._settings: Settings | None = None
         self._detection_point: tuple[float, float] | None = None
         self._detection_label: str = ""
-        self._detection_bbox: tuple[float, float, float, float] | None = None
+        self._detection_boxes: list[tuple[tuple[float, float, float, float], str]] = []
         self._shift: tuple[float, float] | None = None
         self._viewport_rect: QRect | None = None
         self._drag_handle: str | None = None
+        # Scaling a multi-MP pixmap with SmoothTransformation costs
+        # 10–30 ms per paint. The slider drag fires paintEvents at
+        # ~60 Hz; without a cache the main thread saturates and the UI
+        # appears stuck.
+        self._scaled_cache_key: tuple | None = None
+        self._scaled_cache: QPixmap | None = None
         self.setMouseTracking(True)
 
     def update_state(self, *, pixmap, before, settings,
                      detection_point=None, detection_label="",
-                     detection_bbox=None, shift=None) -> None:
+                     detection_boxes=None, shift=None) -> None:
         self._pixmap = pixmap
         self._before = before
         self._settings = settings
         self._detection_point = detection_point
         self._detection_label = detection_label
-        self._detection_bbox = detection_bbox
+        self._detection_boxes = list(detection_boxes) if detection_boxes else []
         self._shift = shift
         self.update()
 
@@ -185,11 +195,11 @@ class _Canvas(QFrame):
             p.translate(-center.x(), -center.y())
         p.drawPixmap(image_rect.x(), image_rect.y(), scaled)
         if s is not None and s.stabilize:
-            if self._detection_bbox is not None and self._pixmap is not None:
-                self._draw_detection_bbox(p, image_rect)
+            if self._detection_boxes and self._pixmap is not None:
+                self._draw_detection_boxes(p, image_rect)
             if self._detection_point is not None and self._pixmap is not None:
                 self._draw_detection_point(p, image_rect)
-            elif self._detection_bbox is None and s.method in ("yolo", "classical"):
+            elif not self._detection_boxes and s.method in ("yolo", "classical"):
                 self._draw_detection(p, viewport_rect)
         p.restore()
 
@@ -209,7 +219,13 @@ class _Canvas(QFrame):
         pm = self._pixmap
         if pm is None or pm.isNull():
             return None
-        scaled = pm.scaled(rect.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        cache_key = (pm.cacheKey(), rect.width(), rect.height())
+        if self._scaled_cache_key == cache_key and self._scaled_cache is not None:
+            scaled = self._scaled_cache
+        else:
+            scaled = _pyramid_scale(pm, rect.size())
+            self._scaled_cache_key = cache_key
+            self._scaled_cache = scaled
         vx = rect.x() + (rect.width() - scaled.width()) // 2
         vy = rect.y() + (rect.height() - scaled.height()) // 2
         viewport_rect = QRect(vx, vy, scaled.width(), scaled.height())
@@ -392,24 +408,27 @@ class _Canvas(QFrame):
 
     # ── drawing ──────────────────────────────────────────────────
 
-    def _draw_detection_bbox(self, p: QPainter, frame: QRect) -> None:
+    def _draw_detection_boxes(self, p: QPainter, frame: QRect) -> None:
+        """One rect per surviving anchor, color-coded by class so the
+        user can tell at a glance which sprocket corners / seams the
+        fuser kept."""
         pm = self._pixmap
-        if pm is None or self._detection_bbox is None or pm.width() == 0:
+        if pm is None or pm.width() == 0:
             return
-        bx, by, bw, bh = self._detection_bbox
         sx = frame.width() / pm.width()
         sy = frame.height() / pm.height()
-        rect = QRect(
-            int(round(frame.x() + bx * sx)),
-            int(round(frame.y() + by * sy)),
-            max(1, int(round(bw * sx))),
-            max(1, int(round(bh * sy))),
-        )
-        pen = QPen(QColor(DARK.accent))
-        pen.setWidthF(1.2)
-        p.setPen(pen)
-        p.setBrush(Qt.NoBrush)
-        p.drawRect(rect)
+        for (bx, by, bw, bh), label in self._detection_boxes:
+            rect = QRect(
+                int(round(frame.x() + bx * sx)),
+                int(round(frame.y() + by * sy)),
+                max(1, int(round(bw * sx))),
+                max(1, int(round(bh * sy))),
+            )
+            pen = QPen(_class_color(label))
+            pen.setWidthF(1.2)
+            p.setPen(pen)
+            p.setBrush(Qt.NoBrush)
+            p.drawRect(rect)
 
     def _draw_detection(self, p: QPainter, frame: QRect) -> None:
         # Stub bbox: left-edge sprocket strip. Replaced by real YOLO results later.
@@ -436,6 +455,32 @@ class _Canvas(QFrame):
         p.setFont(font)
         p.drawText(label_rect.adjusted(4, 0, -4, 0), Qt.AlignVCenter | Qt.AlignLeft,
                    "sprocket · stub")
+
+
+_CLASS_COLORS = {
+    "sprocket-hole-top-right":    QColor(DARK.accent),         # primary anchor
+    "sprocket-hole-bottom-right": QColor("#f5c542"),           # warm fallback
+    "frame-seam-right":           QColor("#7be0c0"),           # cool — lower trust
+}
+
+
+def _class_color(label: str) -> QColor:
+    return _CLASS_COLORS.get(label, QColor(DARK.accent))
+
+
+def _pyramid_scale(pm: QPixmap, target) -> QPixmap:
+    """Downsample via fast half-steps then one smooth pass.
+
+    Runs bilinear (SmoothTransformation) on a ~2× intermediate rather than
+    the full source, cutting work by up to 16× for high-res scans.  Visually
+    indistinguishable from a direct smooth scale at typical preview sizes."""
+    src = pm
+    tw = target.width()
+    th = target.height()
+    while src.width() > tw * 2 and src.height() > th * 2:
+        src = src.scaled(src.width() // 2, src.height() // 2,
+                         Qt.IgnoreAspectRatio, Qt.FastTransformation)
+    return src.scaled(target, Qt.KeepAspectRatio, Qt.SmoothTransformation)
 
 
 def _handle_cursor(handle: str | None):

@@ -31,8 +31,8 @@ from PIL import Image
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal
 
 from afterscan.core import detect_classical, yolo_worker
-from afterscan.core.detect import Detection
 from afterscan.core.frames import FrameSource
+from afterscan.core.fuse import fuse_anchors
 from afterscan.core.jobs import Job, JobList
 from afterscan.core.settings import Settings
 
@@ -216,15 +216,15 @@ class _JobWorker(QRunnable):
         if s.method == "yolo":
             model_path = s.yolo_model or str(self._default_yolo_model)
             detections = yolo_worker.detect_image(model_path, path)
-            best = _pick_best(detections, s.confidence)
-            if best is None:
+            fused = fuse_anchors(detections, s.confidence)
+            if fused is None:
                 return None
-            anchor_y = best.y
-            if s.edge_refinement:
-                refined = yolo_worker._refine_bbox_top(path, best)
+            anchor_x, anchor_y = fused.anchor
+            if s.edge_refinement and fused.primary.label.endswith("top-right"):
+                refined = yolo_worker._refine_bbox_top(path, fused.primary)
                 if refined is not None:
                     anchor_y = refined
-            return (best.x + best.width, anchor_y)
+            return (anchor_x, anchor_y)
         return None  # "template" method not implemented yet
 
     def _compute_shift(
@@ -289,10 +289,3 @@ class _JobWorker(QRunnable):
         return out
 
 
-def _pick_best(detections: list[Detection], threshold: float) -> Optional[Detection]:
-    above = [d for d in detections if d.confidence >= threshold]
-    if not above:
-        return None
-    primary = [d for d in above if d.label == "sprocket-hole-top-right"]
-    pool = primary or above
-    return max(pool, key=lambda d: d.confidence)

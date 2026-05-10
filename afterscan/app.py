@@ -70,7 +70,10 @@ class MainWindow(QMainWindow):
         self._wire_ui()
 
         if self.settings.source_dir:
-            self._load_source(self.settings.source_dir)
+            # Restoring a saved source — don't surprise the user with a
+            # background YOLO run on launch. They can press "Estimate
+            # from frames" manually if they want one.
+            self._load_source(self.settings.source_dir, auto_estimate=False)
 
     # ── construction ──────────────────────────────────────────────
 
@@ -177,9 +180,9 @@ class MainWindow(QMainWindow):
         start = self.settings.source_dir or os.path.expanduser("~")
         folder = QFileDialog.getExistingDirectory(self, "Select source folder", start)
         if folder:
-            self._load_source(folder)
+            self._load_source(folder, auto_estimate=True)
 
-    def _load_source(self, folder: str) -> None:
+    def _load_source(self, folder: str, *, auto_estimate: bool = True) -> None:
         try:
             source = FrameSource(folder)
         except OSError:
@@ -203,9 +206,10 @@ class MainWindow(QMainWindow):
         thumbs = source.thumbnails(_THUMB_COUNT)
         self.filmstrip.set_thumbnails(thumbs)
         self._show_frame(0)
-        # First-load suggestion: only auto-run when the user hasn't picked
-        # a rotation yet. Once set, it sticks for the reel.
-        if abs(self.settings.rotation) < 1e-4:
+        # First-pick suggestion: only auto-run when the caller asked for
+        # it AND the user hasn't picked a rotation yet. Once set, it
+        # sticks for the reel.
+        if auto_estimate and abs(self.settings.rotation) < 1e-4:
             self._estimate_rotation()
 
     def _seek(self, idx: int) -> None:
@@ -373,8 +377,9 @@ class MainWindow(QMainWindow):
             self._latest_anchor = None
             self._refresh_shift()
             return
-        label = f"sprocket · {result.confidence:.2f}"
-        self.preview.set_detection(result.anchor_x, result.anchor_y, label, bbox=result.bbox)
+        label = f"sprocket · {result.confidence:.2f} · {len(result.detections)} anchors"
+        boxes = [(d.bbox, d.label) for d in result.detections]
+        self.preview.set_detection(result.anchor_x, result.anchor_y, label, boxes=boxes)
         self._latest_anchor = (result.anchor_x, result.anchor_y)
         self._refresh_shift()
 
@@ -440,5 +445,12 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:
         self._runner.stop()
+        # Drain in-flight detector / estimator tasks so their `Signals`
+        # QObjects survive long enough to emit; otherwise PySide warns
+        # "Signal source has been deleted" on exit.
+        yolo_worker.thread_pool().clear()
+        yolo_worker.thread_pool().waitForDone(2000)
+        QThreadPool.globalInstance().clear()
+        QThreadPool.globalInstance().waitForDone(1000)
         self._persist_jobs()
         super().closeEvent(event)
