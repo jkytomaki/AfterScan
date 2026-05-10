@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QPointF, QRect, Qt, Signal
+from PySide6.QtCore import QRect, Qt, Signal
 from PySide6.QtGui import QColor, QCursor, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QSizePolicy, QVBoxLayout
 
@@ -10,9 +10,8 @@ from afterscan.ui.widgets.buttons import IconBtn
 
 
 class Preview(QFrame):
-    """Frame viewport with overlays: detection bbox, crop guides, info chips,
-    before/after split. The detection bbox is a placeholder until real YOLO
-    inference is wired in a later phase."""
+    """Frame viewport with overlays: per-anchor crosshairs, crop guides,
+    info chips, before/after split."""
 
     crop_changed = Signal()
 
@@ -28,7 +27,7 @@ class Preview(QFrame):
         self._show_split = False
         self._detection_point: tuple[float, float] | None = None
         self._detection_label: str = ""
-        self._detection_boxes: list[tuple[tuple[float, float, float, float], str]] = []
+        self._detection_anchors: list[tuple[float, float, str]] = []
         self._shift: tuple[float, float] | None = None
 
         outer = QVBoxLayout(self)
@@ -54,10 +53,16 @@ class Preview(QFrame):
     def set_frame(self, pixmap: QPixmap, before: QPixmap | None = None) -> None:
         self._pixmap = pixmap if not pixmap.isNull() else None
         self._before_pixmap = before
+        # Drop the previous frame's crosshair overlay (it points at the
+        # wrong sprocket now) but **keep the shift** — adjacent scan
+        # frames have nearly identical shifts, so reusing the old one
+        # while we wait ~250 ms for the new detection avoids the visible
+        # "snap" the user would otherwise see on every scrub.  Callers
+        # that genuinely change context (new source, stabilize toggled
+        # off, method swap) explicitly call `clear_shift()`.
         self._detection_point = None
         self._detection_label = ""
-        self._detection_boxes = []
-        self._shift = None
+        self._detection_anchors = []
         self._refresh_chips()
         self.update_canvas()
 
@@ -70,23 +75,28 @@ class Preview(QFrame):
         x: float,
         y: float,
         label: str = "",
-        boxes: list[tuple[tuple[float, float, float, float], str]] | None = None,
+        anchors: list[tuple[float, float, str]] | None = None,
     ) -> None:
-        """Show the detection: a single anchor point at `(x, y)` plus
-        zero or more bboxes. Each bbox is `((x, y, w, h), class_label)` —
-        the canvas colors them by class so the user can tell which
-        anchors survived fusion."""
+        """Show the detection as small class-colored crosshairs.
+
+        `(x, y)` is the **primary** anchor — what stabilization is
+        actually using.  `anchors` is the list of all surviving
+        anchors after fusion, each as ``(x, y, class_label)``; the
+        canvas paints one small crosshair per entry, color-coded by
+        class.  The classical detector path passes ``anchors=None``;
+        we synthesize a single-anchor list so the same drawing code
+        handles both."""
         self._detection_point = (x, y)
         self._detection_label = label
-        self._detection_boxes = list(boxes) if boxes else []
+        self._detection_anchors = list(anchors) if anchors else [(x, y, "")]
         self.update_canvas()
 
     def clear_detection(self) -> None:
-        if self._detection_point is None and not self._detection_boxes:
+        if self._detection_point is None and not self._detection_anchors:
             return
         self._detection_point = None
         self._detection_label = ""
-        self._detection_boxes = []
+        self._detection_anchors = []
         self.update_canvas()
 
     def set_shift(self, dx: float, dy: float) -> None:
@@ -109,7 +119,7 @@ class Preview(QFrame):
             settings=self._s,
             detection_point=self._detection_point,
             detection_label=self._detection_label,
-            detection_boxes=self._detection_boxes,
+            detection_anchors=self._detection_anchors,
             shift=self._shift,
         )
 
@@ -146,7 +156,7 @@ class _Canvas(QFrame):
         self._settings: Settings | None = None
         self._detection_point: tuple[float, float] | None = None
         self._detection_label: str = ""
-        self._detection_boxes: list[tuple[tuple[float, float, float, float], str]] = []
+        self._detection_anchors: list[tuple[float, float, str]] = []
         self._shift: tuple[float, float] | None = None
         self._viewport_rect: QRect | None = None
         self._drag_handle: str | None = None
@@ -160,13 +170,13 @@ class _Canvas(QFrame):
 
     def update_state(self, *, pixmap, before, settings,
                      detection_point=None, detection_label="",
-                     detection_boxes=None, shift=None) -> None:
+                     detection_anchors=None, shift=None) -> None:
         self._pixmap = pixmap
         self._before = before
         self._settings = settings
         self._detection_point = detection_point
         self._detection_label = detection_label
-        self._detection_boxes = list(detection_boxes) if detection_boxes else []
+        self._detection_anchors = list(detection_anchors) if detection_anchors else []
         self._shift = shift
         self.update()
 
@@ -194,13 +204,9 @@ class _Canvas(QFrame):
             p.rotate(rotation)
             p.translate(-center.x(), -center.y())
         p.drawPixmap(image_rect.x(), image_rect.y(), scaled)
-        if s is not None and s.stabilize:
-            if self._detection_boxes and self._pixmap is not None:
-                self._draw_detection_boxes(p, image_rect)
-            if self._detection_point is not None and self._pixmap is not None:
-                self._draw_detection_point(p, image_rect)
-            elif not self._detection_boxes and s.method in ("yolo", "classical"):
-                self._draw_detection(p, viewport_rect)
+        if (s is not None and s.stabilize
+                and self._detection_anchors and self._pixmap is not None):
+            self._draw_anchor_crosshairs(p, image_rect)
         p.restore()
 
         if self._before is not None:
@@ -307,41 +313,55 @@ class _Canvas(QFrame):
             p.drawRect(QRect(cx - 4, cy - 4, 8, 8))
         p.restore()
 
-    def _draw_detection_point(self, p: QPainter, frame: QRect) -> None:
+    def _draw_anchor_crosshairs(self, p: QPainter, frame: QRect) -> None:
+        """Small class-colored crosshair at every surviving anchor.
+
+        The primary (the one stabilization is using) gets a slightly
+        larger crosshair plus a label readout."""
         pm = self._pixmap
-        if pm is None or self._detection_point is None or pm.width() == 0 or pm.height() == 0:
+        if pm is None or pm.width() == 0 or pm.height() == 0:
             return
-        ix, iy = self._detection_point
         sx = frame.width() / pm.width()
         sy = frame.height() / pm.height()
-        cx = frame.x() + ix * sx
-        cy = frame.y() + iy * sy
+        primary_xy = self._detection_point
 
-        accent = QColor(DARK.accent)
-        pen = QPen(accent)
-        pen.setWidthF(1.0)
-        pen.setStyle(Qt.DashLine)
-        p.setPen(pen)
-        p.setBrush(Qt.NoBrush)
-        p.drawLine(frame.x(), int(round(cy)), frame.right(), int(round(cy)))
-        p.drawLine(int(round(cx)), frame.y(), int(round(cx)), frame.bottom())
+        for ax, ay, label in self._detection_anchors:
+            cx = frame.x() + ax * sx
+            cy = frame.y() + ay * sy
+            color = _class_color(label)
+            is_primary = (
+                primary_xy is not None
+                and abs(ax - primary_xy[0]) < 1e-3
+                and abs(ay - primary_xy[1]) < 1e-3
+            )
+            arm = 10 if is_primary else 6
+            width = 2.0 if is_primary else 1.4
+            pen = QPen(color)
+            pen.setWidthF(width)
+            p.setPen(pen)
+            p.setBrush(Qt.NoBrush)
+            p.drawLine(int(round(cx - arm)), int(round(cy)),
+                       int(round(cx + arm)), int(round(cy)))
+            p.drawLine(int(round(cx)), int(round(cy - arm)),
+                       int(round(cx)), int(round(cy + arm)))
 
-        pen.setStyle(Qt.SolidLine)
-        pen.setWidthF(2.0)
-        p.setPen(pen)
-        p.drawEllipse(QPointF(cx, cy), 12, 12)
-
-        label = self._detection_label or f"({ix:.1f}, {iy:.1f})"
-        font = p.font()
-        font.setFamily("JetBrains Mono")
-        font.setPointSizeF(8.5)
-        p.setFont(font)
-        bg_rect = QRect(int(cx) + 16, int(cy) - 22, max(110, len(label) * 7), 16)
-        p.setPen(Qt.NoPen)
-        p.setBrush(QColor(0, 0, 0, 170))
-        p.drawRect(bg_rect)
-        p.setPen(accent)
-        p.drawText(bg_rect.adjusted(6, 0, -4, 0), Qt.AlignVCenter | Qt.AlignLeft, label)
+        # Label near the primary anchor only.
+        if primary_xy is not None and self._detection_label:
+            ix, iy = primary_xy
+            cx = frame.x() + ix * sx
+            cy = frame.y() + iy * sy
+            font = p.font()
+            font.setFamily("JetBrains Mono")
+            font.setPointSizeF(8.5)
+            p.setFont(font)
+            bg_rect = QRect(int(cx) + 14, int(cy) - 22,
+                            max(120, len(self._detection_label) * 7), 16)
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(0, 0, 0, 170))
+            p.drawRect(bg_rect)
+            p.setPen(QColor(DARK.accent))
+            p.drawText(bg_rect.adjusted(6, 0, -4, 0),
+                       Qt.AlignVCenter | Qt.AlignLeft, self._detection_label)
 
     # ── crop drag ────────────────────────────────────────────────
 
@@ -407,54 +427,6 @@ class _Canvas(QFrame):
         super().mouseReleaseEvent(event)
 
     # ── drawing ──────────────────────────────────────────────────
-
-    def _draw_detection_boxes(self, p: QPainter, frame: QRect) -> None:
-        """One rect per surviving anchor, color-coded by class so the
-        user can tell at a glance which sprocket corners / seams the
-        fuser kept."""
-        pm = self._pixmap
-        if pm is None or pm.width() == 0:
-            return
-        sx = frame.width() / pm.width()
-        sy = frame.height() / pm.height()
-        for (bx, by, bw, bh), label in self._detection_boxes:
-            rect = QRect(
-                int(round(frame.x() + bx * sx)),
-                int(round(frame.y() + by * sy)),
-                max(1, int(round(bw * sx))),
-                max(1, int(round(bh * sy))),
-            )
-            pen = QPen(_class_color(label))
-            pen.setWidthF(1.2)
-            p.setPen(pen)
-            p.setBrush(Qt.NoBrush)
-            p.drawRect(rect)
-
-    def _draw_detection(self, p: QPainter, frame: QRect) -> None:
-        # Stub bbox: left-edge sprocket strip. Replaced by real YOLO results later.
-        x = frame.x() + int(frame.width() * 0.045)
-        y = frame.y() + int(frame.height() * 0.32)
-        w = max(8, int(frame.width() * 0.08))
-        h = max(8, int(frame.height() * 0.14))
-        bbox = QRect(x, y, w, h)
-        pen = QPen(QColor(DARK.accent))
-        pen.setWidthF(1.5)
-        p.setPen(pen)
-        p.setBrush(Qt.NoBrush)
-        p.drawRect(bbox)
-
-        label_y = y - 16
-        p.setPen(Qt.NoPen)
-        p.setBrush(QColor(0, 0, 0, 153))
-        label_rect = QRect(x - 1, label_y, 90, 14)
-        p.drawRect(label_rect)
-        p.setPen(QColor(DARK.accent))
-        font = p.font()
-        font.setFamily("JetBrains Mono")
-        font.setPointSizeF(8)
-        p.setFont(font)
-        p.drawText(label_rect.adjusted(4, 0, -4, 0), Qt.AlignVCenter | Qt.AlignLeft,
-                   "sprocket · stub")
 
 
 _CLASS_COLORS = {

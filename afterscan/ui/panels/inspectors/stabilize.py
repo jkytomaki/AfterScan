@@ -23,6 +23,10 @@ from afterscan.ui.widgets.toggle import Toggle
 class StabilizeInspector(QWidget):
     method_changed = Signal(str)
     stabilize_changed = Signal(bool)
+    # Emitted whenever a setting that influences detection results
+    # changes — app.py listens to clear the per-frame anchor cache and
+    # re-run the live detector for the current frame.
+    detection_inputs_changed = Signal()
 
     def __init__(self, settings: Settings, parent=None) -> None:
         super().__init__(parent)
@@ -98,9 +102,12 @@ class StabilizeInspector(QWidget):
         slider.setValue(int(self._s.confidence * 100))
         conf_field = Field("Confidence threshold", slider, value=f"{self._s.confidence:.2f}")
         slider.valueChanged.connect(lambda val: self._set_confidence(val / 100, conf_field))
+        slider.sliderReleased.connect(self.detection_inputs_changed)
         v.addWidget(conf_field)
 
-        v.addWidget(bind_bool(QCheckBox("Edge refinement"), self._s, "edge_refinement"))
+        edge_yolo = bind_bool(QCheckBox("Edge refinement"), self._s, "edge_refinement")
+        edge_yolo.toggled.connect(self.detection_inputs_changed)
+        v.addWidget(edge_yolo)
         v.addWidget(bind_bool(QCheckBox("Draw detection boxes on output"), self._s, "draw_boxes"))
         v.addWidget(bind_bool(QCheckBox("Save undetected frames separately"), self._s, "save_undetected"))
         return frame
@@ -110,7 +117,9 @@ class StabilizeInspector(QWidget):
         v = QVBoxLayout(frame)
         v.setContentsMargins(0, 4, 0, 0)
         v.setSpacing(10)
-        v.addWidget(bind_bool(QCheckBox("Edge refinement"), self._s, "edge_refinement"))
+        edge_classical = bind_bool(QCheckBox("Edge refinement"), self._s, "edge_refinement")
+        edge_classical.toggled.connect(self.detection_inputs_changed)
+        v.addWidget(edge_classical)
         return frame
 
     def _compensation_section(self) -> Section:

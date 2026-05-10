@@ -27,25 +27,29 @@ from PySide6.QtCore import QObject, QRunnable, Signal
 
 from afterscan.core.classical.sprocket_corner_detect import _refine_top_edge_sobel
 from afterscan.core.detect import Detection, Detector
-from afterscan.core.fuse import fuse_anchors
+from afterscan.core.fuse import class_anchor, fuse_anchors
 
 
 @dataclass(frozen=True)
-class YoloDetectionBox:
-    """Bbox + class label, used by the Preview to color-code surviving anchors."""
+class YoloAnchor:
+    """Class-specific anchor point on a single detection — what the
+    Preview's crosshair overlay paints. The (x, y) is already the
+    class anchor (top-right corner / bottom-right corner / bbox
+    center) so the UI doesn't need to know about bbox geometry."""
 
-    bbox: tuple[float, float, float, float]  # x, y, w, h
+    x: float
+    y: float
     label: str
     confidence: float
 
 
 @dataclass(frozen=True)
 class YoloResult:
-    anchor_x: float
+    anchor_x: float                # primary (chosen by fuser) — what stabilization uses
     anchor_y: float
-    confidence: float                      # primary detection's confidence
-    detections: list[YoloDetectionBox]     # all surviving anchors (post-fusion)
-    rotation: Optional[float]              # per-frame slope hint, may be None
+    confidence: float              # primary detection's confidence
+    anchors: list[YoloAnchor]      # all surviving anchors (incl. primary)
+    rotation: Optional[float]      # per-frame slope hint, may be None
 
 
 _inference_lock = threading.Lock()
@@ -168,6 +172,81 @@ def _detect_image_on_worker(model_path: str, image_path: str) -> list[Detection]
         return detector_for(model_path).detect(image_path)
 
 
+class _PrefetchSignals(QObject):
+    anchor_ready = Signal(int, object)  # frame_idx, (x, y) | None
+    finished = Signal()
+
+
+class PrefetchAnchorsTask(QRunnable):
+    """Pre-detect anchors for a sequential range of frames, used by
+    stabilized playback to fill the moving-average window ahead of the
+    playhead.
+
+    Each detected frame fires `signals.anchor_ready(idx, anchor)` so
+    the main thread can populate its anchor cache incrementally.
+    `stop()` is cooperative — sets a flag the worker checks between
+    frames, so an in-flight inference still completes before exit."""
+
+    def __init__(
+        self,
+        source,
+        start: int,
+        end: int,
+        model_path: str,
+        threshold: float,
+        edge_refine: bool = True,
+    ) -> None:
+        super().__init__()
+        self.signals = _PrefetchSignals()
+        self._source = source
+        self._start = start
+        self._end = end
+        self._model_path = model_path
+        self._threshold = threshold
+        # Mirror YoloDetectTask's edge refinement so the cached anchor
+        # is byte-for-byte identical to a live detection — otherwise
+        # playback (using prefetched, un-refined y) lands frames a few
+        # pixels above scrubbing (using refined y) and the user sees
+        # them at different positions.
+        self._edge_refine = edge_refine
+        self._stop = threading.Event()
+
+    def stop(self) -> None:
+        self._stop.set()
+
+    def run(self) -> None:
+        try:
+            for idx in range(self._start, self._end):
+                if self._stop.is_set():
+                    break
+                path = str(self._source.path(idx))
+                anchor = self._anchor_for(path)
+                self.signals.anchor_ready.emit(idx, anchor)
+        finally:
+            self.signals.finished.emit()
+
+    def _anchor_for(self, path: str):
+        try:
+            with _inference_lock:
+                detections = detector_for(self._model_path).detect(path)
+        except Exception:
+            traceback.print_exc()
+            return None
+        size = _image_size(path)
+        fused = fuse_anchors(detections, self._threshold, image_size=size)
+        if fused is None:
+            return None
+        anchor_x, anchor_y = fused.anchor
+        if self._edge_refine and fused.primary.label.endswith("top-right"):
+            try:
+                refined = _refine_bbox_top(path, fused.primary)
+                if refined is not None:
+                    anchor_y = refined
+            except Exception:
+                traceback.print_exc()
+        return (anchor_x, anchor_y)
+
+
 def preload(model_path: str) -> None:
     """Force the model to load now so the first user-visible inference
     doesn't pay the cold-load cost on the UI thread."""
@@ -214,7 +293,8 @@ class YoloDetectTask(QRunnable):
         except Exception:
             traceback.print_exc()
             return None
-        fused = fuse_anchors(detections, self._threshold)
+        size = _image_size(self._image_path)
+        fused = fuse_anchors(detections, self._threshold, image_size=size)
         if fused is None:
             return None
         anchor_x, anchor_y = fused.anchor
@@ -228,21 +308,29 @@ class YoloDetectTask(QRunnable):
                     anchor_y = refined
             except Exception:
                 traceback.print_exc()
-        boxes = [
-            YoloDetectionBox(
-                bbox=(d.x, d.y, d.width, d.height),
-                label=d.label,
-                confidence=d.confidence,
-            )
-            for d in fused.surviving
-        ]
+        anchors = []
+        for d in fused.surviving:
+            ax, ay = class_anchor(d)
+            anchors.append(YoloAnchor(
+                x=ax, y=ay, label=d.label, confidence=d.confidence,
+            ))
         return YoloResult(
             anchor_x=anchor_x,
             anchor_y=anchor_y,
             confidence=fused.primary.confidence,
-            detections=boxes,
+            anchors=anchors,
             rotation=fused.rotation,
         )
+
+
+def _image_size(image_path: str) -> Optional[tuple[int, int]]:
+    """Cheap (header-only) read of `image_path`'s pixel dimensions —
+    PIL doesn't decode the body when only `.size` is asked for."""
+    try:
+        with Image.open(image_path) as img:
+            return img.size  # (width, height)
+    except Exception:
+        return None
 
 
 def _refine_bbox_top(image_path: str, det: Detection) -> Optional[float]:

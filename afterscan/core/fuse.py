@@ -81,8 +81,17 @@ def class_anchor(det: Detection) -> tuple[float, float]:
 def fuse_anchors(
     detections: list[Detection],
     threshold: float,
+    *,
+    image_size: Optional[tuple[int, int]] = None,
 ) -> Optional[FuseResult]:
     """Reduce a frame's detections to a single fused anchor.
+
+    When ``image_size`` is provided the primary detection is the one
+    whose anchor sits closest to the image center — this keeps the
+    anchor inside the frame (a sprocket near the image edge can have
+    its top-right corner outside the picture, useless for shift
+    computation). Without ``image_size`` we fall back to highest
+    confidence.
 
     Returns ``None`` if no detection clears `threshold`."""
     above = [d for d in detections if d.confidence >= threshold]
@@ -108,7 +117,7 @@ def fuse_anchors(
         if label not in _CLASS_PRIORITY:
             surviving.extend(dets)
 
-    primary = _pick_primary(by_class, above)
+    primary = _pick_primary(by_class, above, image_size)
     anchor = class_anchor(primary)
     rotation = _rotation_from_class(by_class.get(primary.label, []))
     return FuseResult(
@@ -131,13 +140,31 @@ def _ransac_x(detections: list[Detection]) -> list[Detection]:
 def _pick_primary(
     by_class: dict[str, list[Detection]],
     fallback_pool: list[Detection],
+    image_size: Optional[tuple[int, int]],
 ) -> Detection:
-    """Highest-confidence detection in the best-available class."""
+    """Pick the primary detection from the best-available class.
+
+    If `image_size` is known, prefer the anchor closest to the image
+    center — this keeps the anchor visibly in-frame even when the
+    detected sprocket's bbox extends to the picture edge. Otherwise
+    fall back to highest confidence."""
+    pool: list[Detection] = []
     for label in _CLASS_PRIORITY:
-        candidates = by_class.get(label, [])
-        if candidates:
-            return max(candidates, key=lambda d: d.confidence)
-    return max(fallback_pool, key=lambda d: d.confidence)
+        if by_class.get(label):
+            pool = by_class[label]
+            break
+    if not pool:
+        pool = fallback_pool
+    if image_size is not None:
+        cx, cy = image_size[0] / 2.0, image_size[1] / 2.0
+        return min(pool, key=lambda d: _dist2(class_anchor(d), cx, cy))
+    return max(pool, key=lambda d: d.confidence)
+
+
+def _dist2(point: tuple[float, float], cx: float, cy: float) -> float:
+    dx = point[0] - cx
+    dy = point[1] - cy
+    return dx * dx + dy * dy
 
 
 def estimate_pitch(detection_lists: list[list[Detection]]) -> Optional[float]:

@@ -240,7 +240,10 @@ class _JobWorker(QRunnable):
         if s.method == "yolo":
             model_path = s.yolo_model or str(self._default_yolo_model)
             detections = yolo_worker.detect_image(model_path, path)
-            fused = fuse_anchors(detections, s.confidence)
+            fused = fuse_anchors(
+                detections, s.confidence,
+                image_size=yolo_worker._image_size(path),
+            )
             if fused is None:
                 return None
             anchor_x, anchor_y = fused.anchor
@@ -263,15 +266,15 @@ class _JobWorker(QRunnable):
         the local window median."""
         raw_dx: list[Optional[float]] = []
         raw_dy: list[Optional[float]] = []
-        if s.template_x is None or s.template_y is None:
+        if s.reference_x is None or s.reference_y is None:
             return [None] * len(anchors), [None] * len(anchors)
         for anchor in anchors:
             if anchor is None:
                 raw_dx.append(None)
                 raw_dy.append(None)
                 continue
-            dx = s.template_x - anchor[0] + s.comp_x
-            dy = s.template_y - anchor[1] + s.comp_y
+            dx = s.reference_x - anchor[0] + s.comp_x
+            dy = s.reference_y - anchor[1] + s.comp_y
             if abs(dx) > _MAX_SHIFT_X or abs(dy) > _MAX_SHIFT_Y:
                 # Out-of-range shift is almost always a misdetection.
                 # Mark None so the smoother fills from neighbours.

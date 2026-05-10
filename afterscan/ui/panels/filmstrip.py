@@ -14,7 +14,7 @@ class Filmstrip(QFrame):
 
     seek_requested = Signal(int)
     play_toggled = Signal(bool)
-    template_clicked = Signal()
+    set_reference_clicked = Signal()
 
     def __init__(self, settings: Settings, frame_range: FrameRange, parent=None) -> None:
         super().__init__(parent)
@@ -47,9 +47,9 @@ class Filmstrip(QFrame):
 
         row.addSpacing(12)
         row.addWidget(Btn("Mark range", variant="ghost"))
-        template_btn = Btn("Set as template", variant="ghost")
-        template_btn.clicked.connect(self.template_clicked)
-        row.addWidget(template_btn)
+        ref_btn = Btn("Set reference", variant="ghost")
+        ref_btn.clicked.connect(self.set_reference_clicked)
+        row.addWidget(ref_btn)
         row.addStretch(1)
 
         self._time = QLabel("—")
