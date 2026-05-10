@@ -57,7 +57,6 @@ class MainWindow(QMainWindow):
         self._running = False
         self._show_split = False
         self._suspend_mode = "none"
-        self._template_anchor: tuple[float, float] | None = None
         self._latest_anchor: tuple[float, float] | None = None
 
         self._job_list = jobs_io.load(_JOB_LIST_PATH)
@@ -245,7 +244,8 @@ class MainWindow(QMainWindow):
         self.preview.clear_detection()
         # Templates are anchor-coordinates from a specific detector; switching
         # methods invalidates them.
-        self._template_anchor = None
+        self.settings.template_x = None
+        self.settings.template_y = None
         self._latest_anchor = None
         self.preview.clear_shift()
         if method == "yolo":
@@ -267,16 +267,18 @@ class MainWindow(QMainWindow):
     def _set_template(self) -> None:
         if self._latest_anchor is None:
             return
-        self._template_anchor = self._latest_anchor
+        self.settings.template_x, self.settings.template_y = self._latest_anchor
         self._refresh_shift()
 
     def _refresh_shift(self) -> None:
-        if (self._template_anchor is None
+        s = self.settings
+        if (s.template_x is None
+                or s.template_y is None
                 or self._latest_anchor is None
-                or not self.settings.stabilize):
+                or not s.stabilize):
             self.preview.clear_shift()
             return
-        tx, ty = self._template_anchor
+        tx, ty = s.template_x, s.template_y
         cx, cy = self._latest_anchor
         dx = tx - cx + self.settings.comp_x
         dy = ty - cy + self.settings.comp_y

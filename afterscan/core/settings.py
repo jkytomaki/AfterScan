@@ -40,6 +40,10 @@ class Settings:
     save_undetected: bool = False
     comp_x: int = 0
     comp_y: int = 0
+    # Reference anchor captured by "Set as template" — image-space pixels,
+    # None until the user picks one.
+    template_x: float | None = None
+    template_y: float | None = None
 
     # Enhance
     crop: bool = True
