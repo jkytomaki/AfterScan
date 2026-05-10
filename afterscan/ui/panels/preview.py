@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QPointF, QRect, Qt
-from PySide6.QtGui import QColor, QPainter, QPen, QPixmap
+from PySide6.QtCore import QPointF, QRect, Qt, Signal
+from PySide6.QtGui import QColor, QCursor, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QSizePolicy, QVBoxLayout
 
 from afterscan.core.settings import FrameRange, Settings
@@ -13,6 +13,8 @@ class Preview(QFrame):
     """Frame viewport with overlays: detection bbox, crop guides, info chips,
     before/after split. The detection bbox is a placeholder until real YOLO
     inference is wired in a later phase."""
+
+    crop_changed = Signal()
 
     def __init__(self, settings: Settings, frame_range: FrameRange, parent=None) -> None:
         super().__init__(parent)
@@ -35,6 +37,7 @@ class Preview(QFrame):
         self._canvas = _Canvas(self)
         self._canvas.setObjectName("preview")
         self._canvas.setMinimumSize(320, 240)
+        self._canvas.crop_changed.connect(self.crop_changed)
 
         outer.addWidget(self._canvas, stretch=1)
 
@@ -130,6 +133,8 @@ class _Canvas(QFrame):
     """Custom-painted central frame area — draws the scaled pixmap, the
     detection bbox stub, crop guides, and the before/after split."""
 
+    crop_changed = Signal()
+
     def __init__(self, parent: Preview) -> None:
         super().__init__(parent)
         self._pixmap: QPixmap | None = None
@@ -139,6 +144,9 @@ class _Canvas(QFrame):
         self._detection_label: str = ""
         self._detection_bbox: tuple[float, float, float, float] | None = None
         self._shift: tuple[float, float] | None = None
+        self._viewport_rect: QRect | None = None
+        self._drag_handle: str | None = None
+        self.setMouseTracking(True)
 
     def update_state(self, *, pixmap, before, settings,
                      detection_point=None, detection_label="",
@@ -194,6 +202,7 @@ class _Canvas(QFrame):
         vx = rect.x() + (rect.width() - scaled.width()) // 2
         vy = rect.y() + (rect.height() - scaled.height()) // 2
         viewport_rect = QRect(vx, vy, scaled.width(), scaled.height())
+        self._viewport_rect = viewport_rect
 
         ix, iy = vx, vy
         if self._shift is not None and pm.width() > 0:
@@ -233,12 +242,23 @@ class _Canvas(QFrame):
         p.setPen(pen)
         p.drawLine(midx, frame.y(), midx, frame.bottom())
 
+    def _crop_rect(self, frame: QRect) -> QRect:
+        s = self._settings
+        if s is None:
+            return frame
+        left = max(0.0, min(1.0, s.crop_left))
+        top = max(0.0, min(1.0, s.crop_top))
+        right = max(left + 0.02, min(1.0, s.crop_right))
+        bottom = max(top + 0.02, min(1.0, s.crop_bottom))
+        x = frame.x() + int(round(left * frame.width()))
+        y = frame.y() + int(round(top * frame.height()))
+        w = max(2, int(round((right - left) * frame.width())))
+        h = max(2, int(round((bottom - top) * frame.height())))
+        return QRect(x, y, w, h)
+
     def _draw_crop_guides(self, p: QPainter, frame: QRect) -> None:
-        inset_x = int(frame.width() * 0.12)
-        inset_y = int(frame.height() * 0.08)
-        guide = frame.adjusted(inset_x, inset_y, -inset_x, -inset_y)
+        guide = self._crop_rect(frame)
         p.save()
-        p.setBrush(QColor(0, 0, 0, 80))
         p.setPen(Qt.NoPen)
         for shadow in (
             QRect(frame.x(), frame.y(), frame.width(), guide.y() - frame.y()),
@@ -252,6 +272,17 @@ class _Canvas(QFrame):
         p.setPen(pen)
         p.setBrush(Qt.NoBrush)
         p.drawRect(guide)
+
+        # Corner drag handles (filled squares)
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(DARK.accent))
+        for cx, cy in (
+            (guide.x(), guide.y()),
+            (guide.right(), guide.y()),
+            (guide.x(), guide.bottom()),
+            (guide.right(), guide.bottom()),
+        ):
+            p.drawRect(QRect(cx - 4, cy - 4, 8, 8))
         p.restore()
 
     def _draw_detection_point(self, p: QPainter, frame: QRect) -> None:
@@ -289,6 +320,71 @@ class _Canvas(QFrame):
         p.drawRect(bg_rect)
         p.setPen(accent)
         p.drawText(bg_rect.adjusted(6, 0, -4, 0), Qt.AlignVCenter | Qt.AlignLeft, label)
+
+    # ── crop drag ────────────────────────────────────────────────
+
+    _CORNER_HIT = 10  # pixels
+
+    def _hit_handle(self, pos) -> str | None:
+        if (self._viewport_rect is None
+                or self._settings is None
+                or not self._settings.crop):
+            return None
+        guide = self._crop_rect(self._viewport_rect)
+        x, y = pos.x(), pos.y()
+        for name, hx, hy in (
+            ("tl", guide.x(),     guide.y()),
+            ("tr", guide.right(), guide.y()),
+            ("bl", guide.x(),     guide.bottom()),
+            ("br", guide.right(), guide.bottom()),
+        ):
+            if abs(x - hx) <= self._CORNER_HIT and abs(y - hy) <= self._CORNER_HIT:
+                return name
+        return None
+
+    def mousePressEvent(self, event) -> None:  # type: ignore[override]
+        if event.button() == Qt.LeftButton:
+            handle = self._hit_handle(event.position().toPoint())
+            if handle is not None:
+                self._drag_handle = handle
+                event.accept()
+                return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:  # type: ignore[override]
+        if self._drag_handle is None:
+            handle = self._hit_handle(event.position().toPoint())
+            self.setCursor(_handle_cursor(handle))
+            return
+        if self._viewport_rect is None or self._settings is None:
+            return
+        vp = self._viewport_rect
+        if vp.width() <= 0 or vp.height() <= 0:
+            return
+        fx = (event.position().x() - vp.x()) / vp.width()
+        fy = (event.position().y() - vp.y()) / vp.height()
+        fx = max(0.0, min(1.0, fx))
+        fy = max(0.0, min(1.0, fy))
+        s = self._settings
+        if "l" in self._drag_handle:
+            s.crop_left = min(fx, s.crop_right - 0.05)
+        if "r" in self._drag_handle:
+            s.crop_right = max(fx, s.crop_left + 0.05)
+        if "t" in self._drag_handle:
+            s.crop_top = min(fy, s.crop_bottom - 0.05)
+        if "b" in self._drag_handle:
+            s.crop_bottom = max(fy, s.crop_top + 0.05)
+        self.update()
+        self.crop_changed.emit()
+
+    def mouseReleaseEvent(self, event) -> None:  # type: ignore[override]
+        if self._drag_handle is not None and event.button() == Qt.LeftButton:
+            self._drag_handle = None
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    # ── drawing ──────────────────────────────────────────────────
 
     def _draw_detection_bbox(self, p: QPainter, frame: QRect) -> None:
         pm = self._pixmap
@@ -334,6 +430,14 @@ class _Canvas(QFrame):
         p.setFont(font)
         p.drawText(label_rect.adjusted(4, 0, -4, 0), Qt.AlignVCenter | Qt.AlignLeft,
                    "sprocket · stub")
+
+
+def _handle_cursor(handle: str | None):
+    if handle in ("tl", "br"):
+        return Qt.SizeFDiagCursor
+    if handle in ("tr", "bl"):
+        return Qt.SizeBDiagCursor
+    return QCursor(Qt.ArrowCursor)
 
 
 class _ChipsRow(QFrame):

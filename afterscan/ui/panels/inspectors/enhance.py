@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QHBoxLayout,
@@ -26,6 +26,8 @@ _FILL_DESC = {
 
 
 class EnhanceInspector(QWidget):
+    crop_changed = Signal()
+
     def __init__(self, settings: Settings, parent=None) -> None:
         super().__init__(parent)
         self._s = settings
@@ -54,9 +56,30 @@ class EnhanceInspector(QWidget):
             [("free", "Free"), ("4:3", "4 : 3"), ("16:9", "16 : 9")],
             value=self._s.aspect,
         )
-        aspect.changed.connect(lambda v: setattr(self._s, "aspect", v))
+        aspect.changed.connect(self._set_aspect)
         section.add(Field("Aspect ratio", aspect))
         return section
+
+    def _set_aspect(self, value: str) -> None:
+        self._s.aspect = value  # type: ignore[assignment]
+        ratio = {"4:3": 4 / 3, "16:9": 16 / 9}.get(value)
+        if ratio is None:
+            return
+        # Center-shrink the current crop rect to match the chosen ratio.
+        cx = (self._s.crop_left + self._s.crop_right) / 2
+        cy = (self._s.crop_top + self._s.crop_bottom) / 2
+        cur_w = self._s.crop_right - self._s.crop_left
+        cur_h = self._s.crop_bottom - self._s.crop_top
+        # Pixel ratio is unknown without the source dimensions; treat the
+        # full preview area as 1:1 fractions and pick whichever dimension
+        # leaves the crop inside the frame.
+        new_w = min(cur_w, cur_h * ratio)
+        new_h = new_w / ratio
+        self._s.crop_left = max(0.0, cx - new_w / 2)
+        self._s.crop_right = min(1.0, cx + new_w / 2)
+        self._s.crop_top = max(0.0, cy - new_h / 2)
+        self._s.crop_bottom = min(1.0, cy + new_h / 2)
+        self.crop_changed.emit()
 
     def _color_section(self) -> Section:
         section = Section("Color & detail")

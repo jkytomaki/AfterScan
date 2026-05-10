@@ -149,6 +149,9 @@ class MainWindow(QMainWindow):
         stab = self.inspector.panels["stabilize"]
         stab.method_changed.connect(self._on_method_changed)
         stab.stabilize_changed.connect(self._on_stabilize_changed)
+        enhance = self.inspector.panels["enhance"]
+        enhance.crop_changed.connect(self.preview.update_canvas)
+        self.preview.crop_changed.connect(self._on_preview_crop_dragged)
         self._runner.job_started.connect(self._on_job_started)
         self._runner.job_progress.connect(self._on_job_progress)
         self._runner.job_finished.connect(self._on_job_finished)
@@ -255,6 +258,11 @@ class MainWindow(QMainWindow):
         if not on:
             self.preview.clear_shift()
         self._schedule_detection()
+
+    def _on_preview_crop_dragged(self) -> None:
+        # Drag operates directly on settings; nothing to do for now beyond
+        # leaving a hook for project persistence later.
+        pass
 
     def _set_template(self) -> None:
         if self._latest_anchor is None:

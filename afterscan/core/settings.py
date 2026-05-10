@@ -44,6 +44,12 @@ class Settings:
     # Enhance
     crop: bool = True
     aspect: AspectRatio = "4:3"
+    # Crop rect as image-space fractions [0..1]. Defaults match the placeholder
+    # the preview used to draw before crop became configurable.
+    crop_left: float = 0.12
+    crop_top: float = 0.08
+    crop_right: float = 0.88
+    crop_bottom: float = 0.92
     low_contrast: bool = False
     denoise: bool = False
     sharpen: bool = False
