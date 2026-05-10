@@ -1,22 +1,28 @@
 """Per-frame stabilization pipeline + queue runner.
 
-Runs the queued jobs serially on a single-threaded `QThreadPool`. Each
-job:
+Runs the queued jobs serially on a single-threaded `QThreadPool`.
+Each job runs in three passes (Phase 3):
 
-  1. enumerates the source frames via `FrameSource`,
-  2. detects the sprocket anchor on each frame (YOLO or classical —
-     "template" matching is not implemented yet and falls back to no
-     shift),
-  3. computes shift = template − anchor + comp, applies sanity check
-     and EMA smoothing across frames,
-  4. translates the image by that shift and crops to the configured
-     rect,
-  5. writes the result as `frame_NNNNN.png` into the target directory.
+  1. **Detect** — for each frame, compute the raw anchor (YOLO via
+     `fuse_anchors`, or classical), then derive the per-frame
+     ``(raw_dx, raw_dy)`` shift against the captured template.  No
+     image-write yet.
+  2. **Smooth** — `smooth_dx` rolls a MAD-trimmed median over `dx`
+     across the whole reel.  `dy` passes through raw, because the
+     scanner's vertical jitter is independent per frame and a
+     low-pass filter would inject error.
+  3. **Apply + write** — re-read each frame, translate by the
+     smoothed `(dx, dy)`, apply the static per-reel rotation, crop
+     to the configured rect, and save `frame_NNNNN.png`.
+
+The two-pass shape means each frame is read twice from disk (once
+for detection, once for write).  The cost is dwarfed by inference
+time and the smoothing benefit is worth it.
 
 What's intentionally not done yet: video encoding (we write a PNG
-sequence), color enhancements (gamma / denoise / sharpen), frame-fill
-modes, and the legacy "template" detector. Each is a separate piece
-that can land on top of this pipeline."""
+sequence), color enhancements (gamma / denoise / sharpen),
+frame-fill modes, and the legacy "template" detector.  Each is a
+separate piece that can land on top of this pipeline."""
 
 from __future__ import annotations
 
@@ -35,12 +41,15 @@ from afterscan.core.frames import FrameSource
 from afterscan.core.fuse import fuse_anchors
 from afterscan.core.jobs import Job, JobList
 from afterscan.core.settings import Settings
+from afterscan.core.smooth import smooth_dx
 
 
 _MAX_SHIFT_X = 200
 _MAX_SHIFT_Y = 600
-_EMA_ALPHA = 0.5
 _PROGRESS_EVERY = 5  # frames
+# How the wall-clock progress bar splits between the two image passes.
+_DETECT_FRACTION = 0.6  # detection on a GPU is the slow leg
+_WRITE_FRACTION = 0.4
 
 
 class _Signals(QObject):
@@ -170,43 +179,58 @@ class _JobWorker(QRunnable):
                       str(Path(self._job.source_dir) / "out"))
         target.mkdir(parents=True, exist_ok=True)
 
-        prev_shift: tuple[float, float] | None = None
         start_time = time.perf_counter()
 
+        # ── Pass 1: detect anchors ─────────────────────────────────
+        anchors: list[Optional[tuple[float, float]]] = []
+        for idx in range(source.total):
+            if self._stop.is_set():
+                return
+            path = str(source.path(idx))
+            anchors.append(self._detect_path(path, s))
+            if idx % _PROGRESS_EVERY == 0 or idx == source.total - 1:
+                self._emit_progress(start_time, idx + 1, source.total, phase="detect")
+
+        # ── Pass 2: compute shifts; smooth dx, leave dy raw ────────
+        raw_dx, raw_dy = self._raw_shifts(s, anchors)
+        smoothed_dx = smooth_dx(raw_dx)
+
+        # ── Pass 3: apply transforms + write ───────────────────────
         for idx in range(source.total):
             if self._stop.is_set():
                 return
             path = str(source.path(idx))
             try:
-                img = Image.open(path).convert("RGB")
-                arr = np.asarray(img)
+                arr = np.asarray(Image.open(path).convert("RGB"))
             except Exception:
                 continue
-
-            anchor = self._detect(arr, path, s)
-            shift, prev_shift = self._compute_shift(s, anchor, prev_shift)
-            out = self._apply_shift_and_crop(arr, shift, s)
+            dx = smoothed_dx[idx]
+            dy = raw_dy[idx] if raw_dy[idx] is not None else 0.0
+            out = self._apply_shift_and_crop(arr, (dx, dy), s)
             try:
                 Image.fromarray(out).save(str(target / f"frame_{idx:05d}.png"))
             except Exception:
                 continue
-
             if idx % _PROGRESS_EVERY == 0 or idx == source.total - 1:
-                fraction = (idx + 1) / source.total
-                elapsed = time.perf_counter() - start_time
-                eta = (elapsed / max(fraction, 1e-6)) - elapsed
-                self._signals.progress.emit(self._job.id, fraction, max(eta, 0.0))
+                self._emit_progress(start_time, idx + 1, source.total, phase="write")
 
         self._signals.finished.emit(self._job.id)
 
     # ── pipeline steps ───────────────────────────────────────────
 
-    def _detect(
-        self, arr: np.ndarray, path: str, s: Settings,
+    def _detect_path(
+        self, path: str, s: Settings,
     ) -> Optional[tuple[float, float]]:
+        """Run the configured detector on a single frame path; returns
+        the anchor position in source-image pixels, or ``None`` if the
+        frame had no usable detection."""
         if not s.stabilize:
             return None
         if s.method == "classical":
+            try:
+                arr = np.asarray(Image.open(path).convert("RGB"))
+            except Exception:
+                return None
             result = detect_classical.detect_corner(
                 arr, edge_refine=s.edge_refinement, scale=1.0,
             )
@@ -227,29 +251,49 @@ class _JobWorker(QRunnable):
             return (anchor_x, anchor_y)
         return None  # "template" method not implemented yet
 
-    def _compute_shift(
+    def _raw_shifts(
         self,
         s: Settings,
-        anchor: Optional[tuple[float, float]],
-        prev: Optional[tuple[float, float]],
-    ) -> tuple[tuple[float, float], Optional[tuple[float, float]]]:
-        if (anchor is None
-                or s.template_x is None
-                or s.template_y is None):
-            return (0.0, 0.0), prev
-        raw_dx = s.template_x - anchor[0] + s.comp_x
-        raw_dy = s.template_y - anchor[1] + s.comp_y
-        if abs(raw_dx) > _MAX_SHIFT_X or abs(raw_dy) > _MAX_SHIFT_Y:
-            # Outlier — fall back to the smoothed previous shift.
-            return (prev or (0.0, 0.0)), prev
-        if prev is None:
-            smoothed = (raw_dx, raw_dy)
+        anchors: list[Optional[tuple[float, float]]],
+    ) -> tuple[list[Optional[float]], list[Optional[float]]]:
+        """Per-frame raw (dx, dy) against the captured template.
+
+        ``None`` for a missing detection or for a shift the sanity
+        check rejects — the smoother handles those by falling back to
+        the local window median."""
+        raw_dx: list[Optional[float]] = []
+        raw_dy: list[Optional[float]] = []
+        if s.template_x is None or s.template_y is None:
+            return [None] * len(anchors), [None] * len(anchors)
+        for anchor in anchors:
+            if anchor is None:
+                raw_dx.append(None)
+                raw_dy.append(None)
+                continue
+            dx = s.template_x - anchor[0] + s.comp_x
+            dy = s.template_y - anchor[1] + s.comp_y
+            if abs(dx) > _MAX_SHIFT_X or abs(dy) > _MAX_SHIFT_Y:
+                # Out-of-range shift is almost always a misdetection.
+                # Mark None so the smoother fills from neighbours.
+                raw_dx.append(None)
+                raw_dy.append(None)
+                continue
+            raw_dx.append(dx)
+            raw_dy.append(dy)
+        return raw_dx, raw_dy
+
+    def _emit_progress(
+        self, start_time: float, done: int, total: int, *, phase: str,
+    ) -> None:
+        """Wall-clock progress with a 60/40 split between the detect
+        and write passes (detect is the slow leg)."""
+        if phase == "detect":
+            fraction = (done / total) * _DETECT_FRACTION
         else:
-            smoothed = (
-                _EMA_ALPHA * raw_dx + (1 - _EMA_ALPHA) * prev[0],
-                _EMA_ALPHA * raw_dy + (1 - _EMA_ALPHA) * prev[1],
-            )
-        return smoothed, smoothed
+            fraction = _DETECT_FRACTION + (done / total) * _WRITE_FRACTION
+        elapsed = time.perf_counter() - start_time
+        eta = (elapsed / max(fraction, 1e-6)) - elapsed
+        self._signals.progress.emit(self._job.id, fraction, max(eta, 0.0))
 
     def _apply_shift_and_crop(
         self, arr: np.ndarray, shift: tuple[float, float], s: Settings,
