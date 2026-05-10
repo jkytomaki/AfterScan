@@ -129,7 +129,8 @@ class JobRunner(QObject):
 
 
 _DEFAULT_YOLO_MODEL = (
-    Path(__file__).resolve().parents[2] / "Resources" / "yolo_sprocket_detector.pt"
+    Path(__file__).resolve().parents[2]
+    / "Resources" / "yolo_sprocket_detector_3class.pt"
 )
 
 
@@ -284,4 +285,6 @@ def _pick_best(detections: list[Detection], threshold: float) -> Optional[Detect
     above = [d for d in detections if d.confidence >= threshold]
     if not above:
         return None
-    return max(above, key=lambda d: d.confidence)
+    primary = [d for d in above if d.label == "sprocket-hole-top-right"]
+    pool = primary or above
+    return max(pool, key=lambda d: d.confidence)

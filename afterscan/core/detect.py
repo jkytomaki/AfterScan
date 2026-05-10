@@ -38,6 +38,7 @@ class Detector:
         except Exception:
             return []
         out: list[Detection] = []
+        names = getattr(model, "names", {}) or {}
         for r in results:
             boxes = getattr(r, "boxes", None)
             if boxes is None:
@@ -45,9 +46,12 @@ class Detector:
             for box in boxes:
                 xyxy = box.xyxy[0].tolist()
                 conf = float(box.conf[0]) if box.conf is not None else 0.0
+                cls_id = int(box.cls[0]) if box.cls is not None else -1
+                label = names.get(cls_id, "sprocket")
                 x0, y0, x1, y1 = xyxy
                 out.append(Detection(
-                    x=x0, y=y0, width=x1 - x0, height=y1 - y0, confidence=conf,
+                    x=x0, y=y0, width=x1 - x0, height=y1 - y0,
+                    confidence=conf, label=label,
                 ))
         return out
 

@@ -34,7 +34,10 @@ from afterscan.ui.widgets.buttons import IconBtn
 
 _THUMB_COUNT = 28
 _JOB_LIST_PATH = Path.home() / ".config" / "afterscan" / "joblist.json"
-_DEFAULT_YOLO_MODEL = Path(__file__).resolve().parents[1] / "Resources" / "yolo_sprocket_detector.pt"
+_DEFAULT_YOLO_MODEL = (
+    Path(__file__).resolve().parents[1]
+    / "Resources" / "yolo_sprocket_detector_3class.pt"
+)
 # Reject shifts larger than these — almost certainly a misdetection. Mirrors
 # the legacy AfterScan.py thresholds (line 4685).
 _MAX_SHIFT_X = 200

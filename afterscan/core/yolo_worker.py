@@ -142,4 +142,10 @@ def _pick_best(detections: list[Detection], threshold: float) -> Optional[Detect
     above = [d for d in detections if d.confidence >= threshold]
     if not above:
         return None
-    return max(above, key=lambda d: d.confidence)
+    # Prefer the top-right corner — sharpest, highest-contrast feature.
+    # Fall back to any surviving class so the legacy single-class model
+    # ("sprocket-hole" only) still tracks. Phase 1 replaces this with
+    # multi-anchor fusion.
+    primary = [d for d in above if d.label == "sprocket-hole-top-right"]
+    pool = primary or above
+    return max(pool, key=lambda d: d.confidence)
