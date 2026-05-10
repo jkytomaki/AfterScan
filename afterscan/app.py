@@ -19,7 +19,7 @@ from afterscan import __version__
 from afterscan.core import jobs as jobs_io
 from afterscan.core.classical_worker import ClassicalDetectTask
 from afterscan.core import yolo_worker
-from afterscan.core.rotation_estimate import EstimateRotationTask
+from afterscan.core.reel_calibrate import Calibration, CalibrateReelTask
 from afterscan.core.yolo_worker import YoloDetectTask
 from afterscan.core.frames import FrameSource
 from afterscan.core.job_runner import JobRunner
@@ -285,16 +285,19 @@ class MainWindow(QMainWindow):
         model_path = self.settings.yolo_model or str(_DEFAULT_YOLO_MODEL)
         source_panel = self.inspector.panels["source"]
         source_panel.set_estimate_busy(True)
-        task = EstimateRotationTask(self._frame_source, model_path)
-        task.signals.finished.connect(self._on_rotation_estimated)
+        task = CalibrateReelTask(self._frame_source, model_path)
+        task.signals.finished.connect(self._on_calibration_estimated)
         yolo_worker.thread_pool().start(task)
 
-    def _on_rotation_estimated(self, value) -> None:
+    def _on_calibration_estimated(self, calib: Calibration) -> None:
         source_panel = self.inspector.panels["source"]
         source_panel.set_estimate_busy(False)
-        if value is None:
-            return
-        source_panel.set_rotation(float(value))
+        if calib.rotation is not None:
+            source_panel.set_rotation(float(calib.rotation))
+        if calib.film_format is not None:
+            source_panel.set_format(calib.film_format)
+        if calib.pitch is not None:
+            self.settings.sprocket_pitch_px = float(calib.pitch)
         self.preview.update_canvas()
 
     def _set_template(self) -> None:

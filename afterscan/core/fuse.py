@@ -35,6 +35,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from afterscan.core.detect import Detection
+from afterscan.core.settings import FilmFormat
 
 
 _TOP_RIGHT = "sprocket-hole-top-right"
@@ -45,6 +46,10 @@ _CLASS_PRIORITY = (_TOP_RIGHT, _BOTTOM_RIGHT, _SEAM_RIGHT)
 
 _X_TOLERANCE = 30        # px — top-right outlier rejection band around in-frame median
 _MIN_Y_SEPARATION = 100  # px — minimum baseline for a meaningful rotation slope
+# Format detection: |top.y − seam.y| / pitch. Super 8 ≈ 0.5, Regular 8 ≈ 0.0
+# (sprocket centered on the seam). Threshold sits at the midpoint so a
+# decisive vote either way lands cleanly.
+_FORMAT_THRESHOLD = 0.25
 
 
 @dataclass(frozen=True)
@@ -133,6 +138,57 @@ def _pick_primary(
         if candidates:
             return max(candidates, key=lambda d: d.confidence)
     return max(fallback_pool, key=lambda d: d.confidence)
+
+
+def estimate_pitch(detection_lists: list[list[Detection]]) -> Optional[float]:
+    """Median y-distance between adjacent same-frame top-right corners.
+
+    Pitch is constant per reel (set by the film format and scan
+    resolution), so the median across many frames cancels out
+    misdetections and rounding noise. Returns ``None`` if no frame in
+    the sample contains 2+ top-right detections."""
+    pitches: list[float] = []
+    for detections in detection_lists:
+        ys = sorted(class_anchor(d)[1] for d in detections if d.label == _TOP_RIGHT)
+        for i in range(len(ys) - 1):
+            gap = ys[i + 1] - ys[i]
+            if gap > 0:
+                pitches.append(gap)
+    if not pitches:
+        return None
+    pitches.sort()
+    return pitches[len(pitches) // 2]
+
+
+def detect_format(
+    detection_lists: list[list[Detection]],
+    pitch: Optional[float],
+) -> Optional[FilmFormat]:
+    """Classify the reel as Super 8 or Regular 8 from the y-offset
+    between each frame's top-right corner and its nearest seam.
+
+    Super 8: the seam sits midway between sprockets → offset ≈ ½ pitch.
+    Regular 8: the sprocket straddles the seam → offset ≈ ½ sprocket
+    height, which is much smaller than ½ pitch.
+
+    Returns ``None`` if either no frame in the sample shows both a
+    top-right and a seam, or `pitch` is unknown."""
+    if pitch is None or pitch <= 0:
+        return None
+    ratios: list[float] = []
+    for detections in detection_lists:
+        tops = [class_anchor(d)[1] for d in detections if d.label == _TOP_RIGHT]
+        seams = [class_anchor(d)[1] for d in detections if d.label == _SEAM_RIGHT]
+        if not tops or not seams:
+            continue
+        for ty in tops:
+            nearest = min(seams, key=lambda sy: abs(sy - ty))
+            ratios.append(abs(ty - nearest) / pitch)
+    if not ratios:
+        return None
+    ratios.sort()
+    median = ratios[len(ratios) // 2]
+    return "super8" if median > _FORMAT_THRESHOLD else "regular8"
 
 
 def _rotation_from_class(detections: list[Detection]) -> Optional[float]:

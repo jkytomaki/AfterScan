@@ -31,12 +31,12 @@ class SourceInspector(QWidget):
 
         # ── Source ────────────────────────────────────────────
         source = Section("Source")
-        format_seg = Seg(
+        self._format_seg = Seg(
             [("super8", "Super 8"), ("regular8", "Regular 8")],
             value=self._s.format,
         )
-        format_seg.changed.connect(lambda v: setattr(self._s, "format", v))
-        source.add(Field("Film format", format_seg))
+        self._format_seg.changed.connect(lambda v: setattr(self._s, "format", v))
+        source.add(Field("Film format", self._format_seg))
 
         path_input = QLineEdit(self._s.source_dir)
         path_input.setReadOnly(True)
@@ -111,6 +111,10 @@ class SourceInspector(QWidget):
     def set_estimate_busy(self, busy: bool) -> None:
         self._estimate_btn.setEnabled(not busy)
         self._estimate_btn.setText("Estimating…" if busy else "Estimate from frames")
+
+    def set_format(self, value: str) -> None:
+        """Programmatic format update from reel calibration."""
+        self._format_seg.set_value(value)
 
     def _set_frame_from(self, text: str) -> None:
         try:
