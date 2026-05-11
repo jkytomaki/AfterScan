@@ -63,7 +63,7 @@ class _CachedDetection:
     anchor_x: float
     anchor_y: float
     label: str
-    anchors: list[tuple[float, float, str]]
+    anchors: list[tuple[float, float, str, float]]
 
 
 class MainWindow(QMainWindow):
@@ -310,6 +310,7 @@ class MainWindow(QMainWindow):
         self.filmstrip.set_frame(idx)
         if self._restore_from_cache(idx):
             return
+        self._update_frame_data()
         self._schedule_detection()
 
     def _render_cached(self, idx: int) -> None:
@@ -325,6 +326,7 @@ class MainWindow(QMainWindow):
             self.preview.clear_detection()
             self.preview.clear_shift()
             self._latest_anchor = None
+            self._update_frame_data()
             return
         self.preview.set_detection(
             cached.anchor_x, cached.anchor_y, cached.label,
@@ -570,6 +572,7 @@ class MainWindow(QMainWindow):
                 or self._latest_anchor is None
                 or not s.stabilize):
             self.preview.clear_shift()
+            self._update_frame_data()
             return
         rx, ry = s.reference_x, s.reference_y
         cx, cy = self._latest_anchor
@@ -578,8 +581,45 @@ class MainWindow(QMainWindow):
         # Likely-misdetection guard: an outlier shift snaps the preview
         # halfway across the canvas. Drop it; keep the previous shift.
         if abs(dx) > _MAX_SHIFT_X or abs(dy) > _MAX_SHIFT_Y:
+            self._update_frame_data()
             return
         self.preview.set_shift(dx, dy)
+        self._update_frame_data()
+
+    def _update_frame_data(self) -> None:
+        if self._frame_source is None:
+            return
+        idx = self.frame_range.current
+        image_path = str(self._frame_source.path(idx))
+        in_cache = idx in self._detection_cache
+        cached = self._detection_cache.get(idx)
+        s = self.settings
+        reference = (
+            (s.reference_x, s.reference_y)
+            if s.reference_x is not None and s.reference_y is not None
+            else None
+        )
+        shift = None
+        if reference is not None and cached is not None and s.stabilize:
+            rx, ry = reference
+            dx = rx - cached.anchor_x + s.comp_x
+            dy = ry - cached.anchor_y + s.comp_y
+            if abs(dx) <= _MAX_SHIFT_X and abs(dy) <= _MAX_SHIFT_Y:
+                shift = (dx, dy)
+        self.inspector.frame_data.update_frame(
+            frame_idx=idx,
+            image_path=image_path,
+            in_cache=in_cache,
+            cached=cached,
+            reference=reference,
+            shift=shift,
+            comp=(s.comp_x, s.comp_y),
+            rotation=s.rotation,
+            sprocket_pitch_px=s.sprocket_pitch_px,
+            crop_enabled=s.crop,
+            crop_bounds=(s.crop_left, s.crop_top, s.crop_right, s.crop_bottom),
+            crop_aspect=s.aspect,
+        )
 
     def _schedule_detection(self) -> None:
         if (self._frame_source is None
@@ -644,7 +684,7 @@ class MainWindow(QMainWindow):
                 f"({result.anchor_x:.1f}, {result.anchor_y:.1f}) · "
                 f"{len(result.anchors)} anchors"
             )
-            anchors = [(a.x, a.y, a.label) for a in result.anchors]
+            anchors = [(a.x, a.y, a.label, a.confidence) for a in result.anchors]
             self._detection_cache[frame_idx] = _CachedDetection(
                 anchor_x=result.anchor_x, anchor_y=result.anchor_y,
                 label=label, anchors=anchors,

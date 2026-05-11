@@ -27,7 +27,7 @@ class Preview(QFrame):
         self._show_split = False
         self._detection_point: tuple[float, float] | None = None
         self._detection_label: str = ""
-        self._detection_anchors: list[tuple[float, float, str]] = []
+        self._detection_anchors: list[tuple[float, float, str, float]] = []
         self._shift: tuple[float, float] | None = None
 
         outer = QVBoxLayout(self)
@@ -75,20 +75,20 @@ class Preview(QFrame):
         x: float,
         y: float,
         label: str = "",
-        anchors: list[tuple[float, float, str]] | None = None,
+        anchors: list[tuple[float, float, str, float]] | None = None,
     ) -> None:
         """Show the detection as small class-colored crosshairs.
 
         `(x, y)` is the **primary** anchor — what stabilization is
         actually using.  `anchors` is the list of all surviving
-        anchors after fusion, each as ``(x, y, class_label)``; the
+        anchors after fusion, each as ``(x, y, class_label, confidence)``; the
         canvas paints one small crosshair per entry, color-coded by
         class.  The classical detector path passes ``anchors=None``;
         we synthesize a single-anchor list so the same drawing code
         handles both."""
         self._detection_point = (x, y)
         self._detection_label = label
-        self._detection_anchors = list(anchors) if anchors else [(x, y, "")]
+        self._detection_anchors = list(anchors) if anchors else [(x, y, "", 0.0)]
         self.update_canvas()
 
     def clear_detection(self) -> None:
@@ -156,7 +156,7 @@ class _Canvas(QFrame):
         self._settings: Settings | None = None
         self._detection_point: tuple[float, float] | None = None
         self._detection_label: str = ""
-        self._detection_anchors: list[tuple[float, float, str]] = []
+        self._detection_anchors: list[tuple[float, float, str, float]] = []
         self._shift: tuple[float, float] | None = None
         self._viewport_rect: QRect | None = None
         self._drag_handle: str | None = None
@@ -325,7 +325,7 @@ class _Canvas(QFrame):
         sy = frame.height() / pm.height()
         primary_xy = self._detection_point
 
-        for ax, ay, label in self._detection_anchors:
+        for ax, ay, label, _conf in self._detection_anchors:
             cx = frame.x() + ax * sx
             cy = frame.y() + ay * sy
             color = _class_color(label)

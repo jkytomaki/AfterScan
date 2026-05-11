@@ -64,9 +64,10 @@ class Inspector(QFrame):
         }
         self._groups: dict[str, CollapsibleGroup] = {}
 
+        self.frame_data = FrameDataInspector(settings, frame_range)
         self._tab_stack = QStackedWidget()
         self._tab_stack.addWidget(self._build_settings_page())
-        self._tab_stack.addWidget(self._scroll(FrameDataInspector(settings, frame_range)))
+        self._tab_stack.addWidget(self._scroll(self.frame_data))
         layout.addWidget(self._tab_stack, stretch=1)
 
         self._apply_tab_state()
