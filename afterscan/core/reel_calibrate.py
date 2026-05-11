@@ -33,7 +33,7 @@ from afterscan.core.detect import Detection
 from afterscan.core.frames import FrameSource
 from afterscan.core.fuse import (
     _TOP_RIGHT, _BOTTOM_RIGHT, _SEAM_RIGHT,
-    class_anchor, detect_format, estimate_pitch,
+    ReelLayout, class_anchor, detect_format, estimate_pitch, fuse_anchors,
 )
 from afterscan.core.settings import FilmFormat
 
@@ -53,6 +53,11 @@ class Calibration:
     right_x: Optional[float] = None    # seam column
     # Regular 8: median (seam_y − top_right_y) across calibration frames.
     corner_to_seam_offset: Optional[float] = None
+    # Synthetic reference: median canonical anchor across calibration frames.
+    # In the same coordinate system as per-frame fuse_anchors output, so it
+    # can be stored directly in Settings.reference_x / reference_y.
+    reference_x: Optional[float] = None
+    reference_y: Optional[float] = None
 
 
 def _frame_slopes(detections: list[Detection]) -> list[float]:
@@ -111,6 +116,15 @@ def calibrate(
     left_x, right_x, corner_to_seam_offset = _column_xs(
         per_frame, rotation or 0.0, pitch, film_format,
     )
+    layout = ReelLayout(
+        rotation_deg=rotation or 0.0,
+        pitch=pitch,
+        film_format=film_format,
+        left_x=left_x,
+        right_x=right_x,
+        corner_to_seam_offset=corner_to_seam_offset,
+    )
+    ref_x, ref_y = _synthetic_reference(per_frame, layout, confidence)
     return Calibration(
         rotation=rotation,
         film_format=film_format,
@@ -118,7 +132,28 @@ def calibrate(
         left_x=left_x,
         right_x=right_x,
         corner_to_seam_offset=corner_to_seam_offset,
+        reference_x=ref_x,
+        reference_y=ref_y,
     )
+
+
+def _synthetic_reference(
+    per_frame: list[list[Detection]],
+    layout: ReelLayout,
+    threshold: float,
+) -> tuple[Optional[float], Optional[float]]:
+    """Median canonical anchor across calibration frames.
+
+    Only layout_fit and pair_fit frames contribute — those have at least
+    two compatible detections, giving a reliable canonical position."""
+    xs: list[float] = []
+    ys: list[float] = []
+    for detections in per_frame:
+        result = fuse_anchors(detections, threshold=threshold, layout=layout)
+        if result is not None and result.tier in ("layout_fit", "pair_fit"):
+            xs.append(result.anchor[0])
+            ys.append(result.anchor[1])
+    return _median(xs), _median(ys)
 
 
 def _column_xs(

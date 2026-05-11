@@ -15,6 +15,7 @@ class Filmstrip(QFrame):
     seek_requested = Signal(int)
     play_toggled = Signal(bool)
     set_reference_clicked = Signal()
+    auto_setup_clicked = Signal()
 
     def __init__(self, settings: Settings, frame_range: FrameRange, parent=None) -> None:
         super().__init__(parent)
@@ -50,14 +51,22 @@ class Filmstrip(QFrame):
         ref_btn = Btn("Set reference", variant="ghost")
         ref_btn.clicked.connect(self.set_reference_clicked)
         row.addWidget(ref_btn)
+        self._auto_setup_btn = Btn("Auto Setup", variant="ghost")
+        self._auto_setup_btn.clicked.connect(self.auto_setup_clicked)
+        row.addWidget(self._auto_setup_btn)
         row.addStretch(1)
 
         self._time = QLabel("—")
+
         self._time.setStyleSheet(
             f"color: {DARK.fg_2}; font-family: 'JetBrains Mono', monospace; font-size: 11px;"
         )
         row.addWidget(self._time)
         return row
+
+    def set_auto_setup_busy(self, busy: bool) -> None:
+        self._auto_setup_btn.setEnabled(not busy)
+        self._auto_setup_btn.setText("Setting up…" if busy else "Auto Setup")
 
     def set_thumbnails(self, thumbs: list[QPixmap]) -> None:
         self._strip.set_thumbnails(thumbs)

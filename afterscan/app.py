@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import os
 
 from PySide6.QtCore import Qt, QThreadPool, QTimer
@@ -208,6 +209,7 @@ class MainWindow(QMainWindow):
         source = self.inspector.panels["source"]
         source.rotation_changed.connect(lambda _v: self.preview.update_canvas())
         source.estimate_rotation_clicked.connect(self._estimate_rotation)
+        self.filmstrip.auto_setup_clicked.connect(self._auto_setup)
         self._runner.job_started.connect(self._on_job_started)
         self._runner.job_progress.connect(self._on_job_progress)
         self._runner.job_finished.connect(self._on_job_finished)
@@ -565,6 +567,75 @@ class MainWindow(QMainWindow):
             self.settings.seam_right_x = float(calib.right_x)
         self._stop_prefetch()  # prefetch cache is stale after new layout
         self.preview.update_canvas()
+
+    def _auto_setup(self) -> None:
+        if self._frame_source is None:
+            return
+        model_path = self.settings.yolo_model or str(_DEFAULT_YOLO_MODEL)
+        source_panel = self.inspector.panels["source"]
+        source_panel.set_estimate_busy(True)
+        self.filmstrip.set_auto_setup_busy(True)
+        task = CalibrateReelTask(self._frame_source, model_path)
+        task.signals.finished.connect(self._on_auto_setup_done)
+        yolo_worker.thread_pool().start(task)
+
+    def _on_auto_setup_done(self, calib: Calibration) -> None:
+        source_panel = self.inspector.panels["source"]
+        source_panel.set_estimate_busy(False)
+        self.filmstrip.set_auto_setup_busy(False)
+        if calib.rotation is not None:
+            source_panel.set_rotation(float(calib.rotation))
+        if calib.film_format is not None:
+            source_panel.set_format(calib.film_format)
+        if calib.pitch is not None:
+            self.settings.sprocket_pitch_px = float(calib.pitch)
+        if calib.left_x is not None:
+            self.settings.sprocket_left_x = float(calib.left_x)
+        if calib.right_x is not None:
+            self.settings.seam_right_x = float(calib.right_x)
+        if calib.reference_x is not None and calib.reference_y is not None:
+            self.settings.reference_x = calib.reference_x
+            self.settings.reference_y = calib.reference_y
+        crop = self._auto_crop_from_geometry(calib)
+        if crop is not None:
+            cl, ct, cr, cb = crop
+            self.settings.crop_left = cl
+            self.settings.crop_top = ct
+            self.settings.crop_right = cr
+            self.settings.crop_bottom = cb
+            self.settings.crop = True
+        self._stop_prefetch()
+        self._detection_cache.clear()
+        self.preview.update_canvas()
+
+    def _auto_crop_from_geometry(
+        self, calib: Calibration,
+    ) -> tuple[float, float, float, float] | None:
+        if (calib.left_x is None or calib.pitch is None
+                or calib.reference_y is None or self._frame_source is None):
+            return None
+        path = str(self._frame_source.path(0))
+        size = yolo_worker._image_size(path)
+        if size is None:
+            return None
+        img_w, img_h = size
+        rotation_deg = calib.rotation or 0.0
+        tan_theta = math.tan(math.radians(rotation_deg))
+        ref_y = calib.reference_y
+        # Convert rotation-corrected column x back to image-space x at ref_y.
+        sprocket_x = calib.left_x + ref_y * tan_theta
+        seam_x = (
+            calib.right_x + ref_y * tan_theta
+            if calib.right_x is not None
+            else img_w * 0.97
+        )
+        margin_x = img_w * 0.02
+        margin_y = img_h * 0.02
+        cl = max(0.0, min(0.9, (sprocket_x + margin_x) / img_w))
+        cr = max(cl + 0.1, min(1.0, (seam_x - margin_x) / img_w))
+        ct = max(0.0, min(0.9, (ref_y + margin_y) / img_h))
+        cb = max(ct + 0.1, min(1.0, (ref_y + calib.pitch - margin_y) / img_h))
+        return (cl, ct, cr, cb)
 
     def _reel_layout(self) -> ReelLayout:
         s = self.settings
