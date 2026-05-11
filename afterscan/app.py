@@ -20,6 +20,7 @@ from afterscan import __version__
 from afterscan.core import jobs as jobs_io
 from afterscan.core.classical_worker import ClassicalDetectTask
 from afterscan.core import yolo_worker
+from afterscan.core.fuse import ReelLayout
 from afterscan.core.reel_calibrate import Calibration, CalibrateReelTask
 from afterscan.core.yolo_worker import PrefetchAnchorsTask, YoloDetectTask
 from afterscan.core.frames import FrameSource
@@ -447,6 +448,7 @@ class MainWindow(QMainWindow):
             self._frame_source, from_idx, end, model_path,
             self.settings.confidence,
             edge_refine=self.settings.edge_refinement,
+            layout=self._reel_layout(),
         )
         task.signals.anchor_ready.connect(self._on_prefetch_anchor)
         task.signals.finished.connect(self._on_prefetch_finished)
@@ -557,7 +559,22 @@ class MainWindow(QMainWindow):
             source_panel.set_format(calib.film_format)
         if calib.pitch is not None:
             self.settings.sprocket_pitch_px = float(calib.pitch)
+        if calib.left_x is not None:
+            self.settings.sprocket_left_x = float(calib.left_x)
+        if calib.right_x is not None:
+            self.settings.seam_right_x = float(calib.right_x)
+        self._stop_prefetch()  # prefetch cache is stale after new layout
         self.preview.update_canvas()
+
+    def _reel_layout(self) -> ReelLayout:
+        s = self.settings
+        return ReelLayout(
+            rotation_deg=s.rotation,
+            pitch=s.sprocket_pitch_px,
+            film_format=s.format if s.sprocket_pitch_px else None,
+            left_x=s.sprocket_left_x,
+            right_x=s.seam_right_x,
+        )
 
     def _set_reference(self) -> None:
         if self._latest_anchor is None:
@@ -645,6 +662,7 @@ class MainWindow(QMainWindow):
             task = YoloDetectTask(
                 idx, path, model_path, self.settings.confidence,
                 edge_refine=self.settings.edge_refinement,
+                layout=self._reel_layout(),
             )
             task.signals.finished.connect(self._on_yolo_finished)
             yolo_worker.thread_pool().start(task)

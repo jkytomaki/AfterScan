@@ -31,7 +31,10 @@ from PySide6.QtCore import QObject, QRunnable, Signal
 from afterscan.core import yolo_worker
 from afterscan.core.detect import Detection
 from afterscan.core.frames import FrameSource
-from afterscan.core.fuse import class_anchor, detect_format, estimate_pitch
+from afterscan.core.fuse import (
+    _TOP_RIGHT, _BOTTOM_RIGHT, _SEAM_RIGHT,
+    class_anchor, detect_format, estimate_pitch,
+)
 from afterscan.core.settings import FilmFormat
 
 
@@ -42,9 +45,14 @@ _DEFAULT_SAMPLE = 12
 
 @dataclass(frozen=True)
 class Calibration:
-    rotation: Optional[float]      # degrees; None if no usable anchor pairs
+    rotation: Optional[float]           # degrees; None if no usable anchor pairs
     film_format: Optional[FilmFormat]   # None if no top+seam frames sampled
-    pitch: Optional[float]         # px; None if no frame had 2+ top-rights
+    pitch: Optional[float]              # px; None if no frame had 2+ top-rights
+    # Rotation-corrected column x values (x_corr = x − y·tan(θ), y_ref = 0).
+    left_x: Optional[float] = None     # sprocket column
+    right_x: Optional[float] = None    # seam column
+    # Regular 8: median (seam_y − top_right_y) across calibration frames.
+    corner_to_seam_offset: Optional[float] = None
 
 
 def _frame_slopes(detections: list[Detection]) -> list[float]:
@@ -100,7 +108,63 @@ def calibrate(
     rotation = _median(slopes)
     pitch = estimate_pitch(per_frame)
     film_format = detect_format(per_frame, pitch)
-    return Calibration(rotation=rotation, film_format=film_format, pitch=pitch)
+    left_x, right_x, corner_to_seam_offset = _column_xs(
+        per_frame, rotation or 0.0, pitch, film_format,
+    )
+    return Calibration(
+        rotation=rotation,
+        film_format=film_format,
+        pitch=pitch,
+        left_x=left_x,
+        right_x=right_x,
+        corner_to_seam_offset=corner_to_seam_offset,
+    )
+
+
+def _column_xs(
+    per_frame: list[list[Detection]],
+    rotation_deg: float,
+    pitch: Optional[float],
+    film_format,
+) -> tuple[Optional[float], Optional[float], Optional[float]]:
+    """Return (left_x, right_x, corner_to_seam_offset) from calibration frames.
+
+    All x values are rotation-corrected at y_ref = 0:
+    x_corr = x_image − y_image × tan(rotation_deg)."""
+    tan_theta = math.tan(math.radians(rotation_deg))
+
+    def xc(ax: float, ay: float) -> float:
+        return ax - ay * tan_theta
+
+    spr_xs: list[float] = []
+    seam_xs: list[float] = []
+    offsets: list[float] = []
+
+    for detections in per_frame:
+        for d in detections:
+            ax, ay = class_anchor(d)
+            if d.label in (_TOP_RIGHT, _BOTTOM_RIGHT):
+                spr_xs.append(xc(ax, ay))
+            elif d.label == _SEAM_RIGHT:
+                seam_xs.append(xc(ax, ay))
+
+        # corner_to_seam_offset: only meaningful for Regular 8.
+        if film_format == "regular8" and pitch:
+            top_rights = [(class_anchor(d)[0], class_anchor(d)[1])
+                          for d in detections if d.label == _TOP_RIGHT]
+            seam_ys = [class_anchor(d)[1]
+                       for d in detections if d.label == _SEAM_RIGHT]
+            for _, ty in top_rights:
+                if not seam_ys:
+                    continue
+                nearest = min(seam_ys, key=lambda sy: abs(sy - ty))
+                offset = nearest - ty
+                # Seam should be below the top-right corner (positive offset)
+                # and less than one pitch away.
+                if 0 < offset < pitch * 0.4:
+                    offsets.append(offset)
+
+    return _median(spr_xs), _median(seam_xs), _median(offsets)
 
 
 def _median(values: list[float]) -> Optional[float]:

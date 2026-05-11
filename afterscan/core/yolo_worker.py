@@ -27,7 +27,7 @@ from PySide6.QtCore import QObject, QRunnable, Signal
 
 from afterscan.core.classical.sprocket_corner_detect import _refine_top_edge_sobel
 from afterscan.core.detect import Detection, Detector
-from afterscan.core.fuse import class_anchor, fuse_anchors
+from afterscan.core.fuse import ReelLayout, class_anchor, fuse_anchors
 
 
 @dataclass(frozen=True)
@@ -195,6 +195,7 @@ class PrefetchAnchorsTask(QRunnable):
         model_path: str,
         threshold: float,
         edge_refine: bool = True,
+        layout: Optional[ReelLayout] = None,
     ) -> None:
         super().__init__()
         self.signals = _PrefetchSignals()
@@ -209,6 +210,7 @@ class PrefetchAnchorsTask(QRunnable):
         # pixels above scrubbing (using refined y) and the user sees
         # them at different positions.
         self._edge_refine = edge_refine
+        self._layout = layout
         self._stop = threading.Event()
 
     def stop(self) -> None:
@@ -233,7 +235,9 @@ class PrefetchAnchorsTask(QRunnable):
             traceback.print_exc()
             return None
         size = _image_size(path)
-        fused = fuse_anchors(detections, self._threshold, image_size=size)
+        fused = fuse_anchors(
+            detections, self._threshold, image_size=size, layout=self._layout,
+        )
         if fused is None:
             return None
         anchor_x, anchor_y = fused.anchor
@@ -274,6 +278,7 @@ class YoloDetectTask(QRunnable):
         model_path: str,
         confidence_threshold: float,
         edge_refine: bool = True,
+        layout: Optional[ReelLayout] = None,
     ) -> None:
         super().__init__()
         self.signals = _Signals()
@@ -282,6 +287,7 @@ class YoloDetectTask(QRunnable):
         self._model_path = model_path
         self._threshold = confidence_threshold
         self._edge_refine = edge_refine
+        self._layout = layout
 
     def run(self) -> None:
         result = self._detect()
@@ -294,7 +300,9 @@ class YoloDetectTask(QRunnable):
             traceback.print_exc()
             return None
         size = _image_size(self._image_path)
-        fused = fuse_anchors(detections, self._threshold, image_size=size)
+        fused = fuse_anchors(
+            detections, self._threshold, image_size=size, layout=self._layout,
+        )
         if fused is None:
             return None
         anchor_x, anchor_y = fused.anchor

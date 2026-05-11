@@ -38,7 +38,7 @@ from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal
 
 from afterscan.core import detect_classical, yolo_worker
 from afterscan.core.frames import FrameSource
-from afterscan.core.fuse import fuse_anchors
+from afterscan.core.fuse import ReelLayout, fuse_anchors
 from afterscan.core.jobs import Job, JobList
 from afterscan.core.settings import Settings
 from afterscan.core.smooth import smooth_dx
@@ -240,9 +240,17 @@ class _JobWorker(QRunnable):
         if s.method == "yolo":
             model_path = s.yolo_model or str(self._default_yolo_model)
             detections = yolo_worker.detect_image(model_path, path)
+            layout = ReelLayout(
+                rotation_deg=s.rotation,
+                pitch=s.sprocket_pitch_px,
+                film_format=s.format if s.sprocket_pitch_px else None,
+                left_x=s.sprocket_left_x,
+                right_x=s.seam_right_x,
+            )
             fused = fuse_anchors(
                 detections, s.confidence,
                 image_size=yolo_worker._image_size(path),
+                layout=layout,
             )
             if fused is None:
                 return None

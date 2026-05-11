@@ -30,10 +30,13 @@ class Settings:
     frame_to: int = 0
     rotation: float = 0.0
     # Median y-distance between adjacent sprocket-hole-top-right corners
-    # in the source scan. Estimated by reel calibration and used by the
-    # 3-class fuser to project bottom-right / seam anchors onto the same
-    # reference y as top-right anchors.
+    # in the source scan. Estimated by reel calibration.
     sprocket_pitch_px: float | None = None
+    # Rotation-corrected x positions of the sprocket and seam columns
+    # (x_corr = x_image − y_image × tan(rotation_deg), y_ref = 0).
+    # Estimated by reel calibration and used by the layout-aware fuser.
+    sprocket_left_x: float | None = None
+    seam_right_x: float | None = None
 
     # Stabilize
     stabilize: bool = True

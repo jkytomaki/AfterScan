@@ -1,38 +1,39 @@
-"""Multi-anchor fusion for the 3-class sprocket detector.
+"""Multi-anchor fusion with layout-aware canonical projection.
 
 The 3-class model emits up to ~6 detections per frame (2 sprocket
 top-right corners + 2 bottom-right corners + 2 frame-seam centers).
 Each detection produces one anchor point via :func:`class_anchor`.
 
 :func:`fuse_anchors` reduces those points to a single per-frame anchor
-that downstream code can compare against `settings.template_*`. In
-order:
+that downstream code can compare against `settings.template_*`.
 
-  1. Confidence threshold filter (drops below-threshold noise).
-  2. Within-class RANSAC for top-right corners: the right edge of the
-     sprocket strip is near-vertical, so any top-right whose x deviates
-     from the within-frame median by more than `_X_TOLERANCE` is a
-     misdetection — drop it.
-  3. Class fallback hierarchy (top-right > bottom-right > seam): pick
-     the highest-confidence detection in the best-available class as
-     the primary anchor. Sprocket corners are sharper than seams, so
-     we prefer them.
-  4. Side output `rotation`: slope between the two same-class anchors
-     with the largest y-separation, when ≥2 survive at sufficiently
-     different y. Reported in degrees off-vertical for callers that
-     want a per-frame rotation hint (e.g. Phase 3 temporal smoothing).
+When a :class:`ReelLayout` is provided (populated from reel calibration),
+the fuser applies the layout-aware pipeline described in
+docs/anchor-reasoning-strategy.md:
 
-Cross-class fusion (using fixed per-format offsets to project all three
-classes onto a common reference y) is intentionally deferred — it
-needs the format-detection histogram from Phase 2.
+  1. Hard geometry gates: sprocket x must be near the known left column;
+     seam x must be near the known right column (rotation-corrected).
+  2. Within-sprocket x consistency (RANSAC on rotation-corrected x).
+  3. Seam y positions identify the current frame's top and bottom
+     boundaries (seam pair is validated against the known pitch).
+  4. Every surviving sprocket is projected onto the canonical frame
+     reference (top-seam y of the current frame) using the nearest
+     seam. This removes the spurious y-jump when the fuser switches
+     between the upper and lower visible sprocket.
+  5. Weighted fusion of all projected estimates.
+  6. Evidence-tier label so callers can apply calibration updates
+     selectively (only update slow x/rotation from ``layout_fit``).
 
-Pure functions only; no Qt or torch imports. Cheap to unit-test."""
+Without a ReelLayout the legacy path runs unchanged (backward-compatible
+for callers that don't yet carry calibration state).
+
+Pure functions only; no Qt or torch imports."""
 
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Optional
+from typing import Literal, Optional
 
 from afterscan.core.detect import Detection
 from afterscan.core.settings import FilmFormat
@@ -44,31 +45,72 @@ _SEAM_RIGHT = "frame-seam-right"
 
 _CLASS_PRIORITY = (_TOP_RIGHT, _BOTTOM_RIGHT, _SEAM_RIGHT)
 
-_X_TOLERANCE = 30        # px — top-right outlier rejection band around in-frame median
-_MIN_Y_SEPARATION = 100  # px — minimum baseline for a meaningful rotation slope
-# Format detection: |top.y − seam.y| / pitch. Super 8 ≈ 0.5, Regular 8 ≈ 0.0
-# (sprocket centered on the seam). Threshold sits at the midpoint so a
-# decisive vote either way lands cleanly.
+# ── legacy constants (fallback path) ─────────────────────────────────────────
+_X_TOLERANCE = 30
+_MIN_Y_SEPARATION = 100
 _FORMAT_THRESHOLD = 0.25
-# Cross-class outlier rejection: a sprocket detection with confidence
-# below `_HIGH_CONF` is only trusted when another sprocket-class
-# detection sits within `_BUDDY_Y_TOLERANCE` px vertically.  A blown-out
-# / saturated sprocket can fire a single ~0.5 detection at the wrong y
-# with nothing else nearby — without this guard, closest-to-center
-# happily picks it as primary and the frame jumps.
 _HIGH_CONF = 0.85
 _BUDDY_Y_TOLERANCE = 50
+
+# ── layout-aware gate tolerances ──────────────────────────────────────────────
+# Rotation-corrected x band around the known sprocket column.
+_SPROCKET_X_GATE = 45
+# Rotation-corrected x band around the known seam column.
+_SEAM_X_GATE = 80
+# Minimum horizontal separation between sprocket and seam columns (as a
+# fraction of image width) used to reject seams that landed in the content
+# area.
+_SPROCKET_SEAM_MIN_SEP_FRAC = 0.25
+# Fractional tolerance when validating the seam pair against known pitch.
+_PITCH_TOLERANCE = 0.20
+# Seam detections trust weight in the y-fusion (seams are fuzzier than corners).
+_SEAM_Y_WEIGHT = 0.6
+# Default Regular 8 ratio: (seam_y - top_right_y) / pitch.
+# Derived from the reference scan: 151 px / 1119 px ≈ 0.135.
+_R8_CORNER_SEAM_RATIO = 0.15
+
+
+EvidenceTier = Literal[
+    "layout_fit",       # 3-4 compatible anchors → may update slow layout state
+    "pair_fit",         # 2 compatible anchors → cautious update OK
+    "single_projected", # 1 geometrically plausible anchor → no layout update
+    "seam_only",        # only seam evidence → lower-trust anchor
+    "predicted",        # no valid detection → use temporal fallback
+]
+
+
+@dataclass(frozen=True)
+class ReelLayout:
+    """Slow reel-level geometry state consumed by :func:`fuse_anchors`.
+
+    All x values are *rotation-corrected* at y_ref = 0:
+    ``x_corr = x_image − y_image × tan(rotation_deg)``.
+    Callers that store/restore these values must use the same convention.
+    """
+    rotation_deg: float = 0.0
+    pitch: Optional[float] = None
+    film_format: Optional[FilmFormat] = None
+    # Learned rotation-corrected x of the left sprocket column.
+    left_x: Optional[float] = None
+    # Learned rotation-corrected x of the right seam column.
+    right_x: Optional[float] = None
+    # Calibrated offset: seam_y − top_right_y for Regular 8.
+    # Positive = seam is below the top-right corner.
+    corner_to_seam_offset: Optional[float] = None
 
 
 @dataclass(frozen=True)
 class FuseResult:
     """Output of :func:`fuse_anchors`."""
 
-    anchor: tuple[float, float]    # fused (x, y) — primary detection's class anchor
-    primary: Detection             # the chosen detection (used for edge-refinement)
-    surviving: list[Detection]     # detections that passed threshold + RANSAC
-    rotation: Optional[float]      # slope (deg off-vertical) from a same-class pair
+    anchor: tuple[float, float]    # fused (x, y) — canonical frame reference
+    primary: Detection             # best detection (used for edge refinement)
+    surviving: list[Detection]     # detections that passed all gates
+    rotation: Optional[float]      # slope (deg off-vertical) from sprocket pair
+    tier: EvidenceTier = "pair_fit"
 
+
+# ── public helpers ────────────────────────────────────────────────────────────
 
 def class_anchor(det: Detection) -> tuple[float, float]:
     """The single anchor point each detection class contributes.
@@ -76,7 +118,7 @@ def class_anchor(det: Detection) -> tuple[float, float]:
     - `sprocket-hole-top-right`    → top-right corner of bbox
     - `sprocket-hole-bottom-right` → bottom-right corner of bbox
     - `frame-seam-right`           → bbox center (T-junction on right edge)
-    - anything else (legacy single-class fallback) → top-right corner"""
+    - anything else (legacy)       → top-right corner"""
     if det.label == _TOP_RIGHT:
         return (det.x + det.width, det.y)
     if det.label == _BOTTOM_RIGHT:
@@ -91,22 +133,273 @@ def fuse_anchors(
     threshold: float,
     *,
     image_size: Optional[tuple[int, int]] = None,
+    layout: Optional[ReelLayout] = None,
 ) -> Optional[FuseResult]:
     """Reduce a frame's detections to a single fused anchor.
 
-    When ``image_size`` is provided the primary detection is the one
-    whose anchor sits closest to the image center — this keeps the
-    anchor inside the frame (a sprocket near the image edge can have
-    its top-right corner outside the picture, useless for shift
-    computation). Without ``image_size`` we fall back to highest
-    confidence.
+    When ``layout`` is provided and contains enough geometry information
+    the layout-aware pipeline runs.  Otherwise the legacy path is used
+    (backward-compatible behaviour).
 
-    Returns ``None`` if no detection clears `threshold`."""
+    Returns ``None`` if no detection survives the threshold + gates."""
     above = [d for d in detections if d.confidence >= threshold]
     if not above:
         return None
 
-    above = _drop_unsupported_sprockets(above)
+    if layout is not None and _layout_is_usable(layout):
+        return _layout_fuse(above, layout, image_size)
+
+    return _legacy_fuse(above, image_size)
+
+
+# ── calibration helpers (used by reel_calibrate.py) ───────────────────────────
+
+def estimate_pitch(detection_lists: list[list[Detection]]) -> Optional[float]:
+    """Median y-distance between adjacent same-frame top-right corners."""
+    pitches: list[float] = []
+    for detections in detection_lists:
+        ys = sorted(class_anchor(d)[1] for d in detections if d.label == _TOP_RIGHT)
+        for i in range(len(ys) - 1):
+            gap = ys[i + 1] - ys[i]
+            if gap > 0:
+                pitches.append(gap)
+    if not pitches:
+        return None
+    pitches.sort()
+    return pitches[len(pitches) // 2]
+
+
+def detect_format(
+    detection_lists: list[list[Detection]],
+    pitch: Optional[float],
+) -> Optional[FilmFormat]:
+    """Classify the reel as Super 8 or Regular 8."""
+    if pitch is None or pitch <= 0:
+        return None
+    ratios: list[float] = []
+    for detections in detection_lists:
+        tops = [class_anchor(d)[1] for d in detections if d.label == _TOP_RIGHT]
+        seams = [class_anchor(d)[1] for d in detections if d.label == _SEAM_RIGHT]
+        if not tops or not seams:
+            continue
+        for ty in tops:
+            nearest = min(seams, key=lambda sy: abs(sy - ty))
+            ratios.append(abs(ty - nearest) / pitch)
+    if not ratios:
+        return None
+    ratios.sort()
+    median = ratios[len(ratios) // 2]
+    return "super8" if median > _FORMAT_THRESHOLD else "regular8"
+
+
+# ── layout-aware path ─────────────────────────────────────────────────────────
+
+def _layout_is_usable(layout: ReelLayout) -> bool:
+    # Pitch is required: without it the canonical y projection doesn't work and
+    # the bottom-seam contributions can't be projected to the top-seam reference.
+    # left_x alone is not enough — it would activate the layout path on uncalibrated
+    # reels where only x from a previous reel's calibration was carried over.
+    return layout.pitch is not None and layout.film_format is not None
+
+
+def _xcorr(ax: float, ay: float, tan_theta: float) -> float:
+    """Rotation-corrected x at y_ref = 0: x_corr = x − y × tan(θ)."""
+    return ax - ay * tan_theta
+
+
+def _layout_fuse(
+    detections: list[Detection],
+    layout: ReelLayout,
+    image_size: Optional[tuple[int, int]],
+) -> Optional[FuseResult]:
+    """Role-aware layout fusion: project every valid detection to the same
+    canonical frame reference (top-seam y of the current frame) before fusing.
+
+    For Regular 8mm, each sprocket hole straddles a seam.  The canonical
+    reference y is the top seam of the current frame.  Both the "upper
+    hole" corner near the top seam and the "lower hole" corner near the
+    bottom seam project to this same reference, so switching between them
+    does not cause a crop jump."""
+    if not detections:
+        return None
+
+    # Super 8 projection not yet implemented; fall back to legacy path.
+    if layout.film_format == "super8":
+        return _legacy_fuse(detections, image_size)
+
+    tan_theta = math.tan(math.radians(layout.rotation_deg))
+    pitch = layout.pitch
+    img_w = image_size[0] if image_size else None
+    img_h = image_size[1] if image_size else None
+
+    def xc(det: Detection) -> float:
+        ax, ay = class_anchor(det)
+        return _xcorr(ax, ay, tan_theta)
+
+    # ── Step 1: partition ────────────────────────────────────────────────────
+    sprockets = [d for d in detections if d.label in (_TOP_RIGHT, _BOTTOM_RIGHT)]
+    seams = [d for d in detections if d.label == _SEAM_RIGHT]
+
+    # ── Step 2: hard x-gates ─────────────────────────────────────────────────
+    if layout.left_x is not None:
+        sprockets = [d for d in sprockets
+                     if abs(xc(d) - layout.left_x) <= _SPROCKET_X_GATE]
+    if layout.right_x is not None:
+        seams = [d for d in seams
+                 if abs(xc(d) - layout.right_x) <= _SEAM_X_GATE]
+
+    # Gate seams that land in the content area (must be clearly right of sprockets).
+    if sprockets and seams and img_w:
+        spr_xc_avg = sum(xc(d) for d in sprockets) / len(sprockets)
+        min_seam_xc = spr_xc_avg + img_w * _SPROCKET_SEAM_MIN_SEP_FRAC
+        seams = [d for d in seams if xc(d) >= min_seam_xc]
+
+    # ── Step 3: within-sprocket x RANSAC (rotation-corrected) ───────────────
+    if len(sprockets) >= 2:
+        sxs = sorted(xc(d) for d in sprockets)
+        med_xc = sxs[len(sxs) // 2]
+        sprockets = [d for d in sprockets if abs(xc(d) - med_xc) <= _SPROCKET_X_GATE]
+
+    # ── Step 4: identify frame boundaries from seam y positions ─────────────
+    seam_ys = sorted(class_anchor(d)[1] for d in seams)
+    top_seam_y = seam_ys[0] if seam_ys else None
+    bot_seam_y = seam_ys[-1] if len(seam_ys) >= 2 else None
+
+    # Validate pitch of the seam pair.
+    if top_seam_y is not None and bot_seam_y is not None and pitch is not None:
+        seam_gap = bot_seam_y - top_seam_y
+        if abs(seam_gap / pitch - 1.0) > _PITCH_TOLERANCE:
+            best = max(seams, key=lambda d: d.confidence)
+            seams = [best]
+            seam_ys = [class_anchor(best)[1]]
+            top_seam_y = seam_ys[0]
+            bot_seam_y = None
+
+    # ── Step 5: project each detection to canonical y (top seam) ─────────────
+    corner_ratio = (
+        layout.corner_to_seam_offset / pitch
+        if layout.corner_to_seam_offset is not None and pitch
+        else _R8_CORNER_SEAM_RATIO
+    )
+    proj: list[tuple[float, float, Detection]] = []  # (canon_y, weight, det)
+
+    for d in sprockets:
+        _, ay = class_anchor(d)
+        w = d.confidence
+        cy, wf = _project_to_canon_y(ay, top_seam_y, bot_seam_y, pitch, img_h, corner_ratio)
+        proj.append((cy, w * wf, d))
+
+    for d in seams:
+        ay = class_anchor(d)[1]
+        w = d.confidence * _SEAM_Y_WEIGHT
+        if bot_seam_y is not None:
+            # Bottom seam: project to top seam by subtracting pitch.
+            if abs(ay - bot_seam_y) < abs(ay - top_seam_y):  # type: ignore[operator]
+                # When pitch is None, both seams are observed so we can derive
+                # the pitch from them: bot - top.  Either way, canonical = top_seam_y.
+                canon = (bot_seam_y - pitch) if pitch else top_seam_y
+                proj.append((canon, w, d))
+            else:
+                proj.append((ay, w, d))
+        elif top_seam_y is not None:
+            proj.append((ay, w, d))
+
+    if not proj:
+        return None
+
+    # ── Step 6: weighted canonical y ────────────────────────────────────────
+    total_w = sum(w for _, w, _ in proj)
+    canon_y = sum(cy * w for cy, w, _ in proj) / total_w
+
+    # ── Step 7: canonical x ──────────────────────────────────────────────────
+    if layout.left_x is not None:
+        # Convert rotation-corrected x back to image x at canon_y.
+        canon_x = layout.left_x + canon_y * tan_theta
+    elif sprockets:
+        avg_xc = sum(xc(d) for d in sprockets) / len(sprockets)
+        canon_x = avg_xc + canon_y * tan_theta
+    else:
+        return None
+
+    # ── Step 8: evidence tier ────────────────────────────────────────────────
+    n_spr, n_sea = len(sprockets), len(seams)
+    if n_spr >= 2 and n_sea >= 1:
+        tier: EvidenceTier = "layout_fit"
+    elif n_spr >= 1 and (n_sea >= 1 or n_spr >= 2):
+        tier = "pair_fit"
+    elif n_spr == 1:
+        tier = "single_projected"
+    elif n_sea >= 1:
+        tier = "seam_only"
+    else:
+        tier = "predicted"
+
+    # Primary: prefer top-right (sharpest edge, best for refinement).
+    all_valid = sprockets + seams
+    primary = max(all_valid, key=lambda d: (d.label == _TOP_RIGHT, d.confidence))
+
+    rotation = _rotation_from_class(sprockets) if len(sprockets) >= 2 else None
+
+    return FuseResult(
+        anchor=(canon_x, canon_y),
+        primary=primary,
+        surviving=all_valid,
+        rotation=rotation,
+        tier=tier,
+    )
+
+
+def _project_to_canon_y(
+    ay: float,
+    top_seam_y: Optional[float],
+    bot_seam_y: Optional[float],
+    pitch: Optional[float],
+    img_h: Optional[int],
+    corner_ratio: float,
+) -> tuple[float, float]:
+    """Project a sprocket anchor at y=ay to the canonical top-seam y.
+
+    Returns (canonical_y_estimate, confidence_weight_factor).
+
+    For Regular 8mm the seam is just below each sprocket's top-right
+    corner.  The canonical reference is the TOP seam of the current
+    frame, so bottom-seam sprockets have ``pitch`` subtracted."""
+
+    # Both seams detected: assign by proximity.
+    if top_seam_y is not None and bot_seam_y is not None:
+        if abs(ay - top_seam_y) <= abs(ay - bot_seam_y):
+            return top_seam_y, 1.0
+        canon = (bot_seam_y - pitch) if pitch else top_seam_y
+        return canon, 0.9
+
+    # One seam detected: estimate the missing one from pitch.
+    if top_seam_y is not None:
+        if pitch is None:
+            return top_seam_y, 0.8
+        bot_est = top_seam_y + pitch
+        if abs(ay - top_seam_y) <= abs(ay - bot_est):
+            return top_seam_y, 1.0
+        # Near estimated bottom seam → projects to top_seam_y (bot_est - pitch).
+        return top_seam_y, 0.8
+
+    # No seam detected: use image-position heuristic + pitch.
+    if pitch is not None and img_h is not None:
+        est_seam_offset = pitch * corner_ratio
+        if ay < img_h * 0.5:
+            return ay + est_seam_offset, 0.5
+        return ay + est_seam_offset - pitch, 0.5
+
+    # No geometry info at all; return raw y with lowest weight.
+    return ay, 0.4
+
+
+# ── legacy path (unchanged) ───────────────────────────────────────────────────
+
+def _legacy_fuse(
+    detections: list[Detection],
+    image_size: Optional[tuple[int, int]],
+) -> Optional[FuseResult]:
+    above = _drop_unsupported_sprockets(detections)
 
     by_class: dict[str, list[Detection]] = {}
     for d in above:
@@ -121,8 +414,6 @@ def fuse_anchors(
     surviving: list[Detection] = []
     for label in _CLASS_PRIORITY:
         surviving.extend(by_class.get(label, []))
-    # Catch legacy single-class detections so the old "sprocket" model
-    # still tracks during a transition.
     for label, dets in by_class.items():
         if label not in _CLASS_PRIORITY:
             surviving.extend(dets)
@@ -135,30 +426,15 @@ def fuse_anchors(
         primary=primary,
         surviving=surviving,
         rotation=rotation,
+        tier="pair_fit",
     )
 
 
 def _drop_unsupported_sprockets(detections: list[Detection]) -> list[Detection]:
-    """Cross-class outlier rejection: drop a sprocket-class detection
-    when its confidence is low **and** no other sprocket detection
-    sits within `_BUDDY_Y_TOLERANCE` px vertically.
-
-    The 3-class detector occasionally fires a low-confidence
-    sprocket-hole-top/bottom-right at the wrong y on a blown-out frame
-    (saturated highlights, severe scratch).  When the frame also has
-    a *good* sprocket detection, the bad one is the only one without
-    a corroborating buddy — dropping it before primary picking lets
-    closest-to-center fall on the right detection.
-
-    High-confidence sprockets always pass (they're trusted alone, and
-    occasionally only one sprocket is visible in the frame).  Seams
-    are unchanged — they need format-specific projection to validate
-    and are deprioritised by the class hierarchy anyway."""
     sprockets = [d for d in detections if d.label in (_TOP_RIGHT, _BOTTOM_RIGHT)]
     if len(sprockets) <= 1:
-        return detections  # singleton — no consensus possible
+        return detections
     others = [d for d in detections if d.label not in (_TOP_RIGHT, _BOTTOM_RIGHT)]
-
     kept: list[Detection] = []
     for d in sprockets:
         if d.confidence >= _HIGH_CONF:
@@ -170,20 +446,12 @@ def _drop_unsupported_sprockets(detections: list[Detection]) -> list[Detection]:
         )
         if has_buddy:
             kept.append(d)
-
     if not kept:
-        # Every sprocket is low-confidence and unbuddied — keep the
-        # single highest-conf candidate so the frame still gets some
-        # primary instead of falling all the way to a fuzzy seam.
         kept = [max(sprockets, key=lambda d: d.confidence)]
-
     return kept + others
 
 
 def _ransac_x(detections: list[Detection]) -> list[Detection]:
-    """Drop top-rights whose x deviates from the in-frame median by more
-    than `_X_TOLERANCE` — those are almost always misdetections on the
-    perforation edge or on a frame seam mistaken for a sprocket."""
     xs = sorted(class_anchor(d)[0] for d in detections)
     median_x = xs[len(xs) // 2]
     return [d for d in detections if abs(class_anchor(d)[0] - median_x) <= _X_TOLERANCE]
@@ -194,12 +462,6 @@ def _pick_primary(
     fallback_pool: list[Detection],
     image_size: Optional[tuple[int, int]],
 ) -> Detection:
-    """Pick the primary detection from the best-available class.
-
-    If `image_size` is known, prefer the anchor closest to the image
-    center — this keeps the anchor visibly in-frame even when the
-    detected sprocket's bbox extends to the picture edge. Otherwise
-    fall back to highest confidence."""
     pool: list[Detection] = []
     for label in _CLASS_PRIORITY:
         if by_class.get(label):
@@ -219,61 +481,7 @@ def _dist2(point: tuple[float, float], cx: float, cy: float) -> float:
     return dx * dx + dy * dy
 
 
-def estimate_pitch(detection_lists: list[list[Detection]]) -> Optional[float]:
-    """Median y-distance between adjacent same-frame top-right corners.
-
-    Pitch is constant per reel (set by the film format and scan
-    resolution), so the median across many frames cancels out
-    misdetections and rounding noise. Returns ``None`` if no frame in
-    the sample contains 2+ top-right detections."""
-    pitches: list[float] = []
-    for detections in detection_lists:
-        ys = sorted(class_anchor(d)[1] for d in detections if d.label == _TOP_RIGHT)
-        for i in range(len(ys) - 1):
-            gap = ys[i + 1] - ys[i]
-            if gap > 0:
-                pitches.append(gap)
-    if not pitches:
-        return None
-    pitches.sort()
-    return pitches[len(pitches) // 2]
-
-
-def detect_format(
-    detection_lists: list[list[Detection]],
-    pitch: Optional[float],
-) -> Optional[FilmFormat]:
-    """Classify the reel as Super 8 or Regular 8 from the y-offset
-    between each frame's top-right corner and its nearest seam.
-
-    Super 8: the seam sits midway between sprockets → offset ≈ ½ pitch.
-    Regular 8: the sprocket straddles the seam → offset ≈ ½ sprocket
-    height, which is much smaller than ½ pitch.
-
-    Returns ``None`` if either no frame in the sample shows both a
-    top-right and a seam, or `pitch` is unknown."""
-    if pitch is None or pitch <= 0:
-        return None
-    ratios: list[float] = []
-    for detections in detection_lists:
-        tops = [class_anchor(d)[1] for d in detections if d.label == _TOP_RIGHT]
-        seams = [class_anchor(d)[1] for d in detections if d.label == _SEAM_RIGHT]
-        if not tops or not seams:
-            continue
-        for ty in tops:
-            nearest = min(seams, key=lambda sy: abs(sy - ty))
-            ratios.append(abs(ty - nearest) / pitch)
-    if not ratios:
-        return None
-    ratios.sort()
-    median = ratios[len(ratios) // 2]
-    return "super8" if median > _FORMAT_THRESHOLD else "regular8"
-
-
 def _rotation_from_class(detections: list[Detection]) -> Optional[float]:
-    """Slope (degrees off-vertical) between the two same-class anchors
-    with the largest y-separation. Returns ``None`` if their baseline
-    is shorter than `_MIN_Y_SEPARATION`."""
     if len(detections) < 2:
         return None
     anchors = sorted((class_anchor(d) for d in detections), key=lambda p: p[1])
@@ -283,5 +491,4 @@ def _rotation_from_class(detections: list[Detection]) -> Optional[float]:
     dy = by - ay
     if abs(dy) < _MIN_Y_SEPARATION:
         return None
-    # Positive = clockwise rotation in image-space (matches rotation_estimate).
     return math.degrees(math.atan2(dx, abs(dy)))
