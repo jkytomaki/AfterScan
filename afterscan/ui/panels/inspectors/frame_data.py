@@ -151,14 +151,13 @@ class FrameDataInspector(QWidget):
         else:
             self._rows["detected"].setText("yes")
             self._rows["anchor"].setText(f"({cached.anchor_x:.1f}, {cached.anchor_y:.1f})")
-            if cached.anchors:
-                lines = [
-                    f"{lbl}  ({x:.1f}, {y:.1f})  conf={conf:.2f}"
-                    for x, y, lbl, conf in cached.anchors
-                ]
-                self._anchors_val.setText("\n".join(lines))
-            else:
-                self._anchors_val.setText("—")
+            lines = []
+            for x, y, lbl, conf in cached.anchors:
+                lines.append(f"{lbl}  ({x:.1f}, {y:.1f})  conf={conf:.2f}")
+            rejected = getattr(cached, "rejected_anchors", [])
+            for x, y, lbl, conf, reason in rejected:
+                lines.append(f"[{reason}]  {lbl}  ({x:.1f}, {y:.1f})  conf={conf:.2f}")
+            self._anchors_val.setText("\n".join(lines) if lines else "—")
             det_json = {
                 "state": "detected",
                 "anchor_x": round(cached.anchor_x, 2),
@@ -167,6 +166,11 @@ class FrameDataInspector(QWidget):
                 "anchors": [
                     {"label": lbl, "x": round(x, 2), "y": round(y, 2), "confidence": round(conf, 3)}
                     for x, y, lbl, conf in cached.anchors
+                ],
+                "rejected": [
+                    {"label": lbl, "x": round(x, 2), "y": round(y, 2),
+                     "confidence": round(conf, 3), "reason": reason}
+                    for x, y, lbl, conf, reason in rejected
                 ],
             }
 

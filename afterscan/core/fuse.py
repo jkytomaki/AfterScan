@@ -108,6 +108,10 @@ class FuseResult:
     surviving: list[Detection]     # detections that passed all gates
     rotation: Optional[float]      # slope (deg off-vertical) from sprocket pair
     tier: EvidenceTier = "pair_fit"
+    # (detection, reason) pairs for every detection that did not survive.
+    # Reasons: "below_threshold", "sprocket_x_gate", "seam_x_gate",
+    #          "seam_content_area", "x_ransac", "no_corroborator".
+    rejected: tuple[tuple[Detection, str], ...] = ()
 
 
 # ── public helpers ────────────────────────────────────────────────────────────
@@ -142,14 +146,27 @@ def fuse_anchors(
     (backward-compatible behaviour).
 
     Returns ``None`` if no detection survives the threshold + gates."""
+    below = [d for d in detections if d.confidence < threshold]
     above = [d for d in detections if d.confidence >= threshold]
     if not above:
         return None
 
     if layout is not None and _layout_is_usable(layout):
-        return _layout_fuse(above, layout, image_size)
+        result = _layout_fuse(above, layout, image_size)
+    else:
+        result = _legacy_fuse(above, image_size)
 
-    return _legacy_fuse(above, image_size)
+    if result is None or not below:
+        return result
+    pre_rejected = tuple((d, "below_threshold") for d in below)
+    return FuseResult(
+        anchor=result.anchor,
+        primary=result.primary,
+        surviving=result.surviving,
+        rotation=result.rotation,
+        tier=result.tier,
+        rejected=result.rejected + pre_rejected,
+    )
 
 
 # ── calibration helpers (used by reel_calibrate.py) ───────────────────────────
@@ -236,15 +253,25 @@ def _layout_fuse(
         ax, ay = class_anchor(det)
         return _xcorr(ax, ay, tan_theta)
 
+    rejected: list[tuple[Detection, str]] = []
+
     # ── Step 1: partition ────────────────────────────────────────────────────
     sprockets = [d for d in detections if d.label in (_TOP_RIGHT, _BOTTOM_RIGHT)]
     seams = [d for d in detections if d.label == _SEAM_RIGHT]
 
     # ── Step 2: hard x-gates ─────────────────────────────────────────────────
     if layout.left_x is not None:
+        rejected.extend(
+            (d, "sprocket_x_gate")
+            for d in sprockets if abs(xc(d) - layout.left_x) > _SPROCKET_X_GATE
+        )
         sprockets = [d for d in sprockets
                      if abs(xc(d) - layout.left_x) <= _SPROCKET_X_GATE]
     if layout.right_x is not None:
+        rejected.extend(
+            (d, "seam_x_gate")
+            for d in seams if abs(xc(d) - layout.right_x) > _SEAM_X_GATE
+        )
         seams = [d for d in seams
                  if abs(xc(d) - layout.right_x) <= _SEAM_X_GATE]
 
@@ -252,12 +279,20 @@ def _layout_fuse(
     if sprockets and seams and img_w:
         spr_xc_avg = sum(xc(d) for d in sprockets) / len(sprockets)
         min_seam_xc = spr_xc_avg + img_w * _SPROCKET_SEAM_MIN_SEP_FRAC
+        rejected.extend(
+            (d, "seam_content_area")
+            for d in seams if xc(d) < min_seam_xc
+        )
         seams = [d for d in seams if xc(d) >= min_seam_xc]
 
     # ── Step 3: within-sprocket x RANSAC (rotation-corrected) ───────────────
     if len(sprockets) >= 2:
         sxs = sorted(xc(d) for d in sprockets)
         med_xc = sxs[len(sxs) // 2]
+        rejected.extend(
+            (d, "x_ransac")
+            for d in sprockets if abs(xc(d) - med_xc) > _SPROCKET_X_GATE
+        )
         sprockets = [d for d in sprockets if abs(xc(d) - med_xc) <= _SPROCKET_X_GATE]
 
     # ── Step 4: identify frame boundaries from seam y positions ─────────────
@@ -346,6 +381,7 @@ def _layout_fuse(
         surviving=all_valid,
         rotation=rotation,
         tier=tier,
+        rejected=tuple(rejected),
     )
 
 
@@ -399,7 +435,8 @@ def _legacy_fuse(
     detections: list[Detection],
     image_size: Optional[tuple[int, int]],
 ) -> Optional[FuseResult]:
-    above = _drop_unsupported_sprockets(detections)
+    rejected: list[tuple[Detection, str]] = []
+    above = _drop_unsupported_sprockets(detections, rejected)
 
     by_class: dict[str, list[Detection]] = {}
     for d in above:
@@ -407,7 +444,7 @@ def _legacy_fuse(
 
     top_rights = by_class.get(_TOP_RIGHT, [])
     if len(top_rights) >= 2:
-        kept = _ransac_x(top_rights)
+        kept = _ransac_x(top_rights, rejected)
         if kept:
             by_class[_TOP_RIGHT] = kept
 
@@ -427,15 +464,20 @@ def _legacy_fuse(
         surviving=surviving,
         rotation=rotation,
         tier="pair_fit",
+        rejected=tuple(rejected),
     )
 
 
-def _drop_unsupported_sprockets(detections: list[Detection]) -> list[Detection]:
+def _drop_unsupported_sprockets(
+    detections: list[Detection],
+    rejected: list[tuple[Detection, str]],
+) -> list[Detection]:
     sprockets = [d for d in detections if d.label in (_TOP_RIGHT, _BOTTOM_RIGHT)]
     if len(sprockets) <= 1:
         return detections
     others = [d for d in detections if d.label not in (_TOP_RIGHT, _BOTTOM_RIGHT)]
     kept: list[Detection] = []
+    dropped: list[Detection] = []
     for d in sprockets:
         if d.confidence >= _HIGH_CONF:
             kept.append(d)
@@ -446,15 +488,28 @@ def _drop_unsupported_sprockets(detections: list[Detection]) -> list[Detection]:
         )
         if has_buddy:
             kept.append(d)
+        else:
+            dropped.append(d)
     if not kept:
-        kept = [max(sprockets, key=lambda d: d.confidence)]
+        best = max(sprockets, key=lambda d: d.confidence)
+        kept = [best]
+        dropped = [d for d in dropped if d is not best]
+    rejected.extend((d, "no_corroborator") for d in dropped)
     return kept + others
 
 
-def _ransac_x(detections: list[Detection]) -> list[Detection]:
+def _ransac_x(
+    detections: list[Detection],
+    rejected: list[tuple[Detection, str]],
+) -> list[Detection]:
     xs = sorted(class_anchor(d)[0] for d in detections)
     median_x = xs[len(xs) // 2]
-    return [d for d in detections if abs(class_anchor(d)[0] - median_x) <= _X_TOLERANCE]
+    kept = [d for d in detections if abs(class_anchor(d)[0] - median_x) <= _X_TOLERANCE]
+    rejected.extend(
+        (d, "x_ransac")
+        for d in detections if abs(class_anchor(d)[0] - median_x) > _X_TOLERANCE
+    )
+    return kept
 
 
 def _pick_primary(

@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from afterscan import __version__
@@ -66,6 +66,8 @@ class _CachedDetection:
     anchor_y: float
     label: str
     anchors: list[tuple[float, float, str, float]]
+    # (x, y, label, confidence, reason) tuples for detections filtered by fuse_anchors.
+    rejected_anchors: list[tuple[float, float, str, float, str]] = field(default_factory=list)
 
 
 class MainWindow(QMainWindow):
@@ -786,9 +788,13 @@ class MainWindow(QMainWindow):
                 f"{len(result.anchors)} anchors"
             )
             anchors = [(a.x, a.y, a.label, a.confidence) for a in result.anchors]
+            rejected = [
+                (r.x, r.y, r.label, r.confidence, r.reason)
+                for r in result.rejected_anchors
+            ]
             self._detection_cache[frame_idx] = _CachedDetection(
                 anchor_x=result.anchor_x, anchor_y=result.anchor_y,
-                label=label, anchors=anchors,
+                label=label, anchors=anchors, rejected_anchors=rejected,
             )
         if frame_idx == self.frame_range.current:
             self._after_detection_landed(frame_idx)

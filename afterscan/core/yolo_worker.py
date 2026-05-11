@@ -18,7 +18,7 @@ from __future__ import annotations
 import threading
 import traceback
 from queue import Empty, Queue
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, Optional, TypeVar
 
 import numpy as np
@@ -44,12 +44,23 @@ class YoloAnchor:
 
 
 @dataclass(frozen=True)
+class RejectedAnchor:
+    """Detection that did not survive fuse_anchors filtering."""
+    x: float
+    y: float
+    label: str
+    confidence: float
+    reason: str   # e.g. "below_threshold", "x_ransac", "no_corroborator"
+
+
+@dataclass(frozen=True)
 class YoloResult:
-    anchor_x: float                # primary (chosen by fuser) — what stabilization uses
+    anchor_x: float                       # primary (chosen by fuser) — what stabilization uses
     anchor_y: float
-    confidence: float              # primary detection's confidence
-    anchors: list[YoloAnchor]      # all surviving anchors (incl. primary)
-    rotation: Optional[float]      # per-frame slope hint, may be None
+    confidence: float                     # primary detection's confidence
+    anchors: list[YoloAnchor]             # all surviving anchors (incl. primary)
+    rotation: Optional[float]             # per-frame slope hint, may be None
+    rejected_anchors: list[RejectedAnchor] = field(default_factory=list)
 
 
 _inference_lock = threading.Lock()
@@ -322,12 +333,27 @@ class YoloDetectTask(QRunnable):
             anchors.append(YoloAnchor(
                 x=ax, y=ay, label=d.label, confidence=d.confidence,
             ))
+        rejected_anchors = []
+        for d, reason in fused.rejected:
+            ax, ay = class_anchor(d)
+            rejected_anchors.append(RejectedAnchor(
+                x=ax, y=ay, label=d.label, confidence=d.confidence, reason=reason,
+            ))
+        if rejected_anchors:
+            print(
+                f"[fuse] frame {self._frame_idx}: "
+                + ", ".join(
+                    f"{r.label}@({r.x:.0f},{r.y:.0f}) [{r.reason}]"
+                    for r in rejected_anchors
+                )
+            )
         return YoloResult(
             anchor_x=anchor_x,
             anchor_y=anchor_y,
             confidence=fused.primary.confidence,
             anchors=anchors,
             rotation=fused.rotation,
+            rejected_anchors=rejected_anchors,
         )
 
 
