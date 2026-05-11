@@ -205,9 +205,11 @@ class MainWindow(QMainWindow):
         stab.detection_inputs_changed.connect(self._on_detection_inputs_changed)
         enhance = self.inspector.panels["enhance"]
         enhance.crop_changed.connect(self.preview.update_canvas)
+        enhance.crop_changed.connect(self._update_frame_data)
         self.preview.crop_changed.connect(self._on_preview_crop_dragged)
         source = self.inspector.panels["source"]
         source.rotation_changed.connect(lambda _v: self.preview.update_canvas())
+        source.rotation_changed.connect(lambda _v: self._update_frame_data())
         source.estimate_rotation_clicked.connect(self._estimate_rotation)
         self.filmstrip.auto_setup_clicked.connect(self._auto_setup)
         self._runner.job_started.connect(self._on_job_started)
@@ -298,6 +300,7 @@ class MainWindow(QMainWindow):
         # everything in one atomic pass.  Avoids the visible "frame
         # appears, then snaps into stabilized position" jump.
         self._pending_frame_idx = idx
+        self._update_frame_data()  # show correct index + settings immediately (pending state)
         self._schedule_detection()
 
     def _show_frame(self, idx: int) -> None:
@@ -538,9 +541,7 @@ class MainWindow(QMainWindow):
             self._schedule_detection()
 
     def _on_preview_crop_dragged(self) -> None:
-        # Drag operates directly on settings; nothing to do for now beyond
-        # leaving a hook for project persistence later.
-        pass
+        self._update_frame_data()
 
     def _estimate_rotation(self) -> None:
         if self._frame_source is None:
@@ -565,8 +566,11 @@ class MainWindow(QMainWindow):
             self.settings.sprocket_left_x = float(calib.left_x)
         if calib.right_x is not None:
             self.settings.seam_right_x = float(calib.right_x)
-        self._stop_prefetch()  # prefetch cache is stale after new layout
+        self._stop_prefetch()
+        self._detection_cache.clear()
         self.preview.update_canvas()
+        self._update_frame_data()
+        self._schedule_detection()
 
     def _auto_setup(self) -> None:
         if self._frame_source is None:
@@ -607,6 +611,8 @@ class MainWindow(QMainWindow):
         self._stop_prefetch()
         self._detection_cache.clear()
         self.preview.update_canvas()
+        self._update_frame_data()
+        self._schedule_detection()
 
     def _auto_crop_from_geometry(
         self, calib: Calibration,
@@ -629,12 +635,18 @@ class MainWindow(QMainWindow):
             if calib.right_x is not None
             else img_w * 0.97
         )
-        margin_x = img_w * 0.02
+        # Film content extends left of the sprocket-hole right corner (the
+        # scanner captures some sprocket area on the left). Go 3% left of
+        # Left: content starts just left of the sprocket-hole right corner.
+        # Right: seam class_anchor is bbox center; content extends to the
+        # right edge of the seam bbox (~half-width further right).
+        # Vertical: 2% margin keeps the seam itself out of the crop boundary
+        # on frames where the seam lands just below ref_y.
         margin_y = img_h * 0.02
-        cl = max(0.0, min(0.9, (sprocket_x + margin_x) / img_w))
-        cr = max(cl + 0.1, min(1.0, (seam_x - margin_x) / img_w))
+        cl = max(0.0, min(0.9, (sprocket_x - img_w * 0.02) / img_w))
+        cr = max(cl + 0.1, min(1.0, (seam_x + img_w * 0.045) / img_w))
         ct = max(0.0, min(0.9, (ref_y + margin_y) / img_h))
-        cb = max(ct + 0.1, min(1.0, (ref_y + calib.pitch - margin_y) / img_h))
+        cb = max(ct + 0.1, min(1.0, (ref_y + calib.pitch + margin_y) / img_h))
         return (cl, ct, cr, cb)
 
     def _reel_layout(self) -> ReelLayout:

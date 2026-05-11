@@ -43,7 +43,7 @@ class Settings:
     method: StabMethod = "yolo"
     yolo_model: str = ""
     confidence: float = 0.10
-    edge_refinement: bool = True
+    edge_refinement: bool = False
     draw_boxes: bool = False
     save_undetected: bool = False
     comp_x: int = 0
