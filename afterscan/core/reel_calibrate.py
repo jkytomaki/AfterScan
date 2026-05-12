@@ -75,6 +75,12 @@ def _frame_slopes(detections: list[Detection]) -> list[float]:
             dy = by - ay
             if abs(dx) > _X_TOLERANCE or abs(dy) < _MIN_Y_SEPARATION:
                 continue
+            # Normalise direction so dy is always positive (b below a in image).
+            # Without this, the sign of dx — and thus the slope — depends on
+            # which detection happened to have higher confidence and came first,
+            # not on the actual tilt direction.
+            if dy < 0:
+                dx = -dx
             # Positive = clockwise rotation in image-space.
             slopes.append(math.degrees(math.atan2(dx, abs(dy))))
     return slopes
