@@ -13,7 +13,6 @@ from typing import Literal
 
 
 FilmFormat = Literal["super8", "regular8"]
-StabMethod = Literal["template", "yolo", "classical"]
 AspectRatio = Literal["free", "4:3", "16:9"]
 FrameFill = Literal["none", "fake", "dumb"]
 RenderQuality = Literal["fast", "medium", "best"]
@@ -40,7 +39,6 @@ class Settings:
 
     # Stabilize
     stabilize: bool = True
-    method: StabMethod = "yolo"
     yolo_model: str = ""
     confidence: float = 0.10
     edge_refinement: bool = False

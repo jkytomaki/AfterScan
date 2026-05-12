@@ -19,7 +19,6 @@ from pathlib import Path
 
 from afterscan import __version__
 from afterscan.core import jobs as jobs_io
-from afterscan.core.classical_worker import ClassicalDetectTask
 from afterscan.core import yolo_worker
 from afterscan.core.fuse import ReelLayout
 from afterscan.core.reel_calibrate import Calibration, CalibrateReelTask
@@ -88,10 +87,10 @@ class MainWindow(QMainWindow):
         self._suspend_mode = "none"
         self._latest_anchor: tuple[float, float] | None = None
         # Per-frame detection cache: live-detection results land here
-        # via `_on_yolo_finished` / `_on_classical_finished`, the
-        # playback prefetcher seeds it ahead of the playhead, and
-        # scrubbing back to a cached frame is instant — no detection
-        # re-run, shift + crosshair painted in a single pass.
+        # via `_on_yolo_finished`, the playback prefetcher seeds it
+        # ahead of the playhead, and scrubbing back to a cached frame
+        # is instant — no detection re-run, shift + crosshair painted
+        # in a single pass.
         # ``None`` means "detected, no usable anchor"; absent keys
         # mean "not detected yet".
         self._detection_cache: dict[int, _CachedDetection | None] = {}
@@ -150,7 +149,7 @@ class MainWindow(QMainWindow):
         self._detect_timer = QTimer(self)
         self._detect_timer.setSingleShot(True)
         self._detect_timer.setInterval(40)
-        self._detect_timer.timeout.connect(self._run_classical_detect)
+        self._detect_timer.timeout.connect(self._run_detect)
 
     def _build_tools_row(self, split_btn: IconBtn) -> QFrame:
         row = QFrame()
@@ -202,7 +201,6 @@ class MainWindow(QMainWindow):
         self.queue.run_all_clicked.connect(self._toggle_batch)
         self.queue.suspend_mode_changed.connect(self._set_suspend_mode)
         stab = self.inspector.panels["stabilize"]
-        stab.method_changed.connect(self._on_method_changed)
         stab.stabilize_changed.connect(self._on_stabilize_changed)
         stab.detection_inputs_changed.connect(self._on_detection_inputs_changed)
         enhance = self.inspector.panels["enhance"]
@@ -508,23 +506,6 @@ class MainWindow(QMainWindow):
         if self._frame_source is not None:
             self._show_frame(self.frame_range.current)
 
-    # ── classical detection ──────────────────────────────────────
-
-    def _on_method_changed(self, method: str) -> None:
-        self.preview.clear_detection()
-        # Reference anchors are coordinates from a specific detector;
-        # switching methods invalidates them — and the per-frame
-        # cache, which holds anchors from the previous detector.
-        self.settings.reference_x = None
-        self.settings.reference_y = None
-        self._latest_anchor = None
-        self._detection_cache.clear()
-        self.preview.clear_shift()
-        if method == "yolo":
-            model_path = self.settings.yolo_model or str(_DEFAULT_YOLO_MODEL)
-            yolo_worker.preload(model_path)
-        self._schedule_detection()
-
     def _on_stabilize_changed(self, on: bool) -> None:
         self.preview.clear_detection()
         if not on:
@@ -725,53 +706,26 @@ class MainWindow(QMainWindow):
     def _schedule_detection(self) -> None:
         if (self._frame_source is None
                 or not self.settings.stabilize
-                or self.settings.method not in ("classical", "yolo")
                 or self._play_timer.isActive()):
             return
         self._detect_timer.start()
 
-    def _run_classical_detect(self) -> None:
-        if (self._frame_source is None
-                or not self.settings.stabilize):
+    def _run_detect(self) -> None:
+        if self._frame_source is None or not self.settings.stabilize:
             return
         idx = self.frame_range.current
         path = str(self._frame_source.path(idx))
-        method = self.settings.method
-        if method == "classical":
-            task = ClassicalDetectTask(idx, path, self.settings.edge_refinement)
-            task.signals.finished.connect(self._on_classical_finished)
-            QThreadPool.globalInstance().start(task)
-        elif method == "yolo":
-            model_path = self.settings.yolo_model or str(_DEFAULT_YOLO_MODEL)
-            task = YoloDetectTask(
-                idx, path, model_path, self.settings.confidence,
-                edge_refine=self.settings.edge_refinement,
-                layout=self._reel_layout(),
-            )
-            task.signals.finished.connect(self._on_yolo_finished)
-            yolo_worker.thread_pool().start(task)
-
-    def _on_classical_finished(self, frame_idx: int, result) -> None:
-        if not self.settings.stabilize or self.settings.method != "classical":
-            return
-        if result is None or result.right_edge_x is None or result.corner_y is None:
-            self._detection_cache[frame_idx] = None
-        else:
-            label = (
-                f"x={result.right_edge_x:.1f}  y={result.corner_y:.1f}"
-                f"  {result.regime}/{result.mode}"
-            )
-            self._detection_cache[frame_idx] = _CachedDetection(
-                anchor_x=result.right_edge_x, anchor_y=result.corner_y,
-                label=label, anchors=[],
-            )
-        # Cache the result even if the user has scrubbed past — they
-        # may revisit and we'll have it ready.
-        if frame_idx == self.frame_range.current:
-            self._after_detection_landed(frame_idx)
+        model_path = self.settings.yolo_model or str(_DEFAULT_YOLO_MODEL)
+        task = YoloDetectTask(
+            idx, path, model_path, self.settings.confidence,
+            edge_refine=self.settings.edge_refinement,
+            layout=self._reel_layout(),
+        )
+        task.signals.finished.connect(self._on_yolo_finished)
+        yolo_worker.thread_pool().start(task)
 
     def _on_yolo_finished(self, frame_idx: int, result) -> None:
-        if not self.settings.stabilize or self.settings.method != "yolo":
+        if not self.settings.stabilize:
             return
         if result is None:
             self._detection_cache[frame_idx] = None

@@ -3,8 +3,8 @@
 Runs the queued jobs serially on a single-threaded `QThreadPool`.
 Each job runs in three passes (Phase 3):
 
-  1. **Detect** — for each frame, compute the raw anchor (YOLO via
-     `fuse_anchors`, or classical), then derive the per-frame
+  1. **Detect** — for each frame, compute the raw anchor via YOLO /
+     `fuse_anchors`, then derive the per-frame
      ``(raw_dx, raw_dy)`` shift against the captured template.  No
      image-write yet.
   2. **Smooth** — `smooth_dx` rolls a MAD-trimmed median over `dx`
@@ -20,9 +20,9 @@ for detection, once for write).  The cost is dwarfed by inference
 time and the smoothing benefit is worth it.
 
 What's intentionally not done yet: video encoding (we write a PNG
-sequence), color enhancements (gamma / denoise / sharpen),
-frame-fill modes, and the legacy "template" detector.  Each is a
-separate piece that can land on top of this pipeline."""
+sequence), color enhancements (gamma / denoise / sharpen), and
+frame-fill modes.  Each is a separate piece that can land on top of
+this pipeline."""
 
 from __future__ import annotations
 
@@ -36,7 +36,7 @@ import numpy as np
 from PIL import Image
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal
 
-from afterscan.core import detect_classical, yolo_worker
+from afterscan.core import yolo_worker
 from afterscan.core.frames import FrameSource
 from afterscan.core.fuse import ReelLayout, fuse_anchors
 from afterscan.core.jobs import Job, JobList
@@ -221,46 +221,32 @@ class _JobWorker(QRunnable):
     def _detect_path(
         self, path: str, s: Settings,
     ) -> Optional[tuple[float, float]]:
-        """Run the configured detector on a single frame path; returns
-        the anchor position in source-image pixels, or ``None`` if the
-        frame had no usable detection."""
+        """Run YOLO detection on a single frame path; returns the anchor
+        position in source-image pixels, or ``None`` if no usable detection."""
         if not s.stabilize:
             return None
-        if s.method == "classical":
-            try:
-                arr = np.asarray(Image.open(path).convert("RGB"))
-            except Exception:
-                return None
-            result = detect_classical.detect_corner(
-                arr, edge_refine=s.edge_refinement, scale=1.0,
-            )
-            if result is None or result.right_edge_x is None or result.corner_y is None:
-                return None
-            return (result.right_edge_x, result.corner_y)
-        if s.method == "yolo":
-            model_path = s.yolo_model or str(self._default_yolo_model)
-            detections = yolo_worker.detect_image(model_path, path)
-            layout = ReelLayout(
-                rotation_deg=s.rotation,
-                pitch=s.sprocket_pitch_px,
-                film_format=s.format if s.sprocket_pitch_px else None,
-                left_x=s.sprocket_left_x,
-                right_x=s.seam_right_x,
-            )
-            fused = fuse_anchors(
-                detections, s.confidence,
-                image_size=yolo_worker._image_size(path),
-                layout=layout,
-            )
-            if fused is None:
-                return None
-            anchor_x, anchor_y = fused.anchor
-            if s.edge_refinement and fused.primary.label.endswith("top-right"):
-                refined = yolo_worker._refine_bbox_top(path, fused.primary)
-                if refined is not None:
-                    anchor_y = refined
-            return (anchor_x, anchor_y)
-        return None  # "template" method not implemented yet
+        model_path = s.yolo_model or str(self._default_yolo_model)
+        detections = yolo_worker.detect_image(model_path, path)
+        layout = ReelLayout(
+            rotation_deg=s.rotation,
+            pitch=s.sprocket_pitch_px,
+            film_format=s.format if s.sprocket_pitch_px else None,
+            left_x=s.sprocket_left_x,
+            right_x=s.seam_right_x,
+        )
+        fused = fuse_anchors(
+            detections, s.confidence,
+            image_size=yolo_worker._image_size(path),
+            layout=layout,
+        )
+        if fused is None:
+            return None
+        anchor_x, anchor_y = fused.anchor
+        if s.edge_refinement and fused.primary.label.endswith("top-right"):
+            refined = yolo_worker._refine_bbox_top(path, fused.primary)
+            if refined is not None:
+                anchor_y = refined
+        return (anchor_x, anchor_y)
 
     def _raw_shifts(
         self,
