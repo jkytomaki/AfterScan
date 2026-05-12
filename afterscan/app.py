@@ -642,13 +642,12 @@ class MainWindow(QMainWindow):
         # Left: content starts just left of the sprocket-hole right corner.
         # Right: seam class_anchor is bbox center; content extends to the
         # right edge of the seam bbox (~half-width further right).
-        # Vertical: 2% margin keeps the seam itself out of the crop boundary
-        # on frames where the seam lands just below ref_y.
-        margin_y = img_h * 0.02
+        # Vertical: seam class_anchor is bbox center = physical seam line.
+        # Use it directly as the crop boundary — no margin.
         cl = max(0.0, min(0.9, (sprocket_x - img_w * 0.02) / img_w))
         cr = max(cl + 0.1, min(1.0, (seam_x + img_w * 0.045) / img_w))
-        ct = max(0.0, min(0.9, (ref_y + margin_y) / img_h))
-        cb = max(ct + 0.1, min(1.0, (ref_y + calib.pitch + margin_y) / img_h))
+        ct = max(0.0, min(0.9, ref_y / img_h))
+        cb = max(ct + 0.1, min(1.0, (ref_y + calib.pitch) / img_h))
         return (cl, ct, cr, cb)
 
     def _reel_layout(self) -> ReelLayout:
