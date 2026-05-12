@@ -77,11 +77,15 @@ class Inspector(QFrame):
         v = QVBoxLayout(container)
         v.setContentsMargins(0, 0, 0, 0)
         v.setSpacing(1)
-        for step_id, label in self._GROUPS:
-            group = CollapsibleGroup(label, open_=True)
+        for i, (step_id, label) in enumerate(self._GROUPS):
+            group = CollapsibleGroup(label, open_=i == 0)
             group.add(self.panels[step_id])
             self._groups[step_id] = group
             v.addWidget(group)
+        for step_id, group in self._groups.items():
+            group.toggled_open.connect(
+                lambda on, gid=step_id: self._on_group_toggled(gid, on)
+            )
         v.addStretch(1)
         return self._scroll(container)
 
@@ -111,6 +115,13 @@ class Inspector(QFrame):
         btn.setCursor(Qt.PointingHandCursor)
         btn.setFixedHeight(30)
         return btn
+
+    def _on_group_toggled(self, opened_id: str, on: bool) -> None:
+        if not on:
+            return
+        for gid, group in self._groups.items():
+            if gid != opened_id:
+                group.set_open(False)
 
     def _set_tab(self, tab_id: str) -> None:
         if tab_id == self._current_tab or tab_id not in self._tabs:
