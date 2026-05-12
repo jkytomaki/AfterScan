@@ -172,7 +172,11 @@ def fuse_anchors(
 # ── calibration helpers (used by reel_calibrate.py) ───────────────────────────
 
 def estimate_pitch(detection_lists: list[list[Detection]]) -> Optional[float]:
-    """Median y-distance between adjacent same-frame top-right corners."""
+    """Median y-distance between adjacent same-frame top-right corners.
+
+    Falls back to same-frame seam-to-seam gap when no top-right pairs
+    are found (e.g. scanner crops off one sprocket per frame so only
+    one top-right corner is ever visible)."""
     pitches: list[float] = []
     for detections in detection_lists:
         ys = sorted(class_anchor(d)[1] for d in detections if d.label == _TOP_RIGHT)
@@ -180,6 +184,15 @@ def estimate_pitch(detection_lists: list[list[Detection]]) -> Optional[float]:
             gap = ys[i + 1] - ys[i]
             if gap > 0:
                 pitches.append(gap)
+    if not pitches:
+        for detections in detection_lists:
+            seam_ys = sorted(
+                class_anchor(d)[1] for d in detections if d.label == _SEAM_RIGHT
+            )
+            if len(seam_ys) >= 2:
+                gap = seam_ys[-1] - seam_ys[0]
+                if gap > 0:
+                    pitches.append(gap)
     if not pitches:
         return None
     pitches.sort()
