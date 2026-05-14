@@ -19,6 +19,7 @@ from afterscan.ui.widgets.seg import Seg
 
 class SourceInspector(QWidget):
     rotation_changed = Signal(float)
+    format_changed = Signal(str)
     estimate_rotation_clicked = Signal()
 
     def __init__(self, settings: Settings, parent=None) -> None:
@@ -36,6 +37,7 @@ class SourceInspector(QWidget):
             value=self._s.format,
         )
         self._format_seg.changed.connect(lambda v: setattr(self._s, "format", v))
+        self._format_seg.changed.connect(lambda v: self.format_changed.emit(str(v)))
         source.add(Field("Film format", self._format_seg))
 
         path_input = QLineEdit(self._s.source_dir)

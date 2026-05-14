@@ -36,6 +36,13 @@ class Settings:
     # Estimated by reel calibration and used by the layout-aware fuser.
     sprocket_left_x: float | None = None
     seam_right_x: float | None = None
+    # Vertical distance from a `sprocket-hole-top-right` corner to the
+    # closest frame seam below it (positive). Used by the slot model to
+    # project sprocket detections to the canonical top-seam y.
+    corner_to_seam_offset: float | None = None
+    # Median height of a sprocket bounding box (top-right to bottom-right).
+    # Used by the slot model to project bottom-right detections.
+    sprocket_bbox_height_px: float | None = None
 
     # Stabilize
     stabilize: bool = True

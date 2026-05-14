@@ -32,7 +32,7 @@ class Job:
 
     @property
     def method_label(self) -> str:
-        return "YOLO" if self.settings.method == "yolo" else "Template"
+        return "YOLO"
 
     @property
     def output_label(self) -> str:

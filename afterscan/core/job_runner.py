@@ -38,14 +38,12 @@ from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal
 
 from afterscan.core import yolo_worker
 from afterscan.core.frames import FrameSource
-from afterscan.core.fuse import ReelLayout, fuse_anchors
+from afterscan.core.fuse import DetectedAnchor, ReelLayout, accept_shift
 from afterscan.core.jobs import Job, JobList
 from afterscan.core.settings import Settings
 from afterscan.core.smooth import smooth_dx
 
 
-_MAX_SHIFT_X = 200
-_MAX_SHIFT_Y = 600
 _PROGRESS_EVERY = 5  # frames
 # How the wall-clock progress bar splits between the two image passes.
 _DETECT_FRACTION = 0.6  # detection on a GPU is the slow leg
@@ -220,9 +218,13 @@ class _JobWorker(QRunnable):
 
     def _detect_path(
         self, path: str, s: Settings,
-    ) -> Optional[tuple[float, float]]:
-        """Run YOLO detection on a single frame path; returns the anchor
-        position in source-image pixels, or ``None`` if no usable detection."""
+    ) -> Optional[DetectedAnchor]:
+        """Run YOLO detection on a single frame path; returns the
+        resolved anchor, or ``None`` if no usable detection.
+
+        Phase prior in the batch pass is the static reference
+        (``reference_y + comp_y``) — the temporal smoother in pass 2
+        absorbs per-frame jitter the temporal prior would have caught."""
         if not s.stabilize:
             return None
         model_path = s.yolo_model or str(self._default_yolo_model)
@@ -233,31 +235,32 @@ class _JobWorker(QRunnable):
             film_format=s.format if s.sprocket_pitch_px else None,
             left_x=s.sprocket_left_x,
             right_x=s.seam_right_x,
+            corner_to_seam_offset=s.corner_to_seam_offset,
+            sprocket_bbox_height_px=s.sprocket_bbox_height_px,
         )
-        fused = fuse_anchors(
-            detections, s.confidence,
+        y_prior = (
+            s.reference_y + s.comp_y if s.reference_y is not None else None
+        )
+        return yolo_worker.detect_and_fuse(
+            detections,
+            s.confidence,
+            image_path=path,
             image_size=yolo_worker._image_size(path),
             layout=layout,
+            edge_refine=s.edge_refinement,
+            y_prior=y_prior,
         )
-        if fused is None:
-            return None
-        anchor_x, anchor_y = fused.anchor
-        if s.edge_refinement and fused.primary.label.endswith("top-right"):
-            refined = yolo_worker._refine_bbox_top(path, fused.primary)
-            if refined is not None:
-                anchor_y = refined
-        return (anchor_x, anchor_y)
 
     def _raw_shifts(
         self,
         s: Settings,
-        anchors: list[Optional[tuple[float, float]]],
+        anchors: list[Optional[DetectedAnchor]],
     ) -> tuple[list[Optional[float]], list[Optional[float]]]:
         """Per-frame raw (dx, dy) against the captured template.
 
-        ``None`` for a missing detection or for a shift the sanity
-        check rejects — the smoother handles those by falling back to
-        the local window median."""
+        ``None`` for a missing detection or for a shift the gate
+        rejects — the smoother handles those by falling back to the
+        local window median."""
         raw_dx: list[Optional[float]] = []
         raw_dy: list[Optional[float]] = []
         if s.reference_x is None or s.reference_y is None:
@@ -267,11 +270,9 @@ class _JobWorker(QRunnable):
                 raw_dx.append(None)
                 raw_dy.append(None)
                 continue
-            dx = s.reference_x - anchor[0] + s.comp_x
-            dy = s.reference_y - anchor[1] + s.comp_y
-            if abs(dx) > _MAX_SHIFT_X or abs(dy) > _MAX_SHIFT_Y:
-                # Out-of-range shift is almost always a misdetection.
-                # Mark None so the smoother fills from neighbours.
+            dx = s.reference_x - anchor.x + s.comp_x
+            dy = s.reference_y - anchor.y + s.comp_y
+            if not accept_shift(dx, dy, anchor.score, s.sprocket_pitch_px):
                 raw_dx.append(None)
                 raw_dy.append(None)
                 continue

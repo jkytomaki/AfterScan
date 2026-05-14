@@ -43,11 +43,10 @@ class RenderInspector(QWidget):
     def _output_section(self) -> Section:
         section = Section("Output")
 
-        target = QLineEdit(self._s.target_dir)
-        target.setReadOnly(True)
-        target.setPlaceholderText("(no target folder selected)")
-        target.textChanged.connect(lambda v: setattr(self._s, "target_dir", v))
-        section.add(Field("Target folder", target))
+        self._target_input = QLineEdit(self._s.target_dir)
+        self._target_input.setReadOnly(True)
+        self._target_input.setPlaceholderText("(defaults to <source>/out)")
+        section.add(Field("Target folder", self._target_input))
 
         filename = QLineEdit(self._s.output_filename)
         filename.textChanged.connect(lambda v: setattr(self._s, "output_filename", v))
@@ -58,6 +57,9 @@ class RenderInspector(QWidget):
         title.textChanged.connect(lambda v: setattr(self._s, "title", v))
         section.add(Field("Title (metadata)", title))
         return section
+
+    def set_target_dir(self, path: str) -> None:
+        self._target_input.setText(path)
 
     def _encode_section(self) -> Section:
         section = Section("Encode")
