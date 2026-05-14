@@ -28,6 +28,10 @@ class Job:
     progress: float = 0.0
     eta_seconds: float | None = None
     settings: Settings = field(default_factory=Settings)
+    # Inclusive render range markers. None on either side leaves that edge
+    # at the natural start (0) or end (source.total - 1) of the reel.
+    range_start: int | None = None
+    range_end: int | None = None
     id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
 
     @property

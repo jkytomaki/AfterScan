@@ -91,7 +91,19 @@ class FrameRange:
     detected: int = 0
     undetected_indices: list[int] = field(default_factory=list)
     current: int = 0
+    # Inclusive render range markers (NLE-style in/out points). When set,
+    # only frames in [range_start, range_end] are processed by the runner;
+    # either may be None for an open-ended range.
+    range_start: int | None = None
+    range_end: int | None = None
 
     @property
     def missed(self) -> int:
         return len(self.undetected_indices)
+
+    def effective_range(self) -> tuple[int, int]:
+        """Resolve markers (or lack thereof) to [start, end] inclusive."""
+        last = max(self.total - 1, 0)
+        start = self.range_start if self.range_start is not None else 0
+        end = self.range_end if self.range_end is not None else last
+        return max(0, min(start, last)), max(0, min(end, last))

@@ -177,40 +177,49 @@ class _JobWorker(QRunnable):
                       str(Path(self._job.source_dir) / "out"))
         target.mkdir(parents=True, exist_ok=True)
 
+        last = source.total - 1
+        start_idx = self._job.range_start if self._job.range_start is not None else 0
+        end_idx = self._job.range_end if self._job.range_end is not None else last
+        start_idx = max(0, min(start_idx, last))
+        end_idx = max(start_idx, min(end_idx, last))
+        n = end_idx - start_idx + 1
+
         start_time = time.perf_counter()
 
         # ── Pass 1: detect anchors ─────────────────────────────────
         anchors: list[Optional[tuple[float, float]]] = []
-        for idx in range(source.total):
+        for offset in range(n):
             if self._stop.is_set():
                 return
+            idx = start_idx + offset
             path = str(source.path(idx))
             anchors.append(self._detect_path(path, s))
-            if idx % _PROGRESS_EVERY == 0 or idx == source.total - 1:
-                self._emit_progress(start_time, idx + 1, source.total, phase="detect")
+            if offset % _PROGRESS_EVERY == 0 or offset == n - 1:
+                self._emit_progress(start_time, offset + 1, n, phase="detect")
 
         # ── Pass 2: compute shifts; smooth dx, leave dy raw ────────
         raw_dx, raw_dy = self._raw_shifts(s, anchors)
         smoothed_dx = smooth_dx(raw_dx)
 
         # ── Pass 3: apply transforms + write ───────────────────────
-        for idx in range(source.total):
+        for offset in range(n):
             if self._stop.is_set():
                 return
+            idx = start_idx + offset
             path = str(source.path(idx))
             try:
                 arr = np.asarray(Image.open(path).convert("RGB"))
             except Exception:
                 continue
-            dx = smoothed_dx[idx]
-            dy = raw_dy[idx] if raw_dy[idx] is not None else 0.0
+            dx = smoothed_dx[offset]
+            dy = raw_dy[offset] if raw_dy[offset] is not None else 0.0
             out = self._apply_shift_and_crop(arr, (dx, dy), s)
             try:
                 Image.fromarray(out).save(str(target / f"frame_{idx:05d}.png"))
             except Exception:
                 continue
-            if idx % _PROGRESS_EVERY == 0 or idx == source.total - 1:
-                self._emit_progress(start_time, idx + 1, source.total, phase="write")
+            if offset % _PROGRESS_EVERY == 0 or offset == n - 1:
+                self._emit_progress(start_time, offset + 1, n, phase="write")
 
         self._signals.finished.emit(self._job.id)
 

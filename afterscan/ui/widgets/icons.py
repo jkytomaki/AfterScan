@@ -18,10 +18,10 @@ _ICONS_DIR = Path(__file__).resolve().parents[3] / "Resources" / "icons"
 
 
 @lru_cache(maxsize=64)
-def lucide_icon(name: str, color: str = "#ece8e1", size: int = 18) -> QIcon:
+def lucide_pixmap(name: str, color: str = "#ece8e1", size: int = 18) -> QPixmap:
     svg_path = _ICONS_DIR / f"{name}.svg"
     if not svg_path.exists():
-        return QIcon()
+        return QPixmap()
     renderer = QSvgRenderer(str(svg_path))
     pixmap = QPixmap(QSize(size, size))
     pixmap.fill(Qt.transparent)
@@ -37,4 +37,9 @@ def lucide_icon(name: str, color: str = "#ece8e1", size: int = 18) -> QIcon:
     tp.setCompositionMode(QPainter.CompositionMode_SourceIn)
     tp.fillRect(tinted.rect(), QColor(color))
     tp.end()
-    return QIcon(tinted)
+    return tinted
+
+
+def lucide_icon(name: str, color: str = "#ece8e1", size: int = 18) -> QIcon:
+    pm = lucide_pixmap(name, color, size)
+    return QIcon(pm) if not pm.isNull() else QIcon()
