@@ -75,6 +75,8 @@ def _ultralytics_device() -> Any:
 
         if torch.cuda.is_available():
             return 0
+        if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+            return "mps"
     except Exception:
         pass
     return "cpu"
