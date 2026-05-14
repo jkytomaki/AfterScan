@@ -106,6 +106,13 @@ class MainWindow(QMainWindow):
         # mean "not detected yet".
         self._detection_cache: dict[int, _CachedDetection | None] = {}
         self._prefetch_task: PrefetchAnchorsTask | None = None
+        # Short-lived YOLO tasks (per-scrub detect + calibration) emit
+        # signals across thread boundaries from the raw-threading-based
+        # _SerialTaskPool. If the Python-side task wrapper is dropped
+        # before the queued signal delivers, shiboken can fault during
+        # event dispatch (cppPointer on a stale QObjectWrapper). We
+        # retain submissions here and drop them in the finished slot.
+        self._inflight_tasks: set[object] = set()
         self._play_buffering: bool = False
         # Set on pause and cleared on the next user action (seek, method
         # change, replay).  When set, the next detection result feeds the
@@ -304,6 +311,8 @@ class MainWindow(QMainWindow):
         self.frame_range.current = 0
         self.frame_range.detected = source.total
         self.frame_range.undetected_indices = []
+        self.frame_range.range_start = None
+        self.frame_range.range_end = None
 
         home = os.path.expanduser("~")
         dim_prefix = home + "/" if folder.startswith(home + "/") else ""
@@ -616,7 +625,9 @@ class MainWindow(QMainWindow):
         source_panel = self.inspector.panels["source"]
         source_panel.set_estimate_busy(True)
         task = CalibrateReelTask(self._frame_source, model_path)
+        self._inflight_tasks.add(task)
         task.signals.finished.connect(self._on_calibration_estimated)
+        task.signals.finished.connect(lambda _r, _t=task: self._inflight_tasks.discard(_t))
         yolo_worker.thread_pool().start(task)
 
     def _on_calibration_estimated(self, calib: Calibration) -> None:
@@ -655,7 +666,9 @@ class MainWindow(QMainWindow):
         source_panel.set_estimate_busy(True)
         self.filmstrip.set_auto_setup_busy(True)
         task = CalibrateReelTask(self._frame_source, model_path)
+        self._inflight_tasks.add(task)
         task.signals.finished.connect(self._on_auto_setup_done)
+        task.signals.finished.connect(lambda _r, _t=task: self._inflight_tasks.discard(_t))
         yolo_worker.thread_pool().start(task)
 
     def _on_auto_setup_done(self, calib: Calibration) -> None:
@@ -838,9 +851,13 @@ class MainWindow(QMainWindow):
             layout=self._reel_layout(),
             y_prior=y_prior,
         )
+        self._inflight_tasks.add(task)
         gen = self._detection_generation
         task.signals.finished.connect(
             lambda fi, res, g=gen: self._on_yolo_finished(fi, res, g)
+        )
+        task.signals.finished.connect(
+            lambda *_a, _t=task: self._inflight_tasks.discard(_t)
         )
         yolo_worker.thread_pool().start(task)
 
@@ -912,12 +929,15 @@ class MainWindow(QMainWindow):
         if not self.settings.source_dir:
             return
         name = Path(self.settings.source_dir).name or "current"
+        start, end = self.frame_range.effective_range()
         job = Job(
             name=name,
             source_dir=self.settings.source_dir,
             target_dir=self.settings.target_dir,
-            frame_total=self.frame_range.total,
+            frame_total=end - start + 1 if self.frame_range.total else 0,
             settings=replace(self.settings),
+            range_start=self.frame_range.range_start,
+            range_end=self.frame_range.range_end,
         )
         self._job_list.add(job)
         self.queue.refresh()
