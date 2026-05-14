@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from PySide6.QtCore import QRect, Qt, Signal
 from PySide6.QtGui import QColor, QKeySequence, QMouseEvent, QPainter, QPen, QPixmap, QShortcut
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QSizePolicy, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QApplication, QFrame, QHBoxLayout, QLabel, QLineEdit, QSizePolicy,
+    QVBoxLayout, QWidget,
+)
 
 from afterscan.core.settings import FrameRange, Settings
 from afterscan.ui.theme import DARK
@@ -38,9 +41,9 @@ class Filmstrip(QFrame):
         layout.addWidget(self._strip)
 
         self._sc_in = QShortcut(QKeySequence("I"), self)
-        self._sc_in.activated.connect(self._set_range_start)
+        self._sc_in.activated.connect(self._snap_range_start)
         self._sc_out = QShortcut(QKeySequence("O"), self)
-        self._sc_out.activated.connect(self._set_range_end)
+        self._sc_out.activated.connect(self._snap_range_end)
 
     def _controls_row(self) -> QHBoxLayout:
         row = QHBoxLayout()
@@ -102,6 +105,18 @@ class Filmstrip(QFrame):
 
     def _toggle_play(self) -> None:
         self.play_toggled.emit(not self._playing)
+
+    def _snap_range_start(self) -> None:
+        # I/O shortcuts use WindowShortcut context, which would otherwise
+        # fire while the user is typing in any text input.
+        if isinstance(QApplication.focusWidget(), QLineEdit):
+            return
+        self._set_range_start()
+
+    def _snap_range_end(self) -> None:
+        if isinstance(QApplication.focusWidget(), QLineEdit):
+            return
+        self._set_range_end()
 
     def _set_range_start(self) -> None:
         if self._fr.total == 0:
@@ -187,15 +202,23 @@ class _StripWidget(QWidget):
                 p.setPen(QPen(QColor(0, 0, 0, 140)))
                 p.drawLine(cell.right(), cell.y(), cell.right(), cell.bottom())
 
+    def _inner_rect(self) -> QRect:
+        return self.rect().adjusted(1, 1, -1, -1)
+
     def _frame_to_x(self, idx: int) -> int:
         last = max(self._fr.total - 1, 1)
-        inner = self.rect().adjusted(1, 1, -1, -1)
+        inner = self._inner_rect()
         ratio = max(0.0, min(1.0, idx / last))
-        return inner.x() + int(ratio * (inner.width() - 1))
+        return inner.x() + int(round(ratio * (inner.width() - 1)))
 
     def _x_to_frame(self, x: float) -> int:
-        ratio = max(0.0, min(1.0, x / max(self.width(), 1)))
-        return int(ratio * max(self._fr.total - 1, 0))
+        last = max(self._fr.total - 1, 0)
+        if last == 0:
+            return 0
+        inner = self._inner_rect()
+        span = max(inner.width() - 1, 1)
+        ratio = max(0.0, min(1.0, (x - inner.x()) / span))
+        return int(round(ratio * last))
 
     def _handle_at(self, x: float) -> str | None:
         if self._fr.total == 0:
@@ -203,9 +226,17 @@ class _StripWidget(QWidget):
         last = max(self._fr.total - 1, 0)
         start = self._fr.range_start if self._fr.range_start is not None else 0
         end = self._fr.range_end if self._fr.range_end is not None else last
-        d_start = abs(x - self._frame_to_x(start))
-        d_end = abs(x - self._frame_to_x(end))
-        if d_start <= d_end:
+        x_start = self._frame_to_x(start)
+        x_end = self._frame_to_x(end)
+        d_start = abs(x - x_start)
+        d_end = abs(x - x_end)
+        # When both handles share an x (collapsed range), the cursor's
+        # side disambiguates — left of the handle drags start, right
+        # drags end. Otherwise pick the closer one.
+        if x_start == x_end:
+            which = "end" if x > x_end else "start"
+            return which if min(d_start, d_end) <= _HANDLE_HIT_PX else None
+        if d_start < d_end:
             return "start" if d_start <= _HANDLE_HIT_PX else None
         return "end" if d_end <= _HANDLE_HIT_PX else None
 
@@ -250,8 +281,11 @@ class _StripWidget(QWidget):
         pen = QPen(cap_color)
         pen.setWidthF(2)
         p.setPen(pen)
-        cap_top = rect.y() - 4
-        cap_bot = rect.bottom() + 4
+        # Keep caps inside the widget rect — QWidget painting is clipped
+        # to its bounds, so horizontal cap ticks drawn outside would be
+        # invisible and the bracket would degenerate to a vertical line.
+        cap_top = rect.y() + 1
+        cap_bot = rect.bottom() - 1
         tick = 5
         p.drawLine(x_start, cap_top, x_start, cap_bot)
         p.drawLine(x_start, cap_top, x_start + tick, cap_top)
