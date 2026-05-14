@@ -20,7 +20,7 @@ from pathlib import Path
 from afterscan import __version__
 from afterscan.core import jobs as jobs_io
 from afterscan.core import yolo_worker
-from afterscan.core.fuse import ReelLayout
+from afterscan.core.fuse import DetectedAnchor, ReelLayout, accept_shift
 from afterscan.core.reel_calibrate import Calibration, CalibrateReelTask
 from afterscan.core.yolo_worker import PrefetchAnchorsTask, YoloDetectTask
 from afterscan.core.frames import FrameSource
@@ -41,10 +41,6 @@ _DEFAULT_YOLO_MODEL = (
     Path(__file__).resolve().parents[1]
     / "Resources" / "yolo_sprocket_detector_3class.pt"
 )
-# Reject shifts larger than these — almost certainly a misdetection. Mirrors
-# the legacy AfterScan.py thresholds (line 4685).
-_MAX_SHIFT_X = 200
-_MAX_SHIFT_Y = 600
 # Stabilized playback: hold the play-timer until at least this many
 # frames ahead of the playhead are detected, so the user doesn't see
 # the unstabilized first frames of every play start.
@@ -67,6 +63,10 @@ class _CachedDetection:
     anchors: list[tuple[float, float, str, float]]
     # (x, y, label, confidence, reason) tuples for detections filtered by fuse_anchors.
     rejected_anchors: list[tuple[float, float, str, float, str]] = field(default_factory=list)
+    # Hypothesis-fusion metadata (carried for the inspector / gate).
+    score: float = 0.0
+    phase_ambiguous: bool = False
+    assignment: tuple[tuple[str, str], ...] = ()  # (det.label, slot_name)
 
 
 class MainWindow(QMainWindow):
@@ -478,11 +478,19 @@ class MainWindow(QMainWindow):
         if end <= from_idx:
             return
         model_path = self.settings.yolo_model or str(_DEFAULT_YOLO_MODEL)
+        # Seed the prefetcher's walking phase prior with the static
+        # reference; the task updates `_walking_y` after each accepted
+        # frame so subsequent frames have a tight temporal prior.
+        s = self.settings
+        initial_y_prior: float | None = None
+        if s.reference_y is not None:
+            initial_y_prior = s.reference_y + s.comp_y
         task = PrefetchAnchorsTask(
             self._frame_source, from_idx, end, model_path,
             self.settings.confidence,
             edge_refine=self.settings.edge_refinement,
             layout=self._reel_layout(),
+            initial_y_prior=initial_y_prior,
         )
         task.signals.anchor_ready.connect(self._on_prefetch_anchor)
         task.signals.finished.connect(self._on_prefetch_finished)
@@ -501,7 +509,12 @@ class MainWindow(QMainWindow):
             # Don't clobber a richer entry left by a previous live
             # detection (which has the per-class anchors list).
             self._detection_cache[idx] = _CachedDetection(
-                anchor_x=anchor[0], anchor_y=anchor[1], label="", anchors=[],
+                anchor_x=anchor.x, anchor_y=anchor.y, label="", anchors=[],
+                score=anchor.score,
+                phase_ambiguous=anchor.phase_ambiguous,
+                assignment=tuple(
+                    (d.label, slot) for d, slot in anchor.assignment
+                ),
             )
         if self._play_buffering:
             # Resume the play-timer once `_PLAY_BUFFER` frames *ahead* of
@@ -578,6 +591,10 @@ class MainWindow(QMainWindow):
             self.settings.sprocket_left_x = float(calib.left_x)
         if calib.right_x is not None:
             self.settings.seam_right_x = float(calib.right_x)
+        if calib.corner_to_seam_offset is not None:
+            self.settings.corner_to_seam_offset = float(calib.corner_to_seam_offset)
+        if calib.sprocket_bbox_height_px is not None:
+            self.settings.sprocket_bbox_height_px = float(calib.sprocket_bbox_height_px)
         self._stop_prefetch()
         self._detection_cache.clear()
         self.preview.update_canvas()
@@ -609,6 +626,10 @@ class MainWindow(QMainWindow):
             self.settings.sprocket_left_x = float(calib.left_x)
         if calib.right_x is not None:
             self.settings.seam_right_x = float(calib.right_x)
+        if calib.corner_to_seam_offset is not None:
+            self.settings.corner_to_seam_offset = float(calib.corner_to_seam_offset)
+        if calib.sprocket_bbox_height_px is not None:
+            self.settings.sprocket_bbox_height_px = float(calib.sprocket_bbox_height_px)
         if calib.reference_x is not None and calib.reference_y is not None:
             self.settings.reference_x = calib.reference_x
             self.settings.reference_y = calib.reference_y
@@ -668,6 +689,8 @@ class MainWindow(QMainWindow):
             film_format=s.format if s.sprocket_pitch_px else None,
             left_x=s.sprocket_left_x,
             right_x=s.seam_right_x,
+            corner_to_seam_offset=s.corner_to_seam_offset,
+            sprocket_bbox_height_px=s.sprocket_bbox_height_px,
         )
 
     def _set_reference(self) -> None:
@@ -689,9 +712,12 @@ class MainWindow(QMainWindow):
         cx, cy = self._latest_anchor
         dx = rx - cx + self.settings.comp_x
         dy = ry - cy + self.settings.comp_y
-        # Likely-misdetection guard: an outlier shift snaps the preview
-        # halfway across the canvas. Drop it; keep the previous shift.
-        if abs(dx) > _MAX_SHIFT_X or abs(dy) > _MAX_SHIFT_Y:
+        # Score gate: look up the current frame's cached score (prefer
+        # the displayed frame's cache entry; fall back to 0.0 if no
+        # entry yet, so a freshly-set reference shows its shift).
+        cached = self._detection_cache.get(self.frame_range.current)
+        score = cached.score if cached is not None else 0.0
+        if not accept_shift(dx, dy, score, s.sprocket_pitch_px):
             self._update_frame_data()
             return
         self.preview.set_shift(dx, dy)
@@ -715,7 +741,7 @@ class MainWindow(QMainWindow):
             rx, ry = reference
             dx = rx - cached.anchor_x + s.comp_x
             dy = ry - cached.anchor_y + s.comp_y
-            if abs(dx) <= _MAX_SHIFT_X and abs(dy) <= _MAX_SHIFT_Y:
+            if accept_shift(dx, dy, cached.score, s.sprocket_pitch_px):
                 shift = (dx, dy)
         self.inspector.frame_data.update_frame(
             frame_idx=idx,
@@ -745,10 +771,20 @@ class MainWindow(QMainWindow):
         idx = self.frame_range.current
         path = str(self._frame_source.path(idx))
         model_path = self.settings.yolo_model or str(_DEFAULT_YOLO_MODEL)
+        # Live preview: prefer the previous accepted anchor's y as the
+        # phase prior (temporal continuity); fall back to the static
+        # reference when there's nothing cached yet.
+        s = self.settings
+        y_prior = (
+            self._latest_anchor[1]
+            if self._latest_anchor is not None
+            else (s.reference_y + s.comp_y if s.reference_y is not None else None)
+        )
         task = YoloDetectTask(
             idx, path, model_path, self.settings.confidence,
             edge_refine=self.settings.edge_refinement,
             layout=self._reel_layout(),
+            y_prior=y_prior,
         )
         task.signals.finished.connect(self._on_yolo_finished)
         yolo_worker.thread_pool().start(task)
@@ -777,6 +813,9 @@ class MainWindow(QMainWindow):
             self._detection_cache[frame_idx] = _CachedDetection(
                 anchor_x=result.anchor_x, anchor_y=result.anchor_y,
                 label=label, anchors=anchors, rejected_anchors=rejected,
+                score=result.score,
+                phase_ambiguous=result.phase_ambiguous,
+                assignment=result.assignment,
             )
         if frame_idx == self.frame_range.current:
             self._after_detection_landed(frame_idx)

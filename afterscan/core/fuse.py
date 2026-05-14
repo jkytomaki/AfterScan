@@ -68,6 +68,33 @@ _SEAM_Y_WEIGHT = 0.6
 # Default Regular 8 ratio: (seam_y - top_right_y) / pitch.
 # Derived from the reference scan: 151 px / 1119 px ≈ 0.135.
 _R8_CORNER_SEAM_RATIO = 0.15
+# Default sprocket bbox height as a fraction of pitch, used when the
+# slot model needs `sprocket_bbox_height_px` and calibration hasn't
+# produced one yet.
+_R8_BBOX_HEIGHT_RATIO = 0.10
+# Phase-candidate tie tolerance: hypotheses whose WRMS exceeds the min by
+# more than ``min_score * (1 + _PHASE_TIE_REL) + _PHASE_TIE_ABS`` are not
+# treated as ties. The absolute floor keeps the test meaningful even when
+# min_score is 0 (single-detection frames).
+_PHASE_TIE_REL = 0.10
+_PHASE_TIE_ABS = 1.0  # pixels
+
+# ── canonical slot names (used in HypothesisFit.assignment) ─────────────────
+_SLOT_TOP_SEAM = "top_seam"
+_SLOT_BOTTOM_SEAM = "bottom_seam"
+_SLOT_TOP_SPROCKET_TR = "top_sprocket_top_right"
+_SLOT_TOP_SPROCKET_BR = "top_sprocket_bottom_right"
+_SLOT_BOT_SPROCKET_TR = "bottom_sprocket_top_right"
+_SLOT_BOT_SPROCKET_BR = "bottom_sprocket_bottom_right"
+
+# Class → ordered (top_slot, bottom_slot) tuple. The first entry is the
+# slot above the frame midline; the second is below. Within-class
+# y-ordering is enforced when both slots in a class are filled.
+_CLASS_SLOTS: dict[str, tuple[str, str]] = {
+    _TOP_RIGHT:    (_SLOT_TOP_SPROCKET_TR, _SLOT_BOT_SPROCKET_TR),
+    _BOTTOM_RIGHT: (_SLOT_TOP_SPROCKET_BR, _SLOT_BOT_SPROCKET_BR),
+    _SEAM_RIGHT:   (_SLOT_TOP_SEAM,        _SLOT_BOTTOM_SEAM),
+}
 
 
 EvidenceTier = Literal[
@@ -97,21 +124,55 @@ class ReelLayout:
     # Calibrated offset: seam_y − top_right_y for Regular 8.
     # Positive = seam is below the top-right corner.
     corner_to_seam_offset: Optional[float] = None
+    # Median sprocket bbox height (top-right to bottom-right corner).
+    sprocket_bbox_height_px: Optional[float] = None
+
+
+@dataclass(frozen=True)
+class HypothesisFit:
+    """A single assignment of detections to canonical slots, fit to its
+    optimal `top_seam_y`. Returned by the layout-aware fuser; multiple
+    `HypothesisFit` objects with the same score reflect phase ties.
+
+    `anchor` is the (canon_x, canon_y) the fuser would produce for this
+    fit — same convention as :attr:`FuseResult.anchor`."""
+
+    top_seam_y: float
+    anchor: tuple[float, float]
+    score: float                                     # weighted RMS residual (px)
+    assignment: tuple[tuple[Detection, str], ...]    # (det, slot_name)
 
 
 @dataclass(frozen=True)
 class FuseResult:
     """Output of :func:`fuse_anchors`."""
 
-    anchor: tuple[float, float]    # fused (x, y) — canonical frame reference
+    anchor: tuple[float, float]    # fused (x, y) — canonical frame reference (best hypothesis)
     primary: Detection             # best detection (used for edge refinement)
     surviving: list[Detection]     # detections that passed all gates
     rotation: Optional[float]      # slope (deg off-vertical) from sprocket pair
     tier: EvidenceTier = "pair_fit"
     # (detection, reason) pairs for every detection that did not survive.
     # Reasons: "below_threshold", "sprocket_x_gate", "seam_x_gate",
-    #          "seam_content_area", "x_ransac", "no_corroborator".
+    #          "seam_content_area", "x_ransac", "no_corroborator", "over_capacity".
     rejected: tuple[tuple[Detection, str], ...] = ()
+    # Layout-aware extras (empty on the legacy path):
+    score: float = 0.0
+    phase_candidates: tuple[HypothesisFit, ...] = ()
+
+
+@dataclass(frozen=True)
+class DetectedAnchor:
+    """Resolved per-frame anchor passed through the detection pipelines.
+
+    Replaces the bare ``(anchor_x, anchor_y)`` tuple in job_runner /
+    yolo_worker / app once the hypothesis fuser is wired in."""
+
+    x: float
+    y: float
+    score: float = 0.0
+    phase_ambiguous: bool = False
+    assignment: tuple[tuple[Detection, str], ...] = ()
 
 
 # ── public helpers ────────────────────────────────────────────────────────────
@@ -237,6 +298,185 @@ def _xcorr(ax: float, ay: float, tan_theta: float) -> float:
     return ax - ay * tan_theta
 
 
+def _slot_offsets(layout: ReelLayout) -> dict[str, float]:
+    """Slot y-offsets from `top_seam_y`. Pitch is assumed non-None
+    (callers gate on `_layout_is_usable`)."""
+    pitch = layout.pitch or 0.0
+    cseam = (
+        layout.corner_to_seam_offset
+        if layout.corner_to_seam_offset is not None
+        else pitch * _R8_CORNER_SEAM_RATIO
+    )
+    bbox = (
+        layout.sprocket_bbox_height_px
+        if layout.sprocket_bbox_height_px is not None
+        else pitch * _R8_BBOX_HEIGHT_RATIO
+    )
+    return {
+        _SLOT_TOP_SEAM:           0.0,
+        _SLOT_TOP_SPROCKET_TR:    -cseam,
+        _SLOT_TOP_SPROCKET_BR:    -cseam + bbox,
+        _SLOT_BOTTOM_SEAM:        pitch,
+        _SLOT_BOT_SPROCKET_TR:    pitch - cseam,
+        _SLOT_BOT_SPROCKET_BR:    pitch - cseam + bbox,
+    }
+
+
+def _cap_per_class(
+    detections: list[Detection],
+    rejected: list[tuple[Detection, str]],
+) -> dict[str, list[Detection]]:
+    """Bucket by class. Each class has at most 2 slots; if more
+    detections are present, keep the top 2 by confidence and mark the
+    rest as ``over_capacity`` in ``rejected``."""
+    by_class: dict[str, list[Detection]] = {}
+    for d in detections:
+        by_class.setdefault(d.label, []).append(d)
+    for label in list(by_class.keys()):
+        bucket = by_class[label]
+        if len(bucket) > 2:
+            ranked = sorted(bucket, key=lambda d: d.confidence, reverse=True)
+            by_class[label] = ranked[:2]
+            for d in ranked[2:]:
+                rejected.append((d, "over_capacity"))
+    return by_class
+
+
+def _hypothesis_search(
+    by_class: dict[str, list[Detection]],
+    layout: ReelLayout,
+) -> list[HypothesisFit]:
+    """Enumerate every valid (class → slot) assignment, score each, and
+    return the set of phase-tied minimums.
+
+    Structural rules enforced:
+      * No two detections share a slot.
+      * Within-class y-ordering when both slots in a class are filled:
+        bottom-slot detection must have larger image y.
+      * Pitch consistency on seam pairs.
+
+    Per-class caps are assumed already applied (see :func:`_cap_per_class`)."""
+    offsets = _slot_offsets(layout)
+    pitch = layout.pitch
+    assert pitch is not None  # _layout_is_usable enforces this
+
+    # Per class: list of (assignment, weight) per detection.
+    # Build assignment candidates per class (lists of slot tuples in
+    # detection order). `None` means "this detection is dropped" — we
+    # don't actually drop here, we just enumerate full assignments.
+    per_class_options: list[tuple[list[tuple[Detection, float, str]], str]] = []
+    for label, bucket in by_class.items():
+        if not bucket:
+            continue
+        slots = _CLASS_SLOTS.get(label)
+        if slots is None:
+            continue
+        class_factor = _SEAM_Y_WEIGHT if label == _SEAM_RIGHT else 1.0
+        weighted = [
+            (d, d.confidence * class_factor, label) for d in bucket
+        ]
+        per_class_options.append((weighted, label))
+
+    if not per_class_options:
+        return []
+
+    def class_assignments(
+        bucket: list[tuple[Detection, float, str]], label: str,
+    ) -> list[list[tuple[Detection, float, str]]]:
+        """All valid slot assignments for one class bucket. Each result
+        is a parallel list of (det, w, slot_name) tuples."""
+        slots = _CLASS_SLOTS[label]  # (top_slot, bottom_slot)
+        if len(bucket) == 1:
+            # One detection → either slot.
+            d, w, _ = bucket[0]
+            return [
+                [(d, w, slots[0])],
+                [(d, w, slots[1])],
+            ]
+        # Two detections → fill both slots; within-class y-ordering
+        # requires the bottom-slot detection to have larger y.
+        d0, d1 = bucket[0], bucket[1]
+        y0 = class_anchor(d0[0])[1]
+        y1 = class_anchor(d1[0])[1]
+        if y0 < y1:
+            top, bot = d0, d1
+        else:
+            top, bot = d1, d0
+        # Pitch consistency check (only for the seam pair).
+        if label == _SEAM_RIGHT:
+            gap = abs(class_anchor(bot[0])[1] - class_anchor(top[0])[1])
+            if abs(gap / pitch - 1.0) > _PITCH_TOLERANCE:
+                # Invalid pair → caller will collapse to highest-conf seam
+                # before calling us; this branch is defensive only.
+                return [
+                    [(top, top[1], slots[0])],
+                    [(bot, bot[1], slots[1])],
+                ]
+        return [[
+            (top[0], top[1], slots[0]),
+            (bot[0], bot[1], slots[1]),
+        ]]
+
+    # Cartesian product across classes.
+    class_choice_lists = [
+        class_assignments(bucket, label) for bucket, label in per_class_options
+    ]
+
+    fits: list[HypothesisFit] = []
+    # Iterate every combination of per-class choices.
+    stack: list[int] = [0] * len(class_choice_lists)
+    while True:
+        # Flatten current choice across classes.
+        flat: list[tuple[Detection, float, str]] = []
+        for i, choices in enumerate(class_choice_lists):
+            flat.extend(choices[stack[i]])
+
+        # Bottom-right within-class y-ordering already enforced; the only
+        # remaining structural concern is that no two detections share a
+        # slot. Since each class draws from disjoint slot names and the
+        # two-detection branch always uses both slots in order, the only
+        # way to collide is to have a same-class single-detection branch
+        # twice — impossible because each class appears at most once in
+        # per_class_options.
+
+        total_w = sum(w for _, w, _ in flat)
+        if total_w > 0:
+            top_seam_y = sum(
+                w * (class_anchor(d)[1] - offsets[slot])
+                for d, w, slot in flat
+            ) / total_w
+            sq = 0.0
+            for d, w, slot in flat:
+                r = class_anchor(d)[1] - offsets[slot] - top_seam_y
+                sq += w * r * r
+            score = math.sqrt(sq / total_w)
+            fits.append(HypothesisFit(
+                top_seam_y=top_seam_y,
+                anchor=(0.0, top_seam_y),    # x filled in by _layout_fuse
+                score=score,
+                assignment=tuple((d, slot) for d, _, slot in flat),
+            ))
+
+        # Increment the stack like an odometer.
+        i = 0
+        while i < len(stack):
+            stack[i] += 1
+            if stack[i] < len(class_choice_lists[i]):
+                break
+            stack[i] = 0
+            i += 1
+        if i == len(stack):
+            break
+
+    if not fits:
+        return []
+
+    fits.sort(key=lambda f: f.score)
+    min_score = fits[0].score
+    tie_cap = min_score * (1.0 + _PHASE_TIE_REL) + _PHASE_TIE_ABS
+    return [f for f in fits if f.score <= tie_cap]
+
+
 def _layout_fuse(
     detections: list[Detection],
     layout: ReelLayout,
@@ -308,68 +548,66 @@ def _layout_fuse(
         )
         sprockets = [d for d in sprockets if abs(xc(d) - med_xc) <= _SPROCKET_X_GATE]
 
-    # ── Step 4: identify frame boundaries from seam y positions ─────────────
-    seam_ys = sorted(class_anchor(d)[1] for d in seams)
-    top_seam_y = seam_ys[0] if seam_ys else None
-    bot_seam_y = seam_ys[-1] if len(seam_ys) >= 2 else None
+    # ── Step 4: collapse invalid seam pairs ──────────────────────────────────
+    # When two seams are detected but their y-gap fails the pitch
+    # consistency check, keep only the highest-confidence one. The
+    # hypothesis search itself rejects an inconsistent pair as an
+    # invalid assignment, but collapsing here lets the search emit
+    # cleaner phase candidates and preserves the legacy behaviour at
+    # `_layout_fuse:316` for callers that read `surviving`.
+    if len(seams) >= 2 and pitch:
+        seam_ys = sorted(class_anchor(d)[1] for d in seams)
+        if abs((seam_ys[-1] - seam_ys[0]) / pitch - 1.0) > _PITCH_TOLERANCE:
+            kept_seam = max(seams, key=lambda d: d.confidence)
+            seams = [kept_seam]
 
-    # Validate pitch of the seam pair.
-    if top_seam_y is not None and bot_seam_y is not None and pitch is not None:
-        seam_gap = bot_seam_y - top_seam_y
-        if abs(seam_gap / pitch - 1.0) > _PITCH_TOLERANCE:
-            best = max(seams, key=lambda d: d.confidence)
-            seams = [best]
-            seam_ys = [class_anchor(best)[1]]
-            top_seam_y = seam_ys[0]
-            bot_seam_y = None
+    # ── Step 5: hypothesis search ───────────────────────────────────────────
+    valid = sprockets + seams
+    if not valid:
+        return None
+    # Cap per class (3+ same-class detections → keep top 2 by confidence).
+    by_class = _cap_per_class(valid, rejected)
+    sprockets = [
+        d for label, bucket in by_class.items() for d in bucket
+        if label in (_TOP_RIGHT, _BOTTOM_RIGHT)
+    ]
+    seams = [
+        d for label, bucket in by_class.items() for d in bucket
+        if label == _SEAM_RIGHT
+    ]
 
-    # ── Step 5: project each detection to canonical y (top seam) ─────────────
-    corner_ratio = (
-        layout.corner_to_seam_offset / pitch
-        if layout.corner_to_seam_offset is not None and pitch
-        else _R8_CORNER_SEAM_RATIO
-    )
-    proj: list[tuple[float, float, Detection]] = []  # (canon_y, weight, det)
-
-    for d in sprockets:
-        _, ay = class_anchor(d)
-        w = d.confidence
-        cy, wf = _project_to_canon_y(ay, top_seam_y, bot_seam_y, pitch, img_h, corner_ratio)
-        proj.append((cy, w * wf, d))
-
-    for d in seams:
-        ay = class_anchor(d)[1]
-        w = d.confidence * _SEAM_Y_WEIGHT
-        if bot_seam_y is not None:
-            # Bottom seam: project to top seam by subtracting pitch.
-            if abs(ay - bot_seam_y) < abs(ay - top_seam_y):  # type: ignore[operator]
-                # When pitch is None, both seams are observed so we can derive
-                # the pitch from them: bot - top.  Either way, canonical = top_seam_y.
-                canon = (bot_seam_y - pitch) if pitch else top_seam_y
-                proj.append((canon, w, d))
-            else:
-                proj.append((ay, w, d))
-        elif top_seam_y is not None:
-            proj.append((ay, w, d))
-
-    if not proj:
+    candidates = _hypothesis_search(by_class, layout)
+    if not candidates:
         return None
 
-    # ── Step 6: weighted canonical y ────────────────────────────────────────
-    total_w = sum(w for _, w, _ in proj)
-    canon_y = sum(cy * w for cy, w, _ in proj) / total_w
-
-    # ── Step 7: canonical x ──────────────────────────────────────────────────
-    if layout.left_x is not None:
-        # Convert rotation-corrected x back to image x at canon_y.
-        canon_x = layout.left_x + canon_y * tan_theta
-    elif sprockets:
-        avg_xc = sum(xc(d) for d in sprockets) / len(sprockets)
-        canon_x = avg_xc + canon_y * tan_theta
-    else:
+    # ── Step 6: canonical x for each phase candidate ─────────────────────────
+    # The hypothesis search returns (0.0, top_seam_y) placeholders; fill
+    # in canon_x using the same x-derivation as before. If neither a
+    # calibrated left_x nor any sprocket survives, we have no canonical
+    # x and must reject (preserves the legacy "seam-only without
+    # left_x → None" behaviour at the old `_layout_fuse:363`).
+    if layout.left_x is None and not sprockets:
         return None
+    finalised: list[HypothesisFit] = []
+    for fit in candidates:
+        canon_y = fit.top_seam_y
+        if layout.left_x is not None:
+            canon_x = layout.left_x + canon_y * tan_theta
+        else:
+            avg_xc = sum(xc(d) for d in sprockets) / len(sprockets)
+            canon_x = avg_xc + canon_y * tan_theta
+        finalised.append(HypothesisFit(
+            top_seam_y=fit.top_seam_y,
+            anchor=(canon_x, canon_y),
+            score=fit.score,
+            assignment=fit.assignment,
+        ))
 
-    # ── Step 8: evidence tier ────────────────────────────────────────────────
+    # Default phase pick: the first candidate (caller may override via
+    # `_resolve_phase` once a `y_prior` is available).
+    best = finalised[0]
+
+    # ── Step 7: evidence tier ────────────────────────────────────────────────
     n_spr, n_sea = len(sprockets), len(seams)
     if n_spr >= 2 and n_sea >= 1:
         tier: EvidenceTier = "layout_fit"
@@ -382,64 +620,77 @@ def _layout_fuse(
     else:
         tier = "predicted"
 
-    # Primary: prefer top-right (sharpest edge, best for refinement).
     all_valid = sprockets + seams
+    # Primary: prefer top-right (sharpest edge, best for refinement).
     primary = max(all_valid, key=lambda d: (d.label == _TOP_RIGHT, d.confidence))
-
     rotation = _rotation_from_class(sprockets) if len(sprockets) >= 2 else None
 
     return FuseResult(
-        anchor=(canon_x, canon_y),
+        anchor=best.anchor,
         primary=primary,
         surviving=all_valid,
         rotation=rotation,
         tier=tier,
         rejected=tuple(rejected),
+        score=best.score,
+        phase_candidates=tuple(finalised),
     )
 
 
-def _project_to_canon_y(
-    ay: float,
-    top_seam_y: Optional[float],
-    bot_seam_y: Optional[float],
+_QUALITY_MAX = 80.0   # pixels; max WRMS of slot residuals to accept a frame
+_SHIFT_X_MAX = 200.0  # pixels; absolute |dx| cap (rotation/optics sanity)
+_SHIFT_Y_LEGACY_MAX = 600.0  # pixels; used when pitch is uncalibrated
+
+
+def accept_shift(
+    dx: float,
+    dy: float,
+    score: float,
     pitch: Optional[float],
-    img_h: Optional[int],
-    corner_ratio: float,
-) -> tuple[float, float]:
-    """Project a sprocket anchor at y=ay to the canonical top-seam y.
+) -> bool:
+    """Shared shift-gate. Replaces the legacy 200/600-pixel absolute
+    cap in `job_runner._raw_shifts`, `app._refresh_shift`, and
+    `app._update_frame_data`.
 
-    Returns (canonical_y_estimate, confidence_weight_factor).
+    A shift is accepted when the geometry is self-consistent (score
+    below ``_QUALITY_MAX``) AND the per-axis magnitudes are within
+    plausible bounds. When the layout has a known pitch, the dy bound
+    is half a frame's pitch; otherwise we fall back to the legacy
+    absolute cap."""
+    if score > _QUALITY_MAX:
+        return False
+    if abs(dx) > _SHIFT_X_MAX:
+        return False
+    if pitch and pitch > 0:
+        return abs(dy) <= pitch * 0.5
+    return abs(dy) <= _SHIFT_Y_LEGACY_MAX
 
-    For Regular 8mm the seam is just below each sprocket's top-right
-    corner.  The canonical reference is the TOP seam of the current
-    frame, so bottom-seam sprockets have ``pitch`` subtracted."""
 
-    # Both seams detected: assign by proximity.
-    if top_seam_y is not None and bot_seam_y is not None:
-        if abs(ay - top_seam_y) <= abs(ay - bot_seam_y):
-            return top_seam_y, 1.0
-        canon = (bot_seam_y - pitch) if pitch else top_seam_y
-        return canon, 0.9
+def resolve_phase(
+    result: FuseResult,
+    y_prior: Optional[float],
+) -> tuple[HypothesisFit, bool]:
+    """Pick the `phase_candidate` whose `top_seam_y` is closest to
+    `y_prior`. Returns ``(fit, phase_ambiguous)`` — ambiguous is True
+    when the input had multiple candidates and `y_prior` was supplied
+    (the caller used the prior to break a tie); False when there was
+    only one candidate or `y_prior` is None (the default fit stands).
 
-    # One seam detected: estimate the missing one from pitch.
-    if top_seam_y is not None:
-        if pitch is None:
-            return top_seam_y, 0.8
-        bot_est = top_seam_y + pitch
-        if abs(ay - top_seam_y) <= abs(ay - bot_est):
-            return top_seam_y, 1.0
-        # Near estimated bottom seam → projects to top_seam_y (bot_est - pitch).
-        return top_seam_y, 0.8
-
-    # No seam detected: use image-position heuristic + pitch.
-    if pitch is not None and img_h is not None:
-        est_seam_offset = pitch * corner_ratio
-        if ay < img_h * 0.5:
-            return ay + est_seam_offset, 0.5
-        return ay + est_seam_offset - pitch, 0.5
-
-    # No geometry info at all; return raw y with lowest weight.
-    return ay, 0.4
+    For results produced by the legacy path (no `phase_candidates`),
+    returns a synthetic single-fit from `result.anchor`."""
+    candidates = result.phase_candidates
+    if not candidates:
+        synthetic = HypothesisFit(
+            top_seam_y=result.anchor[1],
+            anchor=result.anchor,
+            score=result.score,
+            assignment=(),
+        )
+        return synthetic, False
+    if y_prior is None or len(candidates) == 1:
+        return candidates[0], False
+    pick = min(candidates, key=lambda c: abs(c.top_seam_y - y_prior))
+    return pick, True
 
 
 # ── legacy path (unchanged) ───────────────────────────────────────────────────

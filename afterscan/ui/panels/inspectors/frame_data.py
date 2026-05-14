@@ -163,6 +163,12 @@ class FrameDataInspector(QWidget):
                 "anchor_x": round(cached.anchor_x, 2),
                 "anchor_y": round(cached.anchor_y, 2),
                 "label": cached.label,
+                "score": round(getattr(cached, "score", 0.0), 2),
+                "phase_ambiguous": getattr(cached, "phase_ambiguous", False),
+                "assignment": [
+                    {"detection": lbl, "slot": slot}
+                    for lbl, slot in getattr(cached, "assignment", ())
+                ],
                 "anchors": [
                     {"label": lbl, "x": round(x, 2), "y": round(y, 2), "confidence": round(conf, 3)}
                     for x, y, lbl, conf in cached.anchors

@@ -25,9 +25,13 @@ import numpy as np
 from PIL import Image
 from PySide6.QtCore import QObject, QRunnable, Signal
 
+import dataclasses
+
 from afterscan.core.classical.sprocket_corner_detect import _refine_top_edge_sobel
 from afterscan.core.detect import Detection, Detector
-from afterscan.core.fuse import ReelLayout, class_anchor, fuse_anchors
+from afterscan.core.fuse import (
+    DetectedAnchor, ReelLayout, class_anchor, fuse_anchors, resolve_phase,
+)
 
 
 @dataclass(frozen=True)
@@ -61,6 +65,10 @@ class YoloResult:
     anchors: list[YoloAnchor]             # all surviving anchors (incl. primary)
     rotation: Optional[float]             # per-frame slope hint, may be None
     rejected_anchors: list[RejectedAnchor] = field(default_factory=list)
+    # Hypothesis-fusion metadata (zero / empty for the legacy path).
+    score: float = 0.0
+    phase_ambiguous: bool = False
+    assignment: tuple[tuple[str, str], ...] = ()  # (det.label, slot_name) per surviving det
 
 
 _inference_lock = threading.Lock()
@@ -184,7 +192,7 @@ def _detect_image_on_worker(model_path: str, image_path: str) -> list[Detection]
 
 
 class _PrefetchSignals(QObject):
-    anchor_ready = Signal(int, object)  # frame_idx, (x, y) | None
+    anchor_ready = Signal(int, object)  # frame_idx, DetectedAnchor | None
     finished = Signal()
 
 
@@ -196,7 +204,12 @@ class PrefetchAnchorsTask(QRunnable):
     Each detected frame fires `signals.anchor_ready(idx, anchor)` so
     the main thread can populate its anchor cache incrementally.
     `stop()` is cooperative — sets a flag the worker checks between
-    frames, so an in-flight inference still completes before exit."""
+    frames, so an in-flight inference still completes before exit.
+
+    The prefetcher maintains a walking phase prior (``_walking_y``)
+    that starts from ``initial_y_prior`` and updates to each accepted
+    anchor's y so the next frame's phase resolution has a tight
+    temporal prior."""
 
     def __init__(
         self,
@@ -207,6 +220,7 @@ class PrefetchAnchorsTask(QRunnable):
         threshold: float,
         edge_refine: bool = True,
         layout: Optional[ReelLayout] = None,
+        initial_y_prior: Optional[float] = None,
     ) -> None:
         super().__init__()
         self.signals = _PrefetchSignals()
@@ -222,6 +236,7 @@ class PrefetchAnchorsTask(QRunnable):
         # them at different positions.
         self._edge_refine = edge_refine
         self._layout = layout
+        self._walking_y = initial_y_prior
         self._stop = threading.Event()
 
     def stop(self) -> None:
@@ -234,32 +249,28 @@ class PrefetchAnchorsTask(QRunnable):
                     break
                 path = str(self._source.path(idx))
                 anchor = self._anchor_for(path)
+                if anchor is not None:
+                    self._walking_y = anchor.y
                 self.signals.anchor_ready.emit(idx, anchor)
         finally:
             self.signals.finished.emit()
 
-    def _anchor_for(self, path: str):
+    def _anchor_for(self, path: str) -> Optional[DetectedAnchor]:
         try:
             with _inference_lock:
                 detections = detector_for(self._model_path).detect(path)
         except Exception:
             traceback.print_exc()
             return None
-        size = _image_size(path)
-        fused = fuse_anchors(
-            detections, self._threshold, image_size=size, layout=self._layout,
+        return detect_and_fuse(
+            detections,
+            self._threshold,
+            image_path=path,
+            image_size=_image_size(path),
+            layout=self._layout,
+            edge_refine=self._edge_refine,
+            y_prior=self._walking_y,
         )
-        if fused is None:
-            return None
-        anchor_x, anchor_y = fused.anchor
-        if self._edge_refine and fused.primary.label.endswith("top-right"):
-            try:
-                refined = _refine_bbox_top(path, fused.primary)
-                if refined is not None:
-                    anchor_y = refined
-            except Exception:
-                traceback.print_exc()
-        return (anchor_x, anchor_y)
 
 
 def preload(model_path: str) -> None:
@@ -290,6 +301,7 @@ class YoloDetectTask(QRunnable):
         confidence_threshold: float,
         edge_refine: bool = True,
         layout: Optional[ReelLayout] = None,
+        y_prior: Optional[float] = None,
     ) -> None:
         super().__init__()
         self.signals = _Signals()
@@ -299,6 +311,7 @@ class YoloDetectTask(QRunnable):
         self._threshold = confidence_threshold
         self._edge_refine = edge_refine
         self._layout = layout
+        self._y_prior = y_prior
 
     def run(self) -> None:
         result = self._detect()
@@ -311,22 +324,31 @@ class YoloDetectTask(QRunnable):
             traceback.print_exc()
             return None
         size = _image_size(self._image_path)
+        # Refine and fuse via the shared helper so the prefetcher and the
+        # live detector stay byte-for-byte equal.
+        refined_detections = detections
+        if self._edge_refine:
+            refined: list[Detection] = []
+            for d in detections:
+                if d.label.endswith("top-right"):
+                    try:
+                        new_y = _refine_bbox_top(self._image_path, d)
+                    except Exception:
+                        traceback.print_exc()
+                        new_y = None
+                    if new_y is not None:
+                        refined.append(dataclasses.replace(d, y=new_y))
+                        continue
+                refined.append(d)
+            refined_detections = refined
         fused = fuse_anchors(
-            detections, self._threshold, image_size=size, layout=self._layout,
+            refined_detections, self._threshold,
+            image_size=size, layout=self._layout,
         )
         if fused is None:
             return None
-        anchor_x, anchor_y = fused.anchor
-        if self._edge_refine and fused.primary.label.endswith("top-right"):
-            # Edge refinement only makes sense for the top edge of a
-            # sprocket bbox. The bottom corner / seam classes have a
-            # different geometry; skip rather than mis-snap.
-            try:
-                refined = _refine_bbox_top(self._image_path, fused.primary)
-                if refined is not None:
-                    anchor_y = refined
-            except Exception:
-                traceback.print_exc()
+        fit, ambiguous = resolve_phase(fused, self._y_prior)
+        anchor_x, anchor_y = fit.anchor
         anchors = []
         for d in fused.surviving:
             ax, ay = class_anchor(d)
@@ -354,6 +376,9 @@ class YoloDetectTask(QRunnable):
             anchors=anchors,
             rotation=fused.rotation,
             rejected_anchors=rejected_anchors,
+            score=fit.score,
+            phase_ambiguous=ambiguous,
+            assignment=tuple((d.label, slot) for d, slot in fit.assignment),
         )
 
 
@@ -365,6 +390,55 @@ def _image_size(image_path: str) -> Optional[tuple[int, int]]:
             return img.size  # (width, height)
     except Exception:
         return None
+
+
+def detect_and_fuse(
+    detections: list[Detection],
+    threshold: float,
+    *,
+    image_path: str,
+    image_size: Optional[tuple[int, int]],
+    layout: Optional[ReelLayout],
+    edge_refine: bool,
+    y_prior: Optional[float],
+) -> Optional[DetectedAnchor]:
+    """Refine top-right measurements, run hypothesis fusion, then
+    resolve phase against ``y_prior``.
+
+    Shared by the batch worker, the live detect task, and the
+    prefetcher. Keeping these three in a single helper preserves the
+    byte-for-byte equality contract called out at
+    ``PrefetchAnchorsTask._anchor_for``."""
+    refined_detections = detections
+    if edge_refine:
+        refined: list[Detection] = []
+        for d in detections:
+            if d.label.endswith("top-right"):
+                try:
+                    new_y = _refine_bbox_top(image_path, d)
+                except Exception:
+                    traceback.print_exc()
+                    new_y = None
+                if new_y is not None:
+                    refined.append(dataclasses.replace(d, y=new_y))
+                    continue
+            refined.append(d)
+        refined_detections = refined
+
+    result = fuse_anchors(
+        refined_detections, threshold,
+        image_size=image_size, layout=layout,
+    )
+    if result is None:
+        return None
+    fit, ambiguous = resolve_phase(result, y_prior)
+    return DetectedAnchor(
+        x=fit.anchor[0],
+        y=fit.anchor[1],
+        score=fit.score,
+        phase_ambiguous=ambiguous,
+        assignment=fit.assignment,
+    )
 
 
 def _refine_bbox_top(image_path: str, det: Detection) -> Optional[float]:

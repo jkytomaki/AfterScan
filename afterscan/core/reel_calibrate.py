@@ -53,6 +53,8 @@ class Calibration:
     right_x: Optional[float] = None    # seam column
     # Regular 8: median (seam_y − top_right_y) across calibration frames.
     corner_to_seam_offset: Optional[float] = None
+    # Median sprocket bbox height (bottom_right_y − top_right_y).
+    sprocket_bbox_height_px: Optional[float] = None
     # Synthetic reference: median canonical anchor across calibration frames.
     # In the same coordinate system as per-frame fuse_anchors output, so it
     # can be stored directly in Settings.reference_x / reference_y.
@@ -122,6 +124,7 @@ def calibrate(
     left_x, right_x, corner_to_seam_offset = _column_xs(
         per_frame, rotation or 0.0, pitch, film_format,
     )
+    bbox_height = _sprocket_bbox_height(per_frame, pitch)
     layout = ReelLayout(
         rotation_deg=rotation or 0.0,
         pitch=pitch,
@@ -129,6 +132,7 @@ def calibrate(
         left_x=left_x,
         right_x=right_x,
         corner_to_seam_offset=corner_to_seam_offset,
+        sprocket_bbox_height_px=bbox_height,
     )
     ref_x, ref_y = _synthetic_reference(per_frame, layout, confidence)
     return Calibration(
@@ -138,6 +142,7 @@ def calibrate(
         left_x=left_x,
         right_x=right_x,
         corner_to_seam_offset=corner_to_seam_offset,
+        sprocket_bbox_height_px=bbox_height,
         reference_x=ref_x,
         reference_y=ref_y,
     )
@@ -206,6 +211,35 @@ def _column_xs(
                     offsets.append(offset)
 
     return _median(spr_xs), _median(seam_xs), _median(offsets)
+
+
+def _sprocket_bbox_height(
+    per_frame: list[list[Detection]],
+    pitch: Optional[float],
+) -> Optional[float]:
+    """Median (bottom_right_y − top_right_y) for same-hole sprocket pairs.
+
+    A "same-hole pair" is the closest top/bottom within a frame whose gap
+    is positive and well under one pitch."""
+    if not pitch:
+        return None
+    heights: list[float] = []
+    cap = pitch * 0.5
+    for detections in per_frame:
+        tops = sorted(
+            class_anchor(d)[1] for d in detections if d.label == _TOP_RIGHT
+        )
+        bottoms = sorted(
+            class_anchor(d)[1] for d in detections if d.label == _BOTTOM_RIGHT
+        )
+        for ty in tops:
+            below = [by for by in bottoms if by > ty]
+            if not below:
+                continue
+            gap = below[0] - ty
+            if 0 < gap < cap:
+                heights.append(gap)
+    return _median(heights)
 
 
 def _median(values: list[float]) -> Optional[float]:
