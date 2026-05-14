@@ -193,6 +193,7 @@ class MainWindow(QMainWindow):
     def _wire_ui(self) -> None:
         self.topbar.start_clicked.connect(self._toggle_running)
         self.topbar.source_clicked.connect(self._pick_source_folder)
+        self.topbar.target_clicked.connect(self._pick_target_folder)
         self.filmstrip.seek_requested.connect(self._seek)
         self.filmstrip.play_toggled.connect(self._set_playing)
         self.filmstrip.set_reference_clicked.connect(self._set_reference)
@@ -246,6 +247,33 @@ class MainWindow(QMainWindow):
         if folder:
             self._load_source(folder, auto_estimate=True)
 
+    def _pick_target_folder(self) -> None:
+        start = (
+            self.settings.target_dir
+            or (str(Path(self.settings.source_dir) / "out") if self.settings.source_dir else "")
+            or os.path.expanduser("~")
+        )
+        folder = QFileDialog.getExistingDirectory(self, "Select target folder", start)
+        if not folder:
+            return
+        if folder == self.settings.source_dir:
+            return
+        self.settings.target_dir = folder
+        self._refresh_target_crumb()
+
+    def _refresh_target_crumb(self) -> None:
+        """Show the explicit target if set, otherwise the implicit
+        `<source>/out` default (so it's obvious where output will land)."""
+        target = self.settings.target_dir
+        if not target and self.settings.source_dir:
+            target = str(Path(self.settings.source_dir) / "out")
+        home = os.path.expanduser("~")
+        dim = home + "/" if target.startswith(home + "/") else ""
+        self.topbar.set_target(target or "—", dim)
+        render_panel = self.inspector.panels.get("render")
+        if render_panel is not None and hasattr(render_panel, "set_target_dir"):
+            render_panel.set_target_dir(self.settings.target_dir)
+
     def _load_source(self, folder: str, *, auto_estimate: bool = True) -> None:
         try:
             source = FrameSource(folder)
@@ -271,6 +299,7 @@ class MainWindow(QMainWindow):
             self.topbar.set_source(folder, "~/" + (parent + "/" if parent else ""))
         else:
             self.topbar.set_source(folder)
+        self._refresh_target_crumb()
 
         thumbs = source.thumbnails(_THUMB_COUNT)
         self.filmstrip.set_thumbnails(thumbs)
