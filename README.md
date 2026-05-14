@@ -41,59 +41,24 @@ This tool relies in the following open source projects to achieve its objectives
 
 2. **Install required Python packages:**
    ```bash
-   pip install pillow opencv-python matplotlib numpy
+   pip install pillow opencv-python numpy PySide6 ultralytics
    ```
 
-3. **For YOLO-based stabilization (optional):**
+3. **Run AfterScan:**
    ```bash
-   pip install ultralytics
-   ```
-
-4. **Run AfterScan:**
-   ```bash
-   python AfterScan.py
+   python -m afterscan
    ```
 
 ### Troubleshooting
-
-**If you get "No module named '_tkinter'":**
-- On macOS with Homebrew: `brew install python-tk`
-- Or use system Python: `/usr/bin/python3 AfterScan.py`
-- On Ubuntu/Debian: `sudo apt-get install python3-tk`
 
 **FFmpeg installation (optional):**
 - macOS: `brew install ffmpeg`
 - Ubuntu/Debian: `sudo apt-get install ffmpeg`
 - Windows: Download from https://ffmpeg.org/
 
-### Optional: YOLO-based Stabilization (Experimental)
+### YOLO-based Stabilization
 
-AfterScan now supports AI-powered sprocket hole detection using YOLO v8 as an alternative to traditional template matching. This provides more robust detection in challenging conditions.
-
-**To enable YOLO stabilization:**
-
-1. Create and activate a virtual environment (recommended):
-   ```bash
-   python3 -m venv venv
-   source venv/bin/activate
-   ```
-
-2. Install the ultralytics package:
-   ```bash
-   pip install ultralytics
-   ```
-
-3. The YOLO model is included in `Resources/yolo_sprocket_detector.pt`
-
-4. YOLO detection will automatically be used when enabled (currently enabled by default in the `yolo-integration` branch)
-
-**Benefits of YOLO detection:**
-- More robust to lighting and contrast variations
-- Better handling of damaged or dirty sprocket holes
-- Works across different film types without template adjustment
-- Automatic fallback to template matching if confidence is low
-
-**Note:** YOLO detection requires PyTorch (~500MB-2GB) and is slower than template matching, but provides superior robustness. GPU acceleration is recommended for better performance.
+AfterScan uses an AI-powered sprocket hole detector (YOLO) for robust stabilization across lighting conditions and film types. The model ships in `Resources/yolo_sprocket_detector_3class.pt`. PyTorch is pulled in via the `ultralytics` package; GPU acceleration is recommended for best performance.
 
 
 ## How it works:
