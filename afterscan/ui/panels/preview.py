@@ -25,6 +25,7 @@ class Preview(QFrame):
         self._pixmap: QPixmap | None = None
         self._before_pixmap: QPixmap | None = None
         self._show_split = False
+        self._output_only = False
         self._detection_point: tuple[float, float] | None = None
         self._detection_label: str = ""
         self._detection_anchors: list[tuple[float, float, str, float]] = []
@@ -46,6 +47,7 @@ class Preview(QFrame):
 
         # Floating action buttons (top-right)
         self._actions = _ActionsRow(self._canvas)
+        self._actions.fullscreen_btn.clicked.connect(self._toggle_output_only)
 
         self._refresh_chips()
         self.update_canvas()
@@ -68,6 +70,16 @@ class Preview(QFrame):
 
     def set_show_split(self, on: bool) -> None:
         self._show_split = on
+        self.update_canvas()
+
+    def _toggle_output_only(self) -> None:
+        self._output_only = not self._output_only
+        self._actions.fullscreen_btn.set_lucide(
+            "expand" if self._output_only else "shrink"
+        )
+        self._actions.fullscreen_btn.setToolTip(
+            "Show full frame" if self._output_only else "Show stabilized output"
+        )
         self.update_canvas()
 
     def set_detection(
@@ -121,6 +133,7 @@ class Preview(QFrame):
             detection_label=self._detection_label,
             detection_anchors=self._detection_anchors,
             shift=self._shift,
+            output_only=self._output_only,
         )
 
     def _refresh_chips(self) -> None:
@@ -158,6 +171,7 @@ class _Canvas(QFrame):
         self._detection_label: str = ""
         self._detection_anchors: list[tuple[float, float, str, float]] = []
         self._shift: tuple[float, float] | None = None
+        self._output_only: bool = False
         self._viewport_rect: QRect | None = None
         self._drag_handle: str | None = None
         # Scaling a multi-MP pixmap with SmoothTransformation costs
@@ -170,7 +184,8 @@ class _Canvas(QFrame):
 
     def update_state(self, *, pixmap, before, settings,
                      detection_point=None, detection_label="",
-                     detection_anchors=None, shift=None) -> None:
+                     detection_anchors=None, shift=None,
+                     output_only: bool = False) -> None:
         self._pixmap = pixmap
         self._before = before
         self._settings = settings
@@ -178,6 +193,7 @@ class _Canvas(QFrame):
         self._detection_label = detection_label
         self._detection_anchors = list(detection_anchors) if detection_anchors else []
         self._shift = shift
+        self._output_only = output_only
         self.update()
 
     def paintEvent(self, _event) -> None:
@@ -186,6 +202,14 @@ class _Canvas(QFrame):
         p.setRenderHint(QPainter.SmoothPixmapTransform)
         rect = self.rect().adjusted(0, 0, -1, -1)
         p.fillRect(rect, QColor("#000000"))
+
+        if self._output_only:
+            if self._pixmap is None or self._pixmap.isNull():
+                self._draw_placeholder(p, rect)
+                return
+            self._viewport_rect = None
+            self._draw_output_only(p, rect)
+            return
 
         rects = self._compute_rects(rect)
         if rects is None:
@@ -363,12 +387,61 @@ class _Canvas(QFrame):
             p.drawText(bg_rect.adjusted(6, 0, -4, 0),
                        Qt.AlignVCenter | Qt.AlignLeft, self._detection_label)
 
+    def _draw_output_only(self, p: QPainter, rect: QRect) -> None:
+        """Paint just the stabilized + cropped output, scaled to fill the
+        canvas. Mirrors the batch worker's order of operations
+        (shift → rotate → crop) so what the user sees here is what gets
+        written to disk."""
+        pm = self._pixmap
+        assert pm is not None
+        s = self._settings
+        iw, ih = pm.width(), pm.height()
+        if iw <= 0 or ih <= 0:
+            return
+
+        if s is not None and s.crop:
+            cl = max(0.0, min(1.0, s.crop_left))
+            ct = max(0.0, min(1.0, s.crop_top))
+            cr = max(cl + 0.02, min(1.0, s.crop_right))
+            cb = max(ct + 0.02, min(1.0, s.crop_bottom))
+        else:
+            cl, ct, cr, cb = 0.0, 0.0, 1.0, 1.0
+        crop_x = cl * iw
+        crop_y = ct * ih
+        crop_w = (cr - cl) * iw
+        crop_h = (cb - ct) * ih
+        if crop_w <= 0 or crop_h <= 0:
+            return
+
+        scale = min(rect.width() / crop_w, rect.height() / crop_h)
+        dest_w = crop_w * scale
+        dest_h = crop_h * scale
+        dest_x = rect.x() + (rect.width() - dest_w) / 2
+        dest_y = rect.y() + (rect.height() - dest_h) / 2
+
+        p.save()
+        p.setClipRect(int(dest_x), int(dest_y),
+                      int(round(dest_w)), int(round(dest_h)))
+        p.translate(dest_x, dest_y)
+        p.scale(scale, scale)
+        p.translate(-crop_x, -crop_y)
+        rotation = s.rotation if s is not None else 0.0
+        if rotation:
+            p.translate(iw / 2, ih / 2)
+            p.rotate(rotation)
+            p.translate(-iw / 2, -ih / 2)
+        if self._shift is not None:
+            p.translate(self._shift[0], self._shift[1])
+        p.drawPixmap(0, 0, pm)
+        p.restore()
+
     # ── crop drag ────────────────────────────────────────────────
 
     _CORNER_HIT = 10  # pixels
 
     def _hit_handle(self, pos) -> str | None:
-        if (self._viewport_rect is None
+        if (self._output_only
+                or self._viewport_rect is None
                 or self._settings is None
                 or not self._settings.crop):
             return None
@@ -514,9 +587,6 @@ class _ActionsRow(QFrame):
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
-        for glyph, tip in (
-            ("⊞", "Adjust crop"),
-            ("▤", "Before / After"),
-            ("⤢", "Fullscreen"),
-        ):
-            layout.addWidget(IconBtn(glyph, tooltip=tip))
+        self.fullscreen_btn = IconBtn(tooltip="Show stabilized output")
+        self.fullscreen_btn.set_lucide("shrink")
+        layout.addWidget(self.fullscreen_btn)
