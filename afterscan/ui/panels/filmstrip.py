@@ -323,8 +323,15 @@ class _StripWidget(QWidget):
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
         x = event.position().x()
         if self._drag_handle is not None:
-            self._drag_to(x)
-            return
+            # The release event can be lost (interrupted grab, focus
+            # stolen by a modal dialog, etc.). If the button isn't
+            # actually held, abandon the drag rather than moving the
+            # marker on every subsequent hover.
+            if not (event.buttons() & Qt.LeftButton):
+                self._drag_handle = None
+            else:
+                self._drag_to(x)
+                return
         if event.buttons() & Qt.LeftButton and self._fr.total > 0:
             self.setCursor(Qt.PointingHandCursor)
             self.seek_requested.emit(self._x_to_frame(x))
