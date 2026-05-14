@@ -591,21 +591,21 @@ def _layout_fuse(
         return None
 
     # ── Step 6: canonical x for each phase candidate ─────────────────────────
-    # The hypothesis search returns (0.0, top_seam_y) placeholders; fill
-    # in canon_x using the same x-derivation as before. If neither a
-    # calibrated left_x nor any sprocket survives, we have no canonical
-    # x and must reject (preserves the legacy "seam-only without
-    # left_x → None" behaviour at the old `_layout_fuse:363`).
+    # Prefer the current frame's sprocket detections so horizontal weave
+    # shows up in dx. layout.left_x is a gating prior, not the answer —
+    # using it here would lock canon_x to a constant per reel and hide
+    # real frame-to-frame x shifts. Fall back to left_x only when no
+    # sprocket survived (seam-only tier).
     if layout.left_x is None and not sprockets:
         return None
     finalised: list[HypothesisFit] = []
     for fit in candidates:
         canon_y = fit.top_seam_y
-        if layout.left_x is not None:
-            canon_x = layout.left_x + canon_y * tan_theta
-        else:
+        if sprockets:
             avg_xc = sum(xc(d) for d in sprockets) / len(sprockets)
             canon_x = avg_xc + canon_y * tan_theta
+        else:
+            canon_x = layout.left_x + canon_y * tan_theta
         finalised.append(HypothesisFit(
             top_seam_y=fit.top_seam_y,
             anchor=(canon_x, canon_y),
