@@ -34,6 +34,7 @@ from afterscan.core.frames import FrameSource
 from afterscan.core.fuse import (
     _TOP_RIGHT, _BOTTOM_RIGHT, _SEAM_RIGHT,
     ReelLayout, class_anchor, detect_format, estimate_pitch, fuse_anchors,
+    resolve_phase,
 )
 from afterscan.core.settings import FilmFormat
 
@@ -156,14 +157,24 @@ def _synthetic_reference(
     """Median canonical anchor across calibration frames.
 
     Only layout_fit and pair_fit frames contribute — those have at least
-    two compatible detections, giving a reliable canonical position."""
+    two compatible detections, giving a reliable canonical position.
+
+    Calibration has no temporal/reference prior for phase resolution.
+    The slot-model layout is pitch-periodic, so the fuser may emit two
+    tied phase candidates (top_seam_y and top_seam_y + pitch). We bias
+    toward the "top of frame" interpretation by passing ``y_prior=0``,
+    which prefers the phase whose top seam sits near the top of the
+    image — the dominant case for a properly-framed scan. The user can
+    override later via "Set reference" if the heuristic is wrong."""
     xs: list[float] = []
     ys: list[float] = []
     for detections in per_frame:
         result = fuse_anchors(detections, threshold=threshold, layout=layout)
-        if result is not None and result.tier in ("layout_fit", "pair_fit"):
-            xs.append(result.anchor[0])
-            ys.append(result.anchor[1])
+        if result is None or result.tier not in ("layout_fit", "pair_fit"):
+            continue
+        fit, _ambiguous = resolve_phase(result, y_prior=0.0)
+        xs.append(fit.anchor[0])
+        ys.append(fit.anchor[1])
     return _median(xs), _median(ys)
 
 

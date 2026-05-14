@@ -86,6 +86,17 @@ class MainWindow(QMainWindow):
         self._show_split = False
         self._suspend_mode = "none"
         self._latest_anchor: tuple[float, float] | None = None
+        # Last anchor y that survived `accept_shift`. Used as the live
+        # phase prior in `_run_detect` so a single rejected misdetection
+        # cannot lock the resolver one pitch off (a non-accepted anchor
+        # would otherwise become the prior for the next frame).
+        self._last_accepted_y: float | None = None
+        # Bumped each time the detection cache is cleared (source load,
+        # layout change, calibration, etc.). Detection tasks capture the
+        # generation at submit time; callbacks check it before writing
+        # results, so an in-flight worker can't smuggle stale anchors
+        # (from an old layout / old reel) into the fresh cache.
+        self._detection_generation: int = 0
         # Per-frame detection cache: live-detection results land here
         # via `_on_yolo_finished`, the playback prefetcher seeds it
         # ahead of the playhead, and scrubbing back to a cached frame
@@ -211,6 +222,8 @@ class MainWindow(QMainWindow):
         source = self.inspector.panels["source"]
         source.rotation_changed.connect(lambda _v: self.preview.update_canvas())
         source.rotation_changed.connect(lambda _v: self._update_frame_data())
+        source.rotation_changed.connect(lambda _v: self._on_layout_changed())
+        source.format_changed.connect(lambda _v: self._on_layout_changed())
         source.estimate_rotation_clicked.connect(self._estimate_rotation)
         self.filmstrip.auto_setup_clicked.connect(self._auto_setup)
         self._runner.job_started.connect(self._on_job_started)
@@ -280,9 +293,10 @@ class MainWindow(QMainWindow):
         except OSError:
             return
         self._stop_prefetch()
-        self._detection_cache.clear()
+        self._invalidate_detection_cache()
         self._post_play_paused = False
         self._latest_anchor = None
+        self._last_accepted_y = None
         self.preview.clear_shift()
         self._frame_source = source
         self.settings.source_dir = folder
@@ -491,8 +505,15 @@ class MainWindow(QMainWindow):
             edge_refine=self.settings.edge_refinement,
             layout=self._reel_layout(),
             initial_y_prior=initial_y_prior,
+            reference_x=s.reference_x,
+            reference_y=s.reference_y,
+            comp_x=float(s.comp_x),
+            comp_y=float(s.comp_y),
         )
-        task.signals.anchor_ready.connect(self._on_prefetch_anchor)
+        gen = self._detection_generation
+        task.signals.anchor_ready.connect(
+            lambda idx, anc, g=gen: self._on_prefetch_anchor(idx, anc, g)
+        )
         task.signals.finished.connect(self._on_prefetch_finished)
         self._prefetch_task = task
         yolo_worker.thread_pool().start(task)
@@ -502,7 +523,11 @@ class MainWindow(QMainWindow):
             self._prefetch_task.stop()
             self._prefetch_task = None
 
-    def _on_prefetch_anchor(self, idx: int, anchor) -> None:
+    def _on_prefetch_anchor(self, idx: int, anchor, generation: int = -1) -> None:
+        # Drop results from a stale prefetch (a calibration / source
+        # change bumped the generation while inference was in flight).
+        if generation != -1 and generation != self._detection_generation:
+            return
         if anchor is None:
             self._detection_cache[idx] = None
         elif idx not in self._detection_cache:
@@ -554,15 +579,31 @@ class MainWindow(QMainWindow):
             self.preview.clear_shift()
         self._schedule_detection()
 
+    def _invalidate_detection_cache(self) -> None:
+        """Drop the cache and bump the generation counter so any
+        in-flight detection task's result is ignored."""
+        self._detection_cache.clear()
+        self._detection_generation += 1
+
     def _on_detection_inputs_changed(self) -> None:
         """A setting that affects detection results changed (edge
         refinement, confidence threshold). The cached anchors are now
         stale — drop them and re-run detection on the current frame."""
         self._stop_prefetch()
-        self._detection_cache.clear()
+        self._invalidate_detection_cache()
         if self.frame_range.current >= 0:
             # Re-detect the current frame with the new settings.  The
             # detection callback will update the overlay and shift.
+            self._schedule_detection()
+
+    def _on_layout_changed(self) -> None:
+        """Rotation / format / pitch / etc. changed manually. The
+        cached anchors were computed against the old layout, so the
+        accepted-y prior and per-frame fits are no longer trustworthy."""
+        self._stop_prefetch()
+        self._invalidate_detection_cache()
+        self._last_accepted_y = None
+        if self.frame_range.current >= 0:
             self._schedule_detection()
 
     def _on_preview_crop_dragged(self) -> None:
@@ -596,7 +637,12 @@ class MainWindow(QMainWindow):
         if calib.sprocket_bbox_height_px is not None:
             self.settings.sprocket_bbox_height_px = float(calib.sprocket_bbox_height_px)
         self._stop_prefetch()
-        self._detection_cache.clear()
+        self._invalidate_detection_cache()
+        # Layout-affecting calibration changed (pitch, columns, offsets);
+        # the previously-accepted anchor's coordinate system no longer
+        # matches. Reset the prior so the next detection seeds phase
+        # from `reference_y + comp_y`.
+        self._last_accepted_y = None
         self.preview.update_canvas()
         self._update_frame_data()
         self._schedule_detection()
@@ -642,7 +688,8 @@ class MainWindow(QMainWindow):
             self.settings.crop_bottom = cb
             self.settings.crop = True
         self._stop_prefetch()
-        self._detection_cache.clear()
+        self._invalidate_detection_cache()
+        self._last_accepted_y = None
         self.preview.update_canvas()
         self._update_frame_data()
         self._schedule_detection()
@@ -720,6 +767,9 @@ class MainWindow(QMainWindow):
         if not accept_shift(dx, dy, score, s.sprocket_pitch_px):
             self._update_frame_data()
             return
+        # The shift survived the gate — record y as the live phase prior
+        # so the next detection's resolve_phase uses a trusted anchor.
+        self._last_accepted_y = cy
         self.preview.set_shift(dx, dy)
         self._update_frame_data()
 
@@ -773,11 +823,13 @@ class MainWindow(QMainWindow):
         model_path = self.settings.yolo_model or str(_DEFAULT_YOLO_MODEL)
         # Live preview: prefer the previous accepted anchor's y as the
         # phase prior (temporal continuity); fall back to the static
-        # reference when there's nothing cached yet.
+        # reference when no frame has been accepted yet. Using
+        # `_last_accepted_y` rather than `_latest_anchor` prevents a
+        # single bad detection from poisoning the next frame's phase.
         s = self.settings
         y_prior = (
-            self._latest_anchor[1]
-            if self._latest_anchor is not None
+            self._last_accepted_y
+            if self._last_accepted_y is not None
             else (s.reference_y + s.comp_y if s.reference_y is not None else None)
         )
         task = YoloDetectTask(
@@ -786,10 +838,17 @@ class MainWindow(QMainWindow):
             layout=self._reel_layout(),
             y_prior=y_prior,
         )
-        task.signals.finished.connect(self._on_yolo_finished)
+        gen = self._detection_generation
+        task.signals.finished.connect(
+            lambda fi, res, g=gen: self._on_yolo_finished(fi, res, g)
+        )
         yolo_worker.thread_pool().start(task)
 
-    def _on_yolo_finished(self, frame_idx: int, result) -> None:
+    def _on_yolo_finished(self, frame_idx: int, result, generation: int = -1) -> None:
+        # Drop results from a stale detect (cache was reset while
+        # inference was in flight).
+        if generation != -1 and generation != self._detection_generation:
+            return
         if not self.settings.stabilize:
             return
         if result is None:

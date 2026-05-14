@@ -30,7 +30,8 @@ import dataclasses
 from afterscan.core.classical.sprocket_corner_detect import _refine_top_edge_sobel
 from afterscan.core.detect import Detection, Detector
 from afterscan.core.fuse import (
-    DetectedAnchor, ReelLayout, class_anchor, fuse_anchors, resolve_phase,
+    DetectedAnchor, ReelLayout, accept_shift, class_anchor, fuse_anchors,
+    resolve_phase,
 )
 
 
@@ -221,6 +222,10 @@ class PrefetchAnchorsTask(QRunnable):
         edge_refine: bool = True,
         layout: Optional[ReelLayout] = None,
         initial_y_prior: Optional[float] = None,
+        reference_x: Optional[float] = None,
+        reference_y: Optional[float] = None,
+        comp_x: float = 0.0,
+        comp_y: float = 0.0,
     ) -> None:
         super().__init__()
         self.signals = _PrefetchSignals()
@@ -237,20 +242,32 @@ class PrefetchAnchorsTask(QRunnable):
         self._edge_refine = edge_refine
         self._layout = layout
         self._walking_y = initial_y_prior
+        self._reference_x = reference_x
+        self._reference_y = reference_y
+        self._comp_x = comp_x
+        self._comp_y = comp_y
         self._stop = threading.Event()
 
     def stop(self) -> None:
         self._stop.set()
 
     def run(self) -> None:
+        pitch = self._layout.pitch if self._layout is not None else None
         try:
             for idx in range(self._start, self._end):
                 if self._stop.is_set():
                     break
                 path = str(self._source.path(idx))
                 anchor = self._anchor_for(path)
-                if anchor is not None:
-                    self._walking_y = anchor.y
+                # Only update the walking phase prior when the anchor
+                # would actually be accepted by the shift gate.
+                # Otherwise a single bad fit locks every subsequent
+                # detection in the wrong phase.
+                if anchor is not None and self._reference_y is not None:
+                    dx = (self._reference_x or 0.0) - anchor.x + self._comp_x
+                    dy = self._reference_y - anchor.y + self._comp_y
+                    if accept_shift(dx, dy, anchor.score, pitch):
+                        self._walking_y = anchor.y
                 self.signals.anchor_ready.emit(idx, anchor)
         finally:
             self.signals.finished.emit()

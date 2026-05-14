@@ -227,6 +227,8 @@ def fuse_anchors(
         rotation=result.rotation,
         tier=result.tier,
         rejected=result.rejected + pre_rejected,
+        score=result.score,
+        phase_candidates=result.phase_candidates,
     )
 
 
@@ -548,24 +550,15 @@ def _layout_fuse(
         )
         sprockets = [d for d in sprockets if abs(xc(d) - med_xc) <= _SPROCKET_X_GATE]
 
-    # ── Step 4: collapse invalid seam pairs ──────────────────────────────────
-    # When two seams are detected but their y-gap fails the pitch
-    # consistency check, keep only the highest-confidence one. The
-    # hypothesis search itself rejects an inconsistent pair as an
-    # invalid assignment, but collapsing here lets the search emit
-    # cleaner phase candidates and preserves the legacy behaviour at
-    # `_layout_fuse:316` for callers that read `surviving`.
-    if len(seams) >= 2 and pitch:
-        seam_ys = sorted(class_anchor(d)[1] for d in seams)
-        if abs((seam_ys[-1] - seam_ys[0]) / pitch - 1.0) > _PITCH_TOLERANCE:
-            kept_seam = max(seams, key=lambda d: d.confidence)
-            seams = [kept_seam]
-
-    # ── Step 5: hypothesis search ───────────────────────────────────────────
+    # ── Step 4: per-class capacity cap ───────────────────────────────────────
+    # Each class has at most 2 slots; rank by confidence and reject the
+    # rest as `over_capacity`. Capping before the seam-pair pitch check
+    # prevents a low-confidence outlier from breaking an otherwise good
+    # pair (3 seams where the lowest-confidence one is far away would
+    # otherwise fail the min/max gap test).
     valid = sprockets + seams
     if not valid:
         return None
-    # Cap per class (3+ same-class detections → keep top 2 by confidence).
     by_class = _cap_per_class(valid, rejected)
     sprockets = [
         d for label, bucket in by_class.items() for d in bucket
@@ -575,6 +568,23 @@ def _layout_fuse(
         d for label, bucket in by_class.items() for d in bucket
         if label == _SEAM_RIGHT
     ]
+
+    # ── Step 5: collapse invalid seam pairs ──────────────────────────────────
+    # With the per-class cap in place, ``seams`` has at most two entries.
+    # If both survive but their y-gap fails pitch consistency, keep the
+    # highest-confidence seam. The hypothesis search would also reject
+    # the bad pair, but collapsing here yields cleaner phase candidates
+    # and matches the legacy `_layout_fuse:316` behaviour.
+    if len(seams) == 2 and pitch:
+        gap = abs(class_anchor(seams[0])[1] - class_anchor(seams[1])[1])
+        if abs(gap / pitch - 1.0) > _PITCH_TOLERANCE:
+            dropped = min(seams, key=lambda d: d.confidence)
+            kept = max(seams, key=lambda d: d.confidence)
+            seams = [kept]
+            rejected.append((dropped, "seam_pair_pitch"))
+            # Reflect the seam-drop in the by_class map so the
+            # hypothesis search sees a single seam.
+            by_class[_SEAM_RIGHT] = [kept]
 
     candidates = _hypothesis_search(by_class, layout)
     if not candidates:
@@ -687,8 +697,13 @@ def resolve_phase(
             assignment=(),
         )
         return synthetic, False
-    if y_prior is None or len(candidates) == 1:
+    if len(candidates) == 1:
         return candidates[0], False
+    if y_prior is None:
+        # Multiple phase-tied candidates exist but the caller has no
+        # prior to break the tie. Surface this so the inspector / cache
+        # can flag the resulting anchor as arbitrary.
+        return candidates[0], True
     pick = min(candidates, key=lambda c: abs(c.top_seam_y - y_prior))
     return pick, True
 
